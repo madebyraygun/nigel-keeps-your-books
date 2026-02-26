@@ -41,3 +41,33 @@ def test_accounts_add_and_list(tmp_path, monkeypatch):
     result = runner.invoke(app, ["accounts", "list"])
     assert result.exit_code == 0
     assert "BofA Checking" in result.output
+
+
+from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_import_command(tmp_path, monkeypatch):
+    data_dir = tmp_path / "bookkeeper"
+    monkeypatch.setenv("BOOKKEEPER_DATA_DIR", str(data_dir))
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["accounts", "add", "BofA Checking", "--type", "checking"])
+
+    result = runner.invoke(
+        app, ["import", str(FIXTURES / "bofa_checking_sample.csv"), "--account", "BofA Checking"]
+    )
+    assert result.exit_code == 0
+    assert "5 imported" in result.output
+
+
+def test_import_command_copies_file_to_imports(tmp_path, monkeypatch):
+    data_dir = tmp_path / "bookkeeper"
+    monkeypatch.setenv("BOOKKEEPER_DATA_DIR", str(data_dir))
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["accounts", "add", "BofA Checking", "--type", "checking"])
+
+    runner.invoke(
+        app, ["import", str(FIXTURES / "bofa_checking_sample.csv"), "--account", "BofA Checking"]
+    )
+    assert (data_dir / "imports" / "bofa_checking_sample.csv").exists()

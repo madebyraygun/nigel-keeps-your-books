@@ -85,5 +85,34 @@ def accounts_list():
     console.print(table)
 
 
+# --- Import ---
+
+from bookkeeper.importer import import_file
+
+
+@app.command("import")
+def import_cmd(
+    file: Path = typer.Argument(help="Path to CSV or XLSX file to import"),
+    account: str = typer.Option(help="Account name to import into"),
+):
+    """Import a CSV/XLSX file and auto-categorize transactions."""
+    import shutil
+
+    conn = get_connection(get_db_path())
+    result = import_file(conn, file, account)
+    conn.close()
+
+    if result.get("duplicate_file"):
+        typer.echo("This file has already been imported (duplicate checksum).")
+        return
+
+    typer.echo(f"{result['imported']} imported, {result['skipped']} skipped (duplicates)")
+
+    # Archive the import file
+    dest = get_data_dir() / "imports" / file.name
+    if not dest.exists():
+        shutil.copy2(file, dest)
+
+
 if __name__ == "__main__":
     app()
