@@ -71,3 +71,15 @@ def test_import_command_copies_file_to_imports(tmp_path, monkeypatch):
         app, ["import", str(FIXTURES / "bofa_checking_sample.csv"), "--account", "BofA Checking"]
     )
     assert (data_dir / "imports" / "bofa_checking_sample.csv").exists()
+
+
+def test_categorize_command(tmp_path, monkeypatch):
+    data_dir = tmp_path / "bookkeeper"
+    monkeypatch.setenv("BOOKKEEPER_DATA_DIR", str(data_dir))
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["accounts", "add", "BofA Checking", "--type", "checking"])
+    runner.invoke(app, ["import", str(FIXTURES / "bofa_checking_sample.csv"), "--account", "BofA Checking"])
+
+    result = runner.invoke(app, ["categorize"])
+    assert result.exit_code == 0
+    assert "categorized" in result.output.lower() or "flagged" in result.output.lower()

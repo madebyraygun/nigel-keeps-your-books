@@ -88,6 +88,7 @@ def accounts_list():
 # --- Import ---
 
 from bookkeeper.importer import import_file
+from bookkeeper.categorizer import categorize_transactions
 
 
 @app.command("import")
@@ -100,18 +101,35 @@ def import_cmd(
 
     conn = get_connection(get_db_path())
     result = import_file(conn, file, account)
-    conn.close()
 
     if result.get("duplicate_file"):
+        conn.close()
         typer.echo("This file has already been imported (duplicate checksum).")
         return
 
     typer.echo(f"{result['imported']} imported, {result['skipped']} skipped (duplicates)")
 
+    # Auto-categorize
+    cat_result = categorize_transactions(conn)
+    typer.echo(f"{cat_result['categorized']} categorized, {cat_result['still_flagged']} still flagged")
+    conn.close()
+
     # Archive the import file
     dest = get_data_dir() / "imports" / file.name
     if not dest.exists():
         shutil.copy2(file, dest)
+
+
+# --- Categorize ---
+
+
+@app.command()
+def categorize():
+    """Re-run categorization rules on uncategorized transactions."""
+    conn = get_connection(get_db_path())
+    result = categorize_transactions(conn)
+    conn.close()
+    typer.echo(f"{result['categorized']} categorized, {result['still_flagged']} still flagged")
 
 
 if __name__ == "__main__":
