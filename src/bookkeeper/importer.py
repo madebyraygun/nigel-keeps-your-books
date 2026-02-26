@@ -97,10 +97,67 @@ def parse_bofa_line_of_credit(file_path: Path) -> list[ParsedRow]:
     return rows
 
 
+def _excel_serial_to_date(serial: int | float) -> str:
+    """Convert Excel serial date number to ISO 8601 string."""
+    from datetime import timedelta
+    base = datetime(1899, 12, 30)  # Excel epoch (accounting for the 1900 leap year bug)
+    return (base + timedelta(days=int(serial))).strftime("%Y-%m-%d")
+
+
+def parse_gusto_payroll(file_path: Path) -> list[ParsedRow]:
+    """Parse a Gusto payroll XLSX. Aggregates per pay period, discards employee detail."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+
+    # Aggregate gross pay per check date from payrolls sheet
+    payrolls_ws = wb["payrolls"]
+    payroll_rows = list(payrolls_ws.iter_rows(min_row=2, values_only=True))
+    # Group by check date (column index 3)
+    wages_by_date: dict[str, float] = {}
+    for row in payroll_rows:
+        if row[3] is None or row[7] is None:
+            continue
+        check_date = _excel_serial_to_date(row[3]) if isinstance(row[3], (int, float)) else str(row[3])
+        gross = float(row[7])
+        wages_by_date[check_date] = wages_by_date.get(check_date, 0.0) + gross
+
+    # Aggregate employer taxes per check date from taxes sheet
+    taxes_ws = wb["taxes"]
+    tax_rows = list(taxes_ws.iter_rows(min_row=2, values_only=True))
+    employer_taxes_by_date: dict[str, float] = {}
+    for row in tax_rows:
+        if row[6] != "Employer" or row[3] is None or row[7] is None:
+            continue
+        check_date = _excel_serial_to_date(row[3]) if isinstance(row[3], (int, float)) else str(row[3])
+        amount = float(row[7])
+        employer_taxes_by_date[check_date] = employer_taxes_by_date.get(check_date, 0.0) + amount
+
+    wb.close()
+
+    # Build parsed rows — expenses are negative
+    result: list[ParsedRow] = []
+    for date, total in sorted(wages_by_date.items()):
+        result.append(ParsedRow(
+            date=date,
+            description=f"Payroll — Wages ({date})",
+            amount=-abs(total),
+        ))
+    for date, total in sorted(employer_taxes_by_date.items()):
+        result.append(ParsedRow(
+            date=date,
+            description=f"Payroll — Employer Taxes ({date})",
+            amount=-abs(total),
+        ))
+
+    return result
+
+
 PARSER_MAP = {
     "checking": parse_bofa_checking,
     "credit_card": parse_bofa_credit_card,
     "line_of_credit": parse_bofa_line_of_credit,
+    "payroll": parse_gusto_payroll,
 }
 
 

@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from bookkeeper.importer import parse_bofa_checking, parse_bofa_credit_card, parse_bofa_line_of_credit, import_file
+from bookkeeper.importer import (
+    parse_bofa_checking, parse_bofa_credit_card, parse_bofa_line_of_credit,
+    parse_gusto_payroll, import_file,
+)
 from bookkeeper.db import init_db, get_connection
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -131,3 +134,81 @@ def test_import_line_of_credit(db):
     db.commit()
     result = import_file(db, FIXTURES / "bofa_loc_sample.csv", "BofA LOC")
     assert result["imported"] == 3
+
+
+import openpyxl
+
+
+def _create_gusto_fixture(path):
+    """Create a minimal Gusto XLSX fixture programmatically."""
+    wb = openpyxl.Workbook()
+
+    # payrolls sheet
+    ws = wb.active
+    ws.title = "payrolls"
+    ws.append(["Id", "Employee id", "Employee name", "Check date", "Payment period start",
+               "Payment period end", "Payment method", "Gross pay", "Net pay"])
+    # Check date as Excel serial: 2025-01-10 = 45667
+    ws.append(["payrolls_aaa", "emp1", "Doe, Jane", 45667, 45649, 45662, "Direct Deposit", 4000.00, 3000.00])
+    ws.append(["payrolls_aaa", "emp2", "Doe, John", 45667, 45649, 45662, "Direct Deposit", 3500.00, 2600.00])
+    # Second pay period: 2025-01-24 = 45681
+    ws.append(["payrolls_bbb", "emp1", "Doe, Jane", 45681, 45663, 45676, "Direct Deposit", 4000.00, 3000.00])
+    ws.append(["payrolls_bbb", "emp2", "Doe, John", 45681, 45663, 45676, "Direct Deposit", 3500.00, 2600.00])
+
+    # taxes sheet
+    ws2 = wb.create_sheet("taxes")
+    ws2.append(["Employee id", "Employee name", "Payroll id", "Payroll check date",
+                "Payroll payment period", "Tax", "Type", "Amount", "Subject wage", "Gross subject wage"])
+    # Employer taxes for payrolls_aaa
+    ws2.append(["emp1", "Doe, Jane", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "Social Security", "Employer", 248.00, 4000.00, 4000.00])
+    ws2.append(["emp1", "Doe, Jane", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "Medicare", "Employer", 58.00, 4000.00, 4000.00])
+    ws2.append(["emp1", "Doe, Jane", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "FUTA", "Employer", 24.00, 4000.00, 4000.00])
+    ws2.append(["emp2", "Doe, John", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "Social Security", "Employer", 217.00, 3500.00, 3500.00])
+    ws2.append(["emp2", "Doe, John", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "Medicare", "Employer", 50.75, 3500.00, 3500.00])
+    ws2.append(["emp2", "Doe, John", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "FUTA", "Employer", 21.00, 3500.00, 3500.00])
+    # Employee taxes (should be ignored for our purposes)
+    ws2.append(["emp1", "Doe, Jane", "payrolls_aaa", 45667, "2024-12-23 - 2025-01-05",
+                "Federal Income Tax", "Employee", 500.00, 4000.00, 4000.00])
+
+    # deductions sheet (header only per real data)
+    ws3 = wb.create_sheet("deductions")
+    ws3.append(["Employee id", "Employee name", "Payroll id", "Payroll check date",
+                "Payroll payment period", "Name", "Type", "Employee deduction", "Employer contribution"])
+
+    wb.save(path)
+
+
+def test_parse_gusto_payroll(tmp_path):
+    fixture = tmp_path / "gusto_sample.xlsx"
+    _create_gusto_fixture(fixture)
+
+    rows = parse_gusto_payroll(fixture)
+    # Should produce 2 rows per pay period: wages + employer taxes
+    # Pay period 1: wages=7500, employer taxes=618.75
+    # Pay period 2: wages=7500, employer taxes (not in fixture, so just wages)
+    wages_rows = [r for r in rows if "Wages" in r.description]
+    tax_rows = [r for r in rows if "Taxes" in r.description]
+
+    assert len(wages_rows) == 2
+    assert wages_rows[0].amount == -7500.00
+    assert tax_rows[0].amount == -618.75
+
+
+def test_import_gusto_payroll(db, tmp_path):
+    fixture = tmp_path / "gusto_sample.xlsx"
+    _create_gusto_fixture(fixture)
+
+    db.execute(
+        "INSERT INTO accounts (name, account_type) VALUES (?, ?)",
+        ("Gusto", "payroll"),
+    )
+    db.commit()
+
+    result = import_file(db, fixture, "Gusto")
+    assert result["imported"] >= 2  # At least wages entries
