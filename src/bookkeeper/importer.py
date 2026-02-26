@@ -201,6 +201,14 @@ def import_file(
         raise ValueError(f"No parser for account type: {account_type}")
     parsed_rows = parser(file_path)
 
+    # For payroll imports, look up categories for auto-assignment
+    payroll_categories = {}
+    if account_type == "payroll":
+        for cat_name in ("Payroll — Wages", "Payroll — Taxes", "Payroll — Benefits"):
+            row_cat = conn.execute("SELECT id FROM categories WHERE name = ?", (cat_name,)).fetchone()
+            if row_cat:
+                payroll_categories[cat_name] = row_cat["id"]
+
     # Insert
     imported = 0
     skipped = 0
@@ -208,10 +216,26 @@ def import_file(
         if _is_duplicate_row(conn, account_id, row):
             skipped += 1
             continue
+
+        # Auto-categorize payroll transactions
+        category_id = None
+        is_flagged = 1
+        flag_reason = "No matching rule"
+        if account_type == "payroll":
+            if "Wages" in row.description:
+                category_id = payroll_categories.get("Payroll — Wages")
+            elif "Taxes" in row.description:
+                category_id = payroll_categories.get("Payroll — Taxes")
+            elif "Benefits" in row.description:
+                category_id = payroll_categories.get("Payroll — Benefits")
+            if category_id:
+                is_flagged = 0
+                flag_reason = None
+
         conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) "
-            "VALUES (?, ?, ?, ?, 1, 'No matching rule')",
-            (account_id, row.date, row.description, row.amount),
+            "INSERT INTO transactions (account_id, date, description, amount, category_id, is_flagged, flag_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (account_id, row.date, row.description, row.amount, category_id, is_flagged, flag_reason),
         )
         imported += 1
 

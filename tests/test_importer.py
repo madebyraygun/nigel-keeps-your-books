@@ -212,3 +212,34 @@ def test_import_gusto_payroll(db, tmp_path):
 
     result = import_file(db, fixture, "Gusto")
     assert result["imported"] >= 2  # At least wages entries
+
+
+def test_gusto_import_auto_categorizes(db, tmp_path):
+    fixture = tmp_path / "gusto_sample.xlsx"
+    _create_gusto_fixture(fixture)
+
+    db.execute(
+        "INSERT INTO accounts (name, account_type) VALUES (?, ?)",
+        ("Gusto", "payroll"),
+    )
+    db.commit()
+
+    import_file(db, fixture, "Gusto")
+
+    # Wages should be auto-categorized
+    wages_txn = db.execute(
+        "SELECT t.*, c.name as cat_name FROM transactions t "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "WHERE t.description LIKE '%Wages%'"
+    ).fetchone()
+    assert wages_txn["cat_name"] == "Payroll — Wages"
+    assert wages_txn["is_flagged"] == 0
+
+    # Employer taxes should be auto-categorized
+    tax_txn = db.execute(
+        "SELECT t.*, c.name as cat_name FROM transactions t "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "WHERE t.description LIKE '%Taxes%'"
+    ).fetchone()
+    assert tax_txn["cat_name"] == "Payroll — Taxes"
+    assert tax_txn["is_flagged"] == 0
