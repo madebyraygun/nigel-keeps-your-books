@@ -38,5 +38,52 @@ def init():
     typer.echo(f"Initialized bookkeeper at {data_dir}")
 
 
+# --- Accounts ---
+
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+
+accounts_app = typer.Typer(help="Manage accounts.")
+app.add_typer(accounts_app, name="accounts")
+
+
+@accounts_app.command("add")
+def accounts_add(
+    name: str = typer.Argument(help="Account name, e.g. 'BofA Checking'"),
+    type: str = typer.Option(help="Account type: checking, credit_card, line_of_credit, payroll"),
+    institution: str = typer.Option(None, help="Institution name"),
+    last_four: str = typer.Option(None, help="Last 4 digits of account number"),
+):
+    """Add a new account."""
+    conn = get_connection(get_db_path())
+    conn.execute(
+        "INSERT INTO accounts (name, account_type, institution, last_four) VALUES (?, ?, ?, ?)",
+        (name, type, institution, last_four),
+    )
+    conn.commit()
+    conn.close()
+    typer.echo(f"Added account: {name}")
+
+
+@accounts_app.command("list")
+def accounts_list():
+    """List all accounts."""
+    conn = get_connection(get_db_path())
+    rows = conn.execute("SELECT id, name, account_type, institution, last_four FROM accounts").fetchall()
+    conn.close()
+
+    table = Table(title="Accounts")
+    table.add_column("ID", style="dim")
+    table.add_column("Name")
+    table.add_column("Type")
+    table.add_column("Institution")
+    table.add_column("Last Four")
+    for row in rows:
+        table.add_row(str(row["id"]), row["name"], row["account_type"], row["institution"] or "", row["last_four"] or "")
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()
