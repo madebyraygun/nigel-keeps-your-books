@@ -83,3 +83,19 @@ def test_categorize_command(tmp_path, monkeypatch):
     result = runner.invoke(app, ["categorize"])
     assert result.exit_code == 0
     assert "categorized" in result.output.lower() or "flagged" in result.output.lower()
+
+
+def test_rules_add_and_list(tmp_path, monkeypatch):
+    data_dir = tmp_path / "bookkeeper"
+    monkeypatch.setenv("BOOKKEEPER_DATA_DIR", str(data_dir))
+    runner.invoke(app, ["init"])
+
+    result = runner.invoke(
+        app,
+        ["rules", "add", "ADOBE", "--category", "Software & Subscriptions", "--vendor", "Adobe"],
+    )
+    assert result.exit_code == 0
+
+    result = runner.invoke(app, ["rules", "list"])
+    assert result.exit_code == 0
+    assert "ADOBE" in result.output

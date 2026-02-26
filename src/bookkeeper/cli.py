@@ -132,5 +132,62 @@ def categorize():
     typer.echo(f"{result['categorized']} categorized, {result['still_flagged']} still flagged")
 
 
+# --- Rules ---
+
+rules_app = typer.Typer(help="Manage categorization rules.")
+app.add_typer(rules_app, name="rules")
+
+
+@rules_app.command("add")
+def rules_add(
+    pattern: str = typer.Argument(help="Pattern to match against transaction descriptions"),
+    category: str = typer.Option(help="Category name to assign"),
+    vendor: str = typer.Option(None, help="Normalized vendor name"),
+    match_type: str = typer.Option("contains", help="Match type: contains, starts_with, regex"),
+    priority: int = typer.Option(0, help="Rule priority (higher wins)"),
+):
+    """Add a categorization rule."""
+    conn = get_connection(get_db_path())
+    cat = conn.execute("SELECT id FROM categories WHERE name = ?", (category,)).fetchone()
+    if cat is None:
+        typer.echo(f"Unknown category: {category}")
+        raise typer.Exit(1)
+    conn.execute(
+        "INSERT INTO rules (pattern, match_type, vendor, category_id, priority) VALUES (?, ?, ?, ?, ?)",
+        (pattern, match_type, vendor, cat["id"], priority),
+    )
+    conn.commit()
+    conn.close()
+    typer.echo(f"Added rule: '{pattern}' → {category}")
+
+
+@rules_app.command("list")
+def rules_list():
+    """List all categorization rules."""
+    conn = get_connection(get_db_path())
+    rows = conn.execute(
+        "SELECT r.id, r.pattern, r.match_type, r.vendor, c.name as category, r.priority, r.hit_count "
+        "FROM rules r JOIN categories c ON r.category_id = c.id "
+        "WHERE r.is_active = 1 ORDER BY r.priority DESC"
+    ).fetchall()
+    conn.close()
+
+    table = Table(title="Rules")
+    table.add_column("ID", style="dim")
+    table.add_column("Pattern")
+    table.add_column("Type")
+    table.add_column("Vendor")
+    table.add_column("Category")
+    table.add_column("Priority")
+    table.add_column("Hits")
+    for row in rows:
+        table.add_row(
+            str(row["id"]), row["pattern"], row["match_type"],
+            row["vendor"] or "", row["category"],
+            str(row["priority"]), str(row["hit_count"]),
+        )
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()
