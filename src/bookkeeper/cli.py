@@ -189,5 +189,18 @@ def rules_list():
     console.print(table)
 
 
+# --- Review ---
+
+from bookkeeper.reviewer import run_review
+
+
+@app.command()
+def review():
+    """Interactively review flagged transactions."""
+    conn = get_connection(get_db_path())
+    run_review(conn)
+    conn.close()
+
+
 if __name__ == "__main__":
     app()
