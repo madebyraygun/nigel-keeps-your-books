@@ -376,5 +376,31 @@ def report_balance():
     console.print(f"\nYTD Net Income: ${data['ytd_net_income']:,.2f}")
 
 
+# --- Reconcile ---
+
+from bookkeeper.reconciler import reconcile
+
+
+@app.command("reconcile")
+def reconcile_cmd(
+    account: str = typer.Argument(help="Account name"),
+    month: str = typer.Option(help="Month: YYYY-MM"),
+    balance: float = typer.Option(help="Statement ending balance"),
+):
+    """Reconcile an account against a statement balance."""
+    conn = get_connection(get_db_path())
+    result = reconcile(conn, account_name=account, month=month, statement_balance=balance)
+    conn.close()
+
+    if result["is_reconciled"]:
+        typer.echo(f"Reconciled! Calculated: ${result['calculated_balance']:,.2f}")
+    else:
+        typer.echo(
+            f"DISCREPANCY: ${result['discrepancy']:,.2f}\n"
+            f"  Statement:  ${result['statement_balance']:,.2f}\n"
+            f"  Calculated: ${result['calculated_balance']:,.2f}"
+        )
+
+
 if __name__ == "__main__":
     app()
