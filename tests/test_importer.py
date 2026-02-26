@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bookkeeper.importer import parse_bofa_checking, import_file
+from bookkeeper.importer import parse_bofa_checking, parse_bofa_credit_card, parse_bofa_line_of_credit, import_file
 from bookkeeper.db import init_db, get_connection
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -90,3 +90,44 @@ def test_import_file_records_import_batch(db):
     assert record["filename"] == "bofa_checking_sample.csv"
     assert record["record_count"] == 5
     assert record["checksum"] is not None
+
+
+def test_parse_bofa_credit_card():
+    rows = parse_bofa_credit_card(FIXTURES / "bofa_credit_card_sample.csv")
+    assert len(rows) == 3
+    # D type = charge, should be negative
+    assert rows[0].amount == -54.43
+    assert rows[0].date == "2025-03-10"  # Uses Trans. Date, not Posting Date
+    assert "ADOBE" in rows[0].description
+    # C type = payment, should be positive
+    assert rows[2].amount == 500.00
+
+
+def test_parse_bofa_line_of_credit():
+    rows = parse_bofa_line_of_credit(FIXTURES / "bofa_loc_sample.csv")
+    assert len(rows) == 3
+    # Positive in CSV = charge → negate to -110.97
+    assert rows[0].amount == -110.97
+    assert "FINANCE CHARGE" in rows[0].description
+    # Negative in CSV = payment → negate to +500.00
+    assert rows[1].amount == 500.00
+
+
+def test_import_credit_card(db):
+    db.execute(
+        "INSERT INTO accounts (name, account_type) VALUES (?, ?)",
+        ("BofA CC", "credit_card"),
+    )
+    db.commit()
+    result = import_file(db, FIXTURES / "bofa_credit_card_sample.csv", "BofA CC")
+    assert result["imported"] == 3
+
+
+def test_import_line_of_credit(db):
+    db.execute(
+        "INSERT INTO accounts (name, account_type) VALUES (?, ?)",
+        ("BofA LOC", "line_of_credit"),
+    )
+    db.commit()
+    result = import_file(db, FIXTURES / "bofa_loc_sample.csv", "BofA LOC")
+    assert result["imported"] == 3
