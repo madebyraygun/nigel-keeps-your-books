@@ -32,6 +32,7 @@ pub fn parse_date_mdy(raw: &str) -> Option<String> {
         .map(|dt| dt.format("%Y-%m-%d").to_string())
 }
 
+#[cfg(any(feature = "gusto", test))]
 pub fn excel_serial_to_date(serial: f64) -> String {
     // Excel epoch is 1899-12-30 (accounting for the 1900 leap year bug)
     let base = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).unwrap();
@@ -129,6 +130,7 @@ impl ImporterKind {
         }
     }
 
+    #[allow(unused_variables)]
     pub fn post_import(&self, conn: &Connection, account_id: i64, rows: &[ParsedRow]) -> Result<()> {
         match self {
             #[cfg(feature = "gusto")]
