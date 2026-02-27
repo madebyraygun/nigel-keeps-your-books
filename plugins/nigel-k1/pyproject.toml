@@ -5,6 +5,9 @@ description = "K-1 prep report plugin for Nigel"
 requires-python = ">=3.12"
 dependencies = ["nigel"]
 
+[tool.uv.sources]
+nigel = { path = "../..", editable = true }
+
 [project.entry-points."nigel.plugins"]
 k1_prep = "nigel_k1.plugin"
 
