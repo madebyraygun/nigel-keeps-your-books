@@ -12,7 +12,7 @@ Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBook
 - **PDF export** — export any report to print-ready PDF via WeasyPrint
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
-- **Interactive review** — step through flagged transactions, assign categories, create rules on the fly
+- **Interactive review** — step through flagged transactions, assign categories, and create rules on the fly so Nigel learns from every correction
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
@@ -62,6 +62,10 @@ nigel report flagged
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 ```
+
+## Walkthrough
+
+See [docs/walkthrough.md](docs/walkthrough.md) for a complete month-end cycle: import a bank statement, categorize, review, reconcile, and run reports.
 
 ## Configuration
 
