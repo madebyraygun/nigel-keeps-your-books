@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Callable
 
 
 @dataclass
@@ -65,3 +66,13 @@ class ParsedRow:
     date: str  # ISO 8601
     description: str
     amount: float  # normalized: negative = expense, positive = income
+
+
+@dataclass
+class ImporterInfo:
+    """Metadata and parse function for a file format importer."""
+    key: str
+    name: str
+    account_types: list[str]
+    file_extensions: list[str]
+    parse: Callable

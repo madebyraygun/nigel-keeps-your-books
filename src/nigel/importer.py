@@ -4,7 +4,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from nigel.models import ParsedRow
+from nigel.models import ImporterInfo, ParsedRow
+from nigel.registry import registry
 
 
 def _compute_checksum(file_path: Path) -> str:
@@ -153,12 +154,26 @@ def parse_gusto_payroll(file_path: Path) -> list[ParsedRow]:
     return result
 
 
-PARSER_MAP = {
-    "checking": parse_bofa_checking,
-    "credit_card": parse_bofa_credit_card,
-    "line_of_credit": parse_bofa_line_of_credit,
-    "payroll": parse_gusto_payroll,
-}
+registry.register(ImporterInfo(
+    key="bofa_checking", name="Bank of America Checking",
+    account_types=["checking"], file_extensions=[".csv"],
+    parse=parse_bofa_checking,
+))
+registry.register(ImporterInfo(
+    key="bofa_credit_card", name="Bank of America Credit Card",
+    account_types=["credit_card"], file_extensions=[".csv"],
+    parse=parse_bofa_credit_card,
+))
+registry.register(ImporterInfo(
+    key="bofa_line_of_credit", name="Bank of America Line of Credit",
+    account_types=["line_of_credit"], file_extensions=[".csv"],
+    parse=parse_bofa_line_of_credit,
+))
+registry.register(ImporterInfo(
+    key="gusto_payroll", name="Gusto Payroll",
+    account_types=["payroll"], file_extensions=[".xlsx"],
+    parse=parse_gusto_payroll,
+))
 
 
 def _is_duplicate_row(conn: sqlite3.Connection, account_id: int, row: ParsedRow) -> bool:
@@ -196,10 +211,10 @@ def import_file(
         return {"imported": 0, "skipped": 0, "duplicate_file": True}
 
     # Parse
-    parser = PARSER_MAP.get(account_type)
-    if parser is None:
-        raise ValueError(f"No parser for account type: {account_type}")
-    parsed_rows = parser(file_path)
+    importer = registry.get_for_account_type(account_type)
+    if importer is None:
+        raise ValueError(f"No importer for account type: {account_type}")
+    parsed_rows = importer.parse(file_path)
 
     # For payroll imports, look up categories for auto-assignment
     payroll_categories = {}
