@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-**IMPORTANT**: before you do anything else, run the `beans prime` command and heed its output.
-
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -48,7 +46,6 @@ Every feature change must update the relevant documentation before the work is c
 
 - **CLAUDE.md** — update Architecture, Commands, Project Structure, and Key Design Constraints sections when adding/changing CLI commands, modules, data flow, or settings
 - **README.md** — update Quick Start, Features, and Configuration sections for user-facing changes
-- **Beans** — update or close related beans when completing work tracked there
 
 Do not merge or mark work complete if docs are stale.
 
