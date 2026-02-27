@@ -38,6 +38,13 @@ jobs:
 
             Use the repository's CLAUDE.md for guidance on style and conventions.
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            IMPORTANT: To post your review, write the review body to a temp file first,
+            then use `gh pr comment` with `--body-file`. This avoids shell escaping issues
+            with angle brackets, quotes, and flags in Rust code snippets. Example:
 
-          claude_args: '--allowed-tools "Read,Glob,Grep,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(cargo test:*),Bash(cargo check:*)"'
+            1. Write your review to /tmp/review.md using the Write tool
+            2. Run: gh pr comment <PR_NUMBER> --body-file /tmp/review.md
+
+            Do NOT pass the review body inline via --body. Always use --body-file.
+
+          claude_args: '--allowed-tools "Write,Read,Glob,Grep,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(cargo test:*),Bash(cargo check:*)"'
