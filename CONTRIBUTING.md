@@ -5,107 +5,60 @@
 ```bash
 git clone https://github.com/madebyraygun/nigel-keeps-your-books.git
 cd nigel-keeps-your-books
-uv sync
-```
-
-Install first-party plugins for local development:
-
-```bash
-uv pip install -e plugins/nigel-bofa
-uv pip install -e plugins/nigel-gusto
-uv pip install -e plugins/nigel-k1
-uv pip install -e plugins/nigel-export-pdf
+cargo build
 ```
 
 ## Running Tests
 
 ```bash
-uv run pytest -v                    # Core tests (56)
-cd plugins/nigel-bofa && uv run pytest -v    # BofA plugin tests
-cd plugins/nigel-gusto && uv run pytest -v   # Gusto plugin tests
-cd plugins/nigel-k1 && uv run pytest -v      # K-1 plugin tests
-cd plugins/nigel-export-pdf && uv run pytest -v  # PDF export tests
+cargo test               # All tests
+cargo test --no-default-features  # Without gusto feature
 ```
 
-Core tests use synthetic fixtures — they don't depend on any plugin being installed.
+Tests use in-memory SQLite databases with synthetic data — no external files or services needed.
 
 ## Project Layout
 
 ```
-src/nigel/          # Core package
-plugins/            # First-party plugin packages
-  nigel-bofa/       # Bank of America importers
-  nigel-gusto/      # Gusto payroll importer
-  nigel-k1/         # K-1 prep report
-  nigel-export-pdf/ # PDF export
-tests/              # Core tests
-docs/               # Walkthrough and documentation
+src/
+  main.rs               # Entry point, command dispatch
+  cli/                  # CLI subcommands
+    mod.rs              # Clap structs (Cli, Commands, subcommands)
+    init.rs             # nigel init
+    demo.rs             # nigel demo (sample data)
+    accounts.rs         # nigel accounts add/list
+    import.rs           # nigel import
+    categorize.rs       # nigel categorize
+    rules.rs            # nigel rules add/list
+    review.rs           # nigel review
+    report.rs           # nigel report pnl/expenses/tax/cashflow/balance/flagged
+    reconcile.rs        # nigel reconcile
+  db.rs                 # SQLite schema, connection, category seeding
+  models.rs             # Structs (Account, Transaction, Rule, ParsedRow, etc.)
+  importer.rs           # ImporterKind enum, format detection, CSV/XLSX parsing
+  categorizer.rs        # Rules engine (categorize_transactions)
+  reviewer.rs           # Interactive review flow
+  reports.rs            # Report data functions (pnl, expenses, tax, etc.)
+  reconciler.rs         # Monthly reconciliation
+  settings.rs           # Settings management (~/.config/nigel/)
+  fmt.rs                # Number formatting helpers
+  error.rs              # Error types
 ```
-
-## Writing a Plugin
-
-Plugins are Python packages that register via the `nigel.plugins` entry point. A plugin exposes a `register(hooks, **kwargs)` function that receives a `PluginHooks` object.
-
-A minimal importer plugin:
-
-```python
-# my_plugin/plugin.py
-from nigel.models import ImporterInfo, ParsedRow
-from nigel.plugins import PluginHooks
-
-def detect(file_path):
-    """Return True if this file matches your format."""
-    with open(file_path) as f:
-        return "MY HEADER" in f.readline()
-
-def parse(file_path):
-    """Parse the file into a list of ParsedRow."""
-    rows = []
-    # ... your parsing logic ...
-    return rows
-
-def register(hooks: PluginHooks, **kwargs):
-    hooks.importers.append(
-        ImporterInfo(
-            key="my_format",
-            label="My Bank Checking",
-            account_type="checking",
-            file_type="csv",
-            institution="My Bank",
-            parse=parse,
-            detect=detect,
-        )
-    )
-```
-
-Wire it up in `pyproject.toml`:
-
-```toml
-[project.entry-points."nigel.plugins"]
-my_bank = "my_plugin.plugin"
-```
-
-Plugins can also:
-
-- Add CLI subcommands via `hooks.cli_commands`
-- Run database migrations via `hooks.migrations`
-- Seed categories via `hooks.category_seeds`
-
-See the existing plugins in `plugins/` for working examples.
 
 ## Code Style
 
-- Python 3.12+
-- No external linter config — keep it clean and consistent with surrounding code
+- Rust stable toolchain
+- `cargo clippy` — no warnings
+- `cargo fmt` — standard formatting
+- Cash amounts are plain `f64` — negative = expense, positive = income
 - Prefer simple, flat code over abstractions
-- Cash amounts are plain floats — negative = expense, positive = income
 
 ## Documentation
 
 Every feature change should update:
 
 - **CLAUDE.md** — architecture, commands, structure, and constraints sections
-- **README.md** — features, quick start, and plugin table if applicable
+- **README.md** — features, quick start, and configuration if applicable
 
 ## Commits
 

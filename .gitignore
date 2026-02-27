@@ -1,11 +1,4 @@
-__pycache__/
-*.pyc
-.venv/
-*.egg-info/
-dist/
-data/
-.pytest_cache/
-docs/plans/
-.DS_Store
-uv.lock
 target/
+.DS_Store
+data/
+docs/plans/

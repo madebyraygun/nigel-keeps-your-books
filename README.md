@@ -4,6 +4,8 @@
 
 Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBooks with a simple, local-first workflow: import bank CSVs and payroll reports, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal.
 
+Nigel is designed for humans but works extremely well with AI agents. The repo includes Claude skills to add new importers and intelligently create new rules from your statements before importing into Nigel. With a tool like Claude Cowork, point it at your CSV statement and say "Import my latest statements into Nigel and generate my monthly P&L" or "Generate a Schedule K-1 prep report for 2026."
+
 ## Features
 
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
@@ -12,12 +14,13 @@ Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBook
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
+- **PDF export** — export any report to PDF, individually or all at once
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 
-Importers currently include Bank of America and Gusto, but adding new importers is straightforward. See [docs/importers.md] for more information. The repository also contains a Claude skill that can create an importer from any data file.
+Importers currently include Bank of America and Gusto, but adding new importers is straightforward. See [docs/importers.md] for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
 
-Nigel also includes a demo mode** — `nigel demo` which loads sample data so you can explore every feature without requiring any personal data.
+Nigel also includes a demo mode** — `nigel demo` which loads sample data so you can explore every feature without requiring any personal data. Explore the demo data by taking a guided tour with the [docs/walkthrough.md](docs/walkthrough.md): explore accounts and rules, review flagged transactions, add new rules, and run every report.
 
 ## Install
 
@@ -59,13 +62,13 @@ nigel report cashflow
 nigel report balance
 nigel report flagged
 
+# Export reports to PDF
+nigel export pnl --year 2025
+nigel export all --year 2025 --output-dir ~/exports/
+
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 ```
-
-## Walkthrough
-
-See [docs/walkthrough.md](docs/walkthrough.md) for a guided tour using demo data: explore accounts and rules, review flagged transactions, add new rules, and run every report.
 
 ## Configuration
 
@@ -76,6 +79,7 @@ Settings are stored in `~/.config/nigel/settings.json`. The data directory (data
 | Flag | Default | Description |
 |------|---------|-------------|
 | `gusto` | Yes | Gusto payroll XLSX importer + auto-categorization |
+| `pdf` | Yes | PDF export via printpdf (built-in Helvetica, no font files needed) |
 
 Build without Gusto support:
 

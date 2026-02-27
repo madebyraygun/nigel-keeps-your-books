@@ -1,59 +1,117 @@
-# Walkthrough: Closing March 2025
+# Walkthrough: Exploring Nigel with Demo Data
 
-This walks through a complete month-end cycle — importing a bank statement, categorizing transactions, reviewing the unknowns, reconciling against the bank, and running reports.
+This walks through a complete tour of Nigel using the built-in demo data — exploring accounts, reviewing flagged transactions, adding rules, and running reports.
 
-## 1. Set up (first time only)
+## 1. Set up and load demo data
 
 ```
-$ nigel init --data-dir ~/Documents/nigel
+$ nigel init
 Initialized nigel at /Users/you/Documents/nigel
 
-$ nigel accounts add "BofA Checking" --type checking --institution "Bank of America"
-Added account: BofA Checking
+$ nigel demo
+Demo data loaded!
+  Account:      BofA Checking
+  Transactions: 44
+  Rules:        9
+  Categorized:  30
+  Flagged:      14
+
+Try these next:
+  nigel accounts list
+  nigel rules list
+  nigel report pnl --year 2025
+  nigel report flagged
+  nigel review
 ```
 
-## 2. Import the bank statement
+Nigel created a checking account with 3 months of sample transactions (Jan–Mar 2025), added 9 categorization rules, and auto-categorized everything it could. 14 transactions are flagged for review.
 
-Download a CSV from Bank of America and hand it to Nigel. The BofA plugin auto-detects the format from the file headers.
-
-```
-$ nigel import ~/Downloads/stmt-2025-03.csv --account "BofA Checking"
-42 imported, 3 skipped (duplicates)
-18 categorized, 24 still flagged
-```
-
-Nigel ran the rules engine immediately after import. 18 transactions matched existing rules; 24 are flagged for review. The source file is copied to `~/Documents/nigel/imports/` for safekeeping.
-
-Re-importing the same file is harmless — Nigel checks the file checksum first:
+## 2. Explore what's there
 
 ```
-$ nigel import ~/Downloads/stmt-2025-03.csv --account "BofA Checking"
-This file has already been imported (duplicate checksum).
+$ nigel accounts list
+```
+```
+Accounts
+
+Name              Type       Institution
+BofA Checking     checking   Bank of America
 ```
 
-## 3. Add rules for known vendors
+```
+$ nigel rules list
+```
+```
+Rules
+
+Pattern                  Match     Category                    Vendor     Hits
+STRIPE TRANSFER          contains  Client Services             Stripe        6
+ADOBE                    contains  Software & Subscriptions    Adobe         3
+GITHUB                   contains  Software & Subscriptions    GitHub        3
+SLACK                    contains  Software & Subscriptions    Slack         3
+GOOGLE WORKSPACE         contains  Software & Subscriptions    Google        3
+AMAZON WEB SERVICES      contains  Hosting & Infrastructure    AWS           3
+FLYWHEEL                 contains  Hosting & Infrastructure    Flywheel      3
+UBER EATS                contains  Meals                       Uber Eats     3
+GRUBHUB                  contains  Meals                       Grubhub       3
+```
+
+## 3. Check what's flagged
+
+```
+$ nigel report flagged
+```
+```
+Flagged Transactions (14)
+
+ID  Date         Description                  Amount       Account
+11  2025-01-15   CHECK 1042                   -$2,400.00   BofA Checking
+12  2025-01-20   VENMO PAYMENT                  -$150.00   BofA Checking
+13  2025-01-25   COMCAST BUSINESS               -$129.99   BofA Checking
+14  2025-01-28   STAPLES OFFICE SUPPLY           -$67.23   BofA Checking
+15  2025-01-31   INTEREST PAYMENT                  $2.14   BofA Checking
+26  2025-02-07   WEWORK MEMBERSHIP              -$450.00   BofA Checking
+27  2025-02-12   ZOOM VIDEO COMMUNICATIONS       -$14.99   BofA Checking
+28  2025-02-19   DOORDASH DELIVERY               -$29.33   BofA Checking
+29  2025-02-25   FEDEX SHIPPING                  -$18.75   BofA Checking
+30  2025-02-28   INTEREST PAYMENT                  $1.87   BofA Checking
+41  2025-03-14   DROPBOX BUSINESS                -$19.99   BofA Checking
+42  2025-03-18   TARGET STORE                    -$43.67   BofA Checking
+43  2025-03-26   COMCAST BUSINESS               -$129.99   BofA Checking
+44  2025-03-31   INTEREST PAYMENT                  $2.31   BofA Checking
+```
+
+## 4. Add rules for known vendors
 
 Before reviewing one-by-one, knock out the obvious ones with rules:
 
 ```
-$ nigel rules add "ADOBE" --category "Software & Subscriptions" --vendor "Adobe"
-Added rule: 'ADOBE' → Software & Subscriptions
+$ nigel rules add "COMCAST" --category "Utilities" --vendor "Comcast"
+Added rule: 'COMCAST' → Utilities
 
-$ nigel rules add "AMAZON WEB SERVICES" --category "Hosting & Infrastructure" --vendor "AWS"
-Added rule: 'AMAZON WEB SERVICES' → Hosting & Infrastructure
+$ nigel rules add "STAPLES" --category "Office Expense" --vendor "Staples"
+Added rule: 'STAPLES' → Office Expense
+
+$ nigel rules add "ZOOM" --category "Software & Subscriptions" --vendor "Zoom"
+Added rule: 'ZOOM' → Software & Subscriptions
+
+$ nigel rules add "INTEREST PAYMENT" --category "Interest Income" --vendor "Bank of America"
+Added rule: 'INTEREST PAYMENT' → Interest Income
 
 $ nigel categorize
-6 categorized, 18 still flagged
+7 categorized, 7 still flagged
 ```
 
-## 4. Review flagged transactions
+Four new rules knocked out 7 transactions. Now only 7 remain for manual review.
 
-Now step through the remaining 18. Nigel shows each transaction and a numbered category list.
+## 5. Review flagged transactions
+
+Step through the remaining flagged items. Nigel shows each transaction and a numbered category list.
 
 ```
 $ nigel review
 
-18 flagged transactions to review.
+7 flagged transactions to review.
 
  #  Name                       Type
  1  Client Services            income
@@ -63,27 +121,26 @@ $ nigel review
 25  Transfer                   expense
 
 ────────────────────────────────────────
-  Date:        2025-03-05
-  Description: FLYWHEEL HOSTING MONTHLY
-  Amount:      -$89.00
+  Date:        2025-02-07
+  Description: WEWORK MEMBERSHIP
+  Amount:      -$450.00
   Account:     BofA Checking
 
-Category # (or skip, quit): 24
+Category # (or skip, quit): 13
+  → Rent / Lease
 
-Vendor name (or Enter to skip): Flywheel
+Vendor name (or Enter to skip): WeWork
 
 Create rule for future matches? [y/N]: y
-Rule pattern [FLYWHEEL HOSTING]: FLYWHEEL
-→ Categorized as Software & Subscriptions
+Rule pattern [WEWORK MEMBERSHIP]: WEWORK
+→ Categorized as Rent / Lease
 ```
 
-When you type `y`, Nigel creates a new rule so that every future transaction containing "FLYWHEEL" is auto-categorized. The next month's import will already know what to do with it.
-
-Continue through the rest — skip anything you're unsure about and come back later:
+Continue through the rest — skip anything you're unsure about:
 
 ```
 ────────────────────────────────────────
-  Date:        2025-03-18
+  Date:        2025-01-15
   Description: CHECK 1042
   Amount:      -$2,400.00
   Account:     BofA Checking
@@ -95,112 +152,62 @@ Category # (or skip, quit): s
 Review complete!
 ```
 
-## 5. Reconcile against the bank
+## 6. Reconcile
 
-Grab the ending balance from your March statement and reconcile:
-
-```
-$ nigel reconcile "BofA Checking" --month 2025-03 --balance 14823.41
-Reconciled! Calculated: $14,823.41
-```
-
-If something is off, Nigel tells you exactly how far:
+Reconcile against a known balance for the demo data:
 
 ```
-$ nigel reconcile "BofA Checking" --month 2025-03 --balance 14900.00
-DISCREPANCY: $76.59
-  Statement:  $14,900.00
-  Calculated: $14,823.41
+$ nigel reconcile "BofA Checking" --month 2025-01 --balance 17480.37
+Reconciled! Calculated: $17,480.37
 ```
 
-## 6. Run reports
+## 7. Run reports
 
 ```
-$ nigel report pnl --month 2025-03
+$ nigel report pnl --year 2025
 ```
 ```
 Profit & Loss
 
 Category                      Amount
 INCOME
-  Client Services           $24,000.00
-  Hosting & Maintenance      $1,800.00
-Total Income                $25,800.00
+  Client Services           $70,000.00
+Total Income                $70,000.00
 
 EXPENSES
-  Payroll — Wages            $9,600.00
-  Software & Subscriptions     $847.00
-  Hosting & Infrastructure     $312.00
-  Meals                        $186.50
-  Office Expense               $124.30
-Total Expenses              $11,069.80
+  Software & Subscriptions     $307.17
+  Hosting & Infrastructure     $854.45
+  Meals                        $228.18
+Total Expenses               $1,389.80
 
-NET                         $14,730.20
+NET                         $68,610.20
 ```
 
-Check where the money went:
-
 ```
-$ nigel report expenses --month 2025-03
+$ nigel report expenses --year 2025
 ```
 ```
 Expense Breakdown
 
 Category                      Amount       %    Count
-Payroll — Wages            $9,600.00   86.7%        2
-Software & Subscriptions     $847.00    7.7%        6
-Hosting & Infrastructure     $312.00    2.8%        1
-Meals                        $186.50    1.7%        3
-Office Expense               $124.30    1.1%        2
-Total                     $11,069.80  100.0%       14
+Hosting & Infrastructure     $854.45   61.5%        6
+Software & Subscriptions     $307.17   22.1%        9
+Meals                        $228.18   16.4%        6
+Total                      $1,389.80  100.0%       21
 ```
 
-See the cash position across all accounts:
+Other reports to try:
 
 ```
-$ nigel report balance
-```
-```
-Cash Position
-
-Account           Type        Balance
-BofA Checking     checking    $14,823.41
-
-YTD Net Income: $38,412.60
-```
-
-Check for anything still unresolved:
-
-```
-$ nigel report flagged
-```
-```
-Flagged Transactions (1)
-
-ID    Date         Description      Amount       Account
-847   2025-03-18   CHECK 1042       -$2,400.00   BofA Checking
-```
-
-That's the check you skipped during review. Run `nigel review` again when you figure out what it was for.
-
-## 7. Export to PDF (optional)
-
-If you have the PDF export plugin installed:
-
-```
-$ nigel export pnl --month 2025-03 --company "Acme Consulting"
-Exported: ~/Documents/nigel/exports/pnl-2025-03.pdf
-```
-
-Or export everything at once:
-
-```
-$ nigel export all --year 2025 --company "Acme Consulting"
+nigel report tax --year 2025       # Tax summary by IRS line items
+nigel report cashflow --year 2025  # Monthly inflows/outflows
+nigel report balance               # Cash position across accounts
+nigel report flagged               # Remaining flagged transactions
 ```
 
 ## Monthly routine
 
-Once you're set up, the monthly cycle is four commands:
+Once you're set up with real data, the monthly cycle is four commands:
 
 ```
 nigel import <statement.csv> --account "BofA Checking"

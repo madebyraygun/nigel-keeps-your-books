@@ -1,8 +1,0 @@
-Description,,,,Summary Amt.
-Total credits,,,,,"-500.00"
-Total debits,,,,,"1200.00"
-
-CardHolder Name,Account/Card Number - last 4 digits,Posting Date,Trans. Date,Reference ID,Description,Amount,MCC,Merchant Category,Transaction Type,Expense Category
-DALTON ROONEY,3083,03/12/2025,03/10/2025,Ref: 244310650701,"ADOBE INC","54.43",5818,"DIGITAL GOODS",D,Software
-DALTON ROONEY,3083,03/15/2025,03/14/2025,Ref: 247933851590,"AMZN MKTP US","127.99",5942,"BOOK STORES",D,Shopping
-STACEY EDELSTEIN,8840,03/18/2025,03/17/2025,Ref: 240070451729,"PAYMENT RECEIVED","500.00",0000,"",C,
