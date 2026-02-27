@@ -5,6 +5,9 @@ description = "Gusto payroll importer plugin for Nigel"
 requires-python = ">=3.12"
 dependencies = ["nigel", "openpyxl>=3.1"]
 
+[tool.uv.sources]
+nigel = { path = "../..", editable = true }
+
 [project.entry-points."nigel.plugins"]
 gusto = "nigel_gusto.plugin"
 

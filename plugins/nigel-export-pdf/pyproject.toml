@@ -5,6 +5,9 @@ description = "PDF export plugin for Nigel reports"
 requires-python = ">=3.12"
 dependencies = ["nigel", "weasyprint>=62", "jinja2>=3.1"]
 
+[tool.uv.sources]
+nigel = { path = "../..", editable = true }
+
 [project.entry-points."nigel.plugins"]
 export_pdf = "nigel_export_pdf.plugin"
 
