@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusqlite::backup::Backup;
 
@@ -6,6 +6,17 @@ use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::format_bytes;
 use crate::settings::get_data_dir;
+
+/// Copy the database to `dest_path` using SQLite's online-backup API.
+pub fn snapshot(conn: &rusqlite::Connection, dest_path: &Path) -> Result<()> {
+    if let Some(parent) = dest_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut dest_conn = rusqlite::Connection::open(dest_path)?;
+    let backup = Backup::new(conn, &mut dest_conn)?;
+    backup.run_to_completion(100, std::time::Duration::from_millis(10), None)?;
+    Ok(())
+}
 
 pub fn run(output: Option<String>) -> Result<()> {
     let data_dir = get_data_dir();
@@ -22,9 +33,7 @@ pub fn run(output: Option<String>) -> Result<()> {
         }
     };
 
-    let mut dest_conn = rusqlite::Connection::open(&dest_path)?;
-    let backup = Backup::new(&conn, &mut dest_conn)?;
-    backup.run_to_completion(100, std::time::Duration::from_millis(10), None)?;
+    snapshot(&conn, &dest_path)?;
 
     let size = std::fs::metadata(&dest_path)?.len();
     println!("Backup saved to {}", dest_path.display());

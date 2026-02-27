@@ -11,6 +11,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
+- **Auto-snapshot** — automatic database snapshot before every import for easy rollback
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance

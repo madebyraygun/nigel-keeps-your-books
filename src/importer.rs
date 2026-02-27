@@ -11,7 +11,12 @@ use crate::models::ParsedRow;
 // ---------------------------------------------------------------------------
 
 pub fn parse_amount(raw: &str) -> f64 {
-    raw.replace(',', "").replace('"', "").trim().parse().unwrap_or(0.0)
+    let s = raw.replace(',', "").replace('"', "").replace('$', "");
+    let s = s.trim();
+    if let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
+        return -inner.trim().parse::<f64>().unwrap_or(0.0);
+    }
+    s.parse().unwrap_or(0.0)
 }
 
 pub fn parse_date_mdy(raw: &str) -> Option<String> {
@@ -23,7 +28,8 @@ pub fn parse_date_mdy(raw: &str) -> Option<String> {
     let m: u32 = parts[0].parse().ok()?;
     let d: u32 = parts[1].parse().ok()?;
     let y: i32 = parts[2].parse().ok()?;
-    Some(format!("{y:04}-{m:02}-{d:02}"))
+    chrono::NaiveDate::from_ymd_opt(y, m as u32, d as u32)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
 }
 
 pub fn excel_serial_to_date(serial: f64) -> String {
@@ -228,7 +234,7 @@ pub fn import_file(
         rusqlite::params![
             file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
             account_id,
-            imported as i64,
+            parsed_rows.len() as i64,
             min_date,
             max_date,
             checksum,
@@ -256,6 +262,7 @@ fn detect_bofa_checking(file_path: &Path) -> bool {
     };
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
+        .flexible(true)
         .from_reader(std::io::BufReader::new(file));
     for result in rdr.records() {
         let Ok(record) = result else { continue };
@@ -270,29 +277,36 @@ fn detect_bofa_checking(file_path: &Path) -> bool {
 }
 
 fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
-    let content = std::fs::read_to_string(file_path)?;
+    let file = std::fs::File::open(file_path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(std::io::BufReader::new(file));
     let mut rows = Vec::new();
     let mut found_header = false;
 
-    for line in content.lines() {
-        let fields: Vec<&str> = parse_csv_line(line);
+    for result in rdr.records() {
+        let Ok(record) = result else { continue };
         if !found_header {
-            if fields.len() >= 4 && fields[0].trim() == "Date" && fields[1].contains("Description") {
+            if record.len() >= 4
+                && record[0].trim() == "Date"
+                && record[1].contains("Description")
+            {
                 found_header = true;
             }
             continue;
         }
-        if fields.len() < 3 || fields[0].trim().is_empty() {
+        if record.len() < 3 || record[0].trim().is_empty() {
             continue;
         }
-        let Some(date) = parse_date_mdy(fields[0]) else {
+        let Some(date) = parse_date_mdy(&record[0]) else {
             continue;
         };
-        let description = fields[1].trim().to_string();
+        let description = record[1].trim().to_string();
         if description.is_empty() || description.contains("Beginning balance") {
             continue;
         }
-        let amount = parse_amount(fields[2]);
+        let amount = parse_amount(&record[2]);
         rows.push(ParsedRow {
             date,
             description,
@@ -314,27 +328,41 @@ fn detect_bofa_credit_card(file_path: &Path) -> bool {
 }
 
 fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
-    let content = std::fs::read_to_string(file_path)?;
+    let file = std::fs::File::open(file_path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(std::io::BufReader::new(file));
     let mut rows = Vec::new();
     let mut found_header = false;
+    let (mut idx_date, mut idx_desc, mut idx_amount, mut idx_type) = (3, 5, 6, 9);
 
-    for line in content.lines() {
-        let fields: Vec<&str> = parse_csv_line(line);
+    for result in rdr.records() {
+        let Ok(record) = result else { continue };
         if !found_header {
-            if fields.iter().any(|f| f.contains("Posting Date")) {
+            if record.iter().any(|f| f.contains("Posting Date")) {
+                // Validate expected column positions from header
+                for (i, field) in record.iter().enumerate() {
+                    let f = field.trim();
+                    if f == "Posting Date" { idx_date = i; }
+                    if f == "Payee" { idx_desc = i; }
+                    if f == "Amount" { idx_amount = i; }
+                    if f == "Type" { idx_type = i; }
+                }
                 found_header = true;
             }
             continue;
         }
-        if fields.len() < 10 || fields[2].trim().is_empty() {
+        let min_cols = [idx_date, idx_desc, idx_amount, idx_type].into_iter().max().unwrap_or(0) + 1;
+        if record.len() < min_cols || record[2].trim().is_empty() {
             continue;
         }
-        let Some(date) = parse_date_mdy(fields[3]) else {
+        let Some(date) = parse_date_mdy(&record[idx_date]) else {
             continue;
         };
-        let description = fields[5].trim().to_string();
-        let mut amount = parse_amount(fields[6]);
-        let txn_type = fields[9].trim();
+        let description = record[idx_desc].trim().to_string();
+        let mut amount = parse_amount(&record[idx_amount]);
+        let txn_type = record[idx_type].trim();
         if txn_type == "D" {
             amount = -amount.abs();
         } else {
@@ -354,26 +382,38 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
 // ---------------------------------------------------------------------------
 
 fn parse_bofa_line_of_credit(file_path: &Path) -> Result<Vec<ParsedRow>> {
-    let content = std::fs::read_to_string(file_path)?;
+    let file = std::fs::File::open(file_path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(std::io::BufReader::new(file));
     let mut rows = Vec::new();
     let mut found_header = false;
+    let (mut idx_date, mut idx_desc, mut idx_amount) = (3, 5, 6);
 
-    for line in content.lines() {
-        let fields: Vec<&str> = parse_csv_line(line);
+    for result in rdr.records() {
+        let Ok(record) = result else { continue };
         if !found_header {
-            if fields.iter().any(|f| f.contains("Posting Date")) {
+            if record.iter().any(|f| f.contains("Posting Date")) {
+                for (i, field) in record.iter().enumerate() {
+                    let f = field.trim();
+                    if f == "Posting Date" { idx_date = i; }
+                    if f == "Payee" { idx_desc = i; }
+                    if f == "Amount" { idx_amount = i; }
+                }
                 found_header = true;
             }
             continue;
         }
-        if fields.len() < 10 || fields[2].trim().is_empty() {
+        let min_cols = [idx_date, idx_desc, idx_amount].into_iter().max().unwrap_or(0) + 1;
+        if record.len() < min_cols || record[2].trim().is_empty() {
             continue;
         }
-        let Some(date) = parse_date_mdy(fields[3]) else {
+        let Some(date) = parse_date_mdy(&record[idx_date]) else {
             continue;
         };
-        let description = fields[5].trim().to_string();
-        let amount = -parse_amount(fields[6]);
+        let description = record[idx_desc].trim().to_string();
+        let amount = -parse_amount(&record[idx_amount]);
         rows.push(ParsedRow {
             date,
             description,
@@ -520,16 +560,6 @@ fn auto_categorize_payroll(conn: &Connection, account_id: i64, rows: &[ParsedRow
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Minimal CSV line parser (handles quoted fields)
-// ---------------------------------------------------------------------------
-
-fn parse_csv_line(line: &str) -> Vec<&str> {
-    // Simple split by comma — for lines without embedded commas in quotes
-    // this is sufficient; the actual CSV crate is used for detection
-    line.split(',').collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,11 +598,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_amount_parenthesized_negatives() {
+        assert_eq!(parse_amount("(500.00)"), -500.0);
+        assert_eq!(parse_amount("(1,234.56)"), -1234.56);
+        assert_eq!(parse_amount("\"(50.00)\""), -50.0);
+    }
+
+    #[test]
+    fn test_parse_amount_currency_symbol() {
+        assert_eq!(parse_amount("$1,234.56"), 1234.56);
+        assert_eq!(parse_amount("-$50.00"), -50.0);
+    }
+
+    #[test]
     fn test_parse_date_mdy() {
         assert_eq!(parse_date_mdy("01/15/2025"), Some("2025-01-15".to_string()));
         assert_eq!(parse_date_mdy("12/01/2024"), Some("2024-12-01".to_string()));
         assert_eq!(parse_date_mdy("invalid"), None);
         assert_eq!(parse_date_mdy("2025-01-15"), None);
+    }
+
+    #[test]
+    fn test_parse_date_mdy_rejects_invalid_dates() {
+        assert_eq!(parse_date_mdy("13/01/2025"), None); // month 13
+        assert_eq!(parse_date_mdy("02/30/2025"), None); // Feb 30
+        assert_eq!(parse_date_mdy("00/15/2025"), None); // month 0
     }
 
     #[test]
@@ -645,16 +695,34 @@ mod tests {
     }
 
     #[test]
+    fn test_bofa_checking_parse_quoted_amounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bofa.csv");
+        let content = "\
+Description,,Summary Amt.
+
+Date,Description,Amount,Running Bal.
+01/31/2025,BKOFAMERICA MOBILE DEPOSIT,\"2,000.00\",\"32,742.87\"
+";
+        std::fs::write(&path, content).unwrap();
+        let rows = ImporterKind::BofaChecking.parse(&path).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].amount, 2000.0);
+    }
+
+    #[test]
     fn test_bofa_checking_parse() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bofa.csv");
-        let content = "Account Name: Test Checking\n\
-                        Account Number: ****1234\n\
-                        \n\
-                        Date,Description,Amount,Running Bal.\n\
-                        01/15/2025,ADOBE CREATIVE,-50.00,950.00\n\
-                        01/16/2025,Beginning balance,1000.00,1000.00\n\
-                        01/17/2025,STRIPE PAYOUT,2500.00,3450.00\n";
+        let content = "\
+Account Name: Test Checking
+Account Number: ****1234
+
+Date,Description,Amount,Running Bal.
+01/15/2025,ADOBE CREATIVE,-50.00,950.00
+01/16/2025,Beginning balance,1000.00,1000.00
+01/17/2025,STRIPE PAYOUT,2500.00,3450.00
+";
         std::fs::write(&path, content).unwrap();
         let rows = ImporterKind::BofaChecking.parse(&path).unwrap();
         assert_eq!(rows.len(), 2);
