@@ -6,8 +6,8 @@ Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBook
 
 ## Features
 
-- **Bank imports** — CSV/XLSX parsers with format auto-detection for Bank of America and Gusto payroll
-- **Plugin architecture** — importers, reports, and exports are all plugins; add new institutions or output formats without touching core
+- **Bank imports** — CSV/XLSX parsers with format auto-detection
+- **Plugin architecture** — importers, reports, and exports are plugins; add new institutions or output formats without touching core
 - **Format auto-detection** — importers inspect file headers to pick the right parser; override with `--format` when needed
 - **PDF export** — export any report to print-ready PDF via WeasyPrint
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
