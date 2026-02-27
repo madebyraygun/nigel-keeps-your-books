@@ -357,7 +357,11 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
             continue;
         }
         // When the cardholder name contains commas (e.g. "RAYGUN DESIGN, LLC"),
-        // data rows have extra fields. Adjust column indices by the offset.
+        // the CSV parser splits it across multiple fields, giving data rows more
+        // fields than the header. We assume all extra fields originate from the
+        // CardHolder Name column (position 0) — BofA only puts unquoted commas
+        // there. The date and amount validation below guards against silent
+        // misalignment if that assumption ever breaks.
         let offset = if header_field_count > 0 && record.len() > header_field_count {
             record.len() - header_field_count
         } else {
@@ -371,11 +375,20 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
         if record.len() < min_cols {
             continue;
         }
+        // Validate that adjusted indices land on the right columns — a date
+        // that doesn't parse or a non-numeric amount means the offset was wrong.
         let Some(date) = parse_date_mdy(&record[adj_date]) else {
             continue;
         };
         let description = record[adj_desc].trim().to_string();
-        let mut amount = parse_amount(&record[adj_amount]);
+        if description.is_empty() {
+            continue;
+        }
+        let amount_str = record[adj_amount].trim();
+        if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
+            continue;
+        }
+        let mut amount = parse_amount(amount_str);
         let txn_type = record[adj_type].trim();
         if txn_type == "D" {
             amount = -amount.abs();
@@ -422,7 +435,11 @@ fn parse_bofa_line_of_credit(file_path: &Path) -> Result<Vec<ParsedRow>> {
             continue;
         }
         // When the cardholder name contains commas (e.g. "RAYGUN DESIGN, LLC"),
-        // data rows have extra fields. Adjust column indices by the offset.
+        // the CSV parser splits it across multiple fields, giving data rows more
+        // fields than the header. We assume all extra fields originate from the
+        // CardHolder Name column (position 0) — BofA only puts unquoted commas
+        // there. The date and amount validation below guards against silent
+        // misalignment if that assumption ever breaks.
         let offset = if header_field_count > 0 && record.len() > header_field_count {
             record.len() - header_field_count
         } else {
@@ -435,11 +452,20 @@ fn parse_bofa_line_of_credit(file_path: &Path) -> Result<Vec<ParsedRow>> {
         if record.len() < min_cols {
             continue;
         }
+        // Validate that adjusted indices land on the right columns — a date
+        // that doesn't parse or a non-numeric amount means the offset was wrong.
         let Some(date) = parse_date_mdy(&record[adj_date]) else {
             continue;
         };
         let description = record[adj_desc].trim().to_string();
-        let amount = -parse_amount(&record[adj_amount]);
+        if description.is_empty() {
+            continue;
+        }
+        let amount_str = record[adj_amount].trim();
+        if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
+            continue;
+        }
+        let amount = -parse_amount(amount_str);
         rows.push(ParsedRow {
             date,
             description,
@@ -830,5 +856,48 @@ SMITH, JONES, AND ASSOCIATES,1234,01/15/2025,01/15/2025,-99.00,Office,STAPLES,10
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].description, "STAPLES");
         assert_eq!(rows[0].amount, -99.0);
+    }
+
+    #[test]
+    fn test_bofa_credit_card_mixed_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cc.csv");
+        // Mix of rows: some cardholder names have commas, others don't
+        let content = "\
+CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Payee,Address,City/State,Reference Number,Type
+RAYGUN DESIGN, LLC,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON PURCHASE,123 Main St,Seattle WA,REF001,D
+JOHN DOE,1234,01/16/2025,01/16/2025,-30.00,Food,RESTAURANT,456 Elm St,Portland OR,REF002,D
+RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak Ave,City ST,REF003,C
+";
+        std::fs::write(&path, content).unwrap();
+        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        assert_eq!(rows.len(), 3, "all 3 rows should be parsed");
+        assert_eq!(rows[0].description, "AMAZON PURCHASE");
+        assert_eq!(rows[0].amount, -50.0);
+        assert_eq!(rows[1].description, "RESTAURANT");
+        assert_eq!(rows[1].amount, -30.0);
+        assert_eq!(rows[2].description, "STORE REFUND");
+        assert_eq!(rows[2].amount, 100.0);
+    }
+
+    #[test]
+    fn test_bofa_credit_card_comma_in_payee_skips_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cc.csv");
+        // Comma in the Payee field instead of CardHolder Name — offset pushes
+        // indices past the real columns. The date/amount validation should
+        // cause this row to be skipped rather than silently importing wrong data.
+        let content = "\
+CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Payee,Address,City/State,Reference Number,Type
+JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seattle WA,REF001,D
+";
+        std::fs::write(&path, content).unwrap();
+        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        // Row has 12 fields (one extra from Payee comma) but CardHolder Name
+        // has no comma, so offset=1 shifts all indices — the adjusted date
+        // column now points at "01/15/2025" → date still looks valid, but
+        // adjusted desc points at "Shopping" and adjusted amount at "AMAZON".
+        // Amount validation rejects "AMAZON" as non-numeric, so row is skipped.
+        assert_eq!(rows.len(), 0, "row with misaligned comma should be skipped");
     }
 }
