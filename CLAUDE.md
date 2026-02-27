@@ -31,6 +31,9 @@ nigel init --data-dir ~/my-books                  # Initialize with custom data 
 nigel demo                                        # Load sample data to explore
 nigel import <file> --account <name>              # Import CSV/XLSX (auto-detects format)
 nigel import <file> --account <name> --format bofa_checking  # Import with explicit format
+nigel rules update 1 --priority 10                # Update a rule field
+nigel rules update 5 --category "Rent / Lease"    # Reassign rule category
+nigel rules delete 3                              # Deactivate a rule (soft-delete)
 nigel categorize                                  # Re-run rules on uncategorized
 nigel review                                      # Interactive review
 nigel report pnl --year 2025                      # Profit & Loss

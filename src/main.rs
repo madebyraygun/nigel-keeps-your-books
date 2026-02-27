@@ -48,6 +48,15 @@ fn main() {
                 priority,
             } => cli::rules::add(&pattern, &category, vendor.as_deref(), &match_type, priority),
             RulesCommands::List => cli::rules::list(),
+            RulesCommands::Update {
+                id,
+                pattern,
+                category,
+                vendor,
+                match_type,
+                priority,
+            } => cli::rules::update(id, pattern, category, vendor, match_type, priority),
+            RulesCommands::Delete { id } => cli::rules::delete(id),
         },
         Commands::Review => cli::review::run(),
         Commands::Report { command } => match command {
