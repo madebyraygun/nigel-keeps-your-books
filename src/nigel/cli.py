@@ -111,12 +111,13 @@ from nigel.categorizer import categorize_transactions
 def import_cmd(
     file: Path = typer.Argument(help="Path to CSV or XLSX file to import"),
     account: str = typer.Option(help="Account name to import into"),
+    format: str = typer.Option(None, "--format", help="Importer format key (e.g. bofa_checking)"),
 ):
     """Import a CSV/XLSX file and auto-categorize transactions."""
     import shutil
 
     conn = get_connection(get_db_path())
-    result = import_file(conn, file, account)
+    result = import_file(conn, file, account, format_key=format)
 
     if result.get("duplicate_file"):
         conn.close()
