@@ -77,16 +77,19 @@ pub fn update(
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
 
     // Verify rule exists and is active
-    let exists: bool = conn
-        .query_row(
-            "SELECT is_active FROM rules WHERE id = ?1",
-            [id],
-            |row| row.get::<_, i32>(0),
-        )
-        .map(|a| a == 1)
-        .map_err(|_| NigelError::Other(format!("No rule with ID {id}")))?;
+    let is_active: i32 = match conn.query_row(
+        "SELECT is_active FROM rules WHERE id = ?1",
+        [id],
+        |row| row.get::<_, i32>(0),
+    ) {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(NigelError::Other(format!("No rule with ID {id}")));
+        }
+        Err(e) => return Err(e.into()),
+    };
 
-    if !exists {
+    if is_active == 0 {
         return Err(NigelError::Other(format!("Rule {id} is inactive")));
     }
 
@@ -143,6 +146,109 @@ pub fn update(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::db::{get_connection, init_db};
+    use rusqlite::Connection;
+
+    fn test_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = get_connection(&dir.path().join("test.db")).unwrap();
+        init_db(&conn).unwrap();
+        (dir, conn)
+    }
+
+    fn add_rule(conn: &Connection, pattern: &str) -> i64 {
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO rules (pattern, match_type, vendor, category_id, priority, is_active) \
+             VALUES (?1, 'contains', 'TestVendor', ?2, 0, 1)",
+            rusqlite::params![pattern, cat_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn test_delete_deactivates_rule() {
+        let (_dir, conn) = test_db();
+        let id = add_rule(&conn, "ADOBE");
+        let active: i32 = conn
+            .query_row("SELECT is_active FROM rules WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(active, 1);
+
+        conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id])
+            .unwrap();
+        let active: i32 = conn
+            .query_row("SELECT is_active FROM rules WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(active, 0);
+    }
+
+    #[test]
+    fn test_delete_preserves_hit_count() {
+        let (_dir, conn) = test_db();
+        let id = add_rule(&conn, "ADOBE");
+        conn.execute("UPDATE rules SET hit_count = 42 WHERE id = ?1", [id])
+            .unwrap();
+        conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id])
+            .unwrap();
+        let hits: i64 = conn
+            .query_row("SELECT hit_count FROM rules WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hits, 42);
+    }
+
+    #[test]
+    fn test_update_changes_priority() {
+        let (_dir, conn) = test_db();
+        let id = add_rule(&conn, "ADOBE");
+        conn.execute("UPDATE rules SET priority = 10 WHERE id = ?1", [id])
+            .unwrap();
+        let pri: i64 = conn
+            .query_row("SELECT priority FROM rules WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pri, 10);
+    }
+
+    #[test]
+    fn test_update_changes_pattern() {
+        let (_dir, conn) = test_db();
+        let id = add_rule(&conn, "ADOBE");
+        conn.execute(
+            "UPDATE rules SET pattern = 'PHOTOSHOP' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        let pat: String = conn
+            .query_row("SELECT pattern FROM rules WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pat, "PHOTOSHOP");
+    }
+
+    #[test]
+    fn test_inactive_rule_excluded_from_active_list() {
+        let (_dir, conn) = test_db();
+        let id = add_rule(&conn, "ADOBE");
+        let count_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rules WHERE is_active = 1", [], |r| r.get(0))
+            .unwrap();
+        conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id])
+            .unwrap();
+        let count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rules WHERE is_active = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_after, count_before - 1);
+    }
+}
+
 pub fn delete(id: i64) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
 
@@ -153,7 +259,10 @@ pub fn delete(id: i64) -> Result<()> {
     );
 
     match row {
-        Err(_) => Err(NigelError::Other(format!("No rule with ID {id}"))),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(NigelError::Other(format!("No rule with ID {id}")))
+        }
+        Err(e) => Err(e.into()),
         Ok((_, _, 0)) => Err(NigelError::Other(format!("Rule {id} is already inactive"))),
         Ok((pattern, category, _)) => {
             conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id])?;
