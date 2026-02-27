@@ -65,3 +65,23 @@ pub fn list() -> Result<()> {
     println!("Rules\n{table}");
     Ok(())
 }
+
+pub fn delete(id: i64) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+
+    let row: std::result::Result<(String, String, i32), _> = conn.query_row(
+        "SELECT r.pattern, c.name, r.is_active FROM rules r JOIN categories c ON r.category_id = c.id WHERE r.id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    );
+
+    match row {
+        Err(_) => Err(NigelError::Other(format!("No rule with ID {id}"))),
+        Ok((_, _, 0)) => Err(NigelError::Other(format!("Rule {id} is already inactive"))),
+        Ok((pattern, category, _)) => {
+            conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id])?;
+            println!("Deleted rule {id}: '{pattern}' \u{2192} {category}");
+            Ok(())
+        }
+    }
+}

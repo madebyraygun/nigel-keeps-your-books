@@ -135,6 +135,11 @@ pub enum RulesCommands {
     },
     /// List all categorization rules.
     List,
+    /// Delete (deactivate) a rule by ID.
+    Delete {
+        /// Rule ID (shown in `nigel rules list`)
+        id: i64,
+    },
 }
 
 #[cfg(feature = "pdf")]

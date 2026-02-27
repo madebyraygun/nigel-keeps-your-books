@@ -48,6 +48,7 @@ fn main() {
                 priority,
             } => cli::rules::add(&pattern, &category, vendor.as_deref(), &match_type, priority),
             RulesCommands::List => cli::rules::list(),
+            RulesCommands::Delete { id } => cli::rules::delete(id),
         },
         Commands::Review => cli::review::run(),
         Commands::Report { command } => match command {
