@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS categories (
     parent_id INTEGER,
     category_type TEXT NOT NULL,
     tax_line TEXT,
+    form_line TEXT,
     description TEXT,
     is_active INTEGER DEFAULT 1,
     FOREIGN KEY (parent_id) REFERENCES categories(id)
@@ -79,37 +80,37 @@ CREATE TABLE IF NOT EXISTS reconciliations (
 """
 
 DEFAULT_CATEGORIES = [
-    # Income
-    ("Client Services", None, "income", "Gross receipts", "Project fees, retainer payments"),
-    ("Hosting & Maintenance", None, "income", "Gross receipts", "Recurring client hosting/maintenance fees"),
-    ("Reimbursements", None, "income", "Gross receipts", "Client reimbursements for expenses"),
-    ("Interest Income", None, "income", "Other income", "Bank interest"),
-    ("Other Income", None, "income", "Other income", "Anything else"),
+    # Income - (name, parent_id, category_type, tax_line, form_line, description)
+    ("Client Services", None, "income", "Gross receipts", None, "Project fees, retainer payments"),
+    ("Hosting & Maintenance", None, "income", "Gross receipts", None, "Recurring client hosting/maintenance fees"),
+    ("Reimbursements", None, "income", "Gross receipts", None, "Client reimbursements for expenses"),
+    ("Interest Income", None, "income", "Other income", "K-4", "Bank interest"),
+    ("Other Income", None, "income", "Other income", None, "Anything else"),
     # Expenses
-    ("Advertising & Marketing", None, "expense", "Line 8", "Ads, sponsorships, marketing tools"),
-    ("Car & Truck", None, "expense", "Line 9", "Mileage, fuel, parking"),
-    ("Commissions & Fees", None, "expense", "Line 10", "Subcontractor commissions, platform fees"),
-    ("Contract Labor", None, "expense", "Line 11", "Freelancers, subcontractors (1099 work)"),
-    ("Insurance", None, "expense", "Line 15", "Business insurance, E&O"),
-    ("Legal & Professional", None, "expense", "Line 17", "Accountant, lawyer, professional services"),
-    ("Office Expense", None, "expense", "Line 18", "Office supplies, minor equipment"),
-    ("Rent / Lease", None, "expense", "Line 20b", "Office rent, coworking"),
-    ("Software & Subscriptions", None, "expense", "Line 18/27a", "SaaS tools, domain renewals, cloud services"),
-    ("Hosting & Infrastructure", None, "expense", "Line 18/27a", "AWS, server costs, CDN"),
-    ("Taxes & Licenses", None, "expense", "Line 23", "Business licenses, state fees"),
-    ("Travel", None, "expense", "Line 24a", "Flights, hotels, conference travel"),
-    ("Meals", None, "expense", "Line 24b", "Business meals (50% deductible)"),
-    ("Utilities", None, "expense", "Line 25", "Internet, phone (business portion)"),
-    ("Payroll — Wages", None, "expense", "Line 26", "Employee salaries (from Gusto)"),
-    ("Payroll — Taxes", None, "expense", "Line 23", "Employer payroll taxes (from Gusto)"),
-    ("Payroll — Benefits", None, "expense", "Line 14", "Health insurance, retirement (from Gusto)"),
-    ("Bank & Merchant Fees", None, "expense", "Line 27a", "Stripe fees, bank charges, wire fees"),
-    ("Education & Training", None, "expense", "Line 27a", "Courses, books, conferences"),
-    ("Equipment", None, "expense", "Line 13", "Hardware, major purchases"),
-    ("Home Office", None, "expense", "Line 30", "Simplified method or actual expenses"),
-    ("Owner Draw / Distribution", None, "expense", "Not deductible", "Owner payments, distributions"),
-    ("Transfer", None, "expense", "Not deductible", "Transfers between own accounts"),
-    ("Uncategorized", None, "expense", "—", "Needs review"),
+    ("Advertising & Marketing", None, "expense", "Line 8", "1120S-16", "Ads, sponsorships, marketing tools"),
+    ("Car & Truck", None, "expense", "Line 9", "1120S-19", "Mileage, fuel, parking"),
+    ("Commissions & Fees", None, "expense", "Line 10", "1120S-19", "Subcontractor commissions, platform fees"),
+    ("Contract Labor", None, "expense", "Line 11", "1120S-19", "Freelancers, subcontractors (1099 work)"),
+    ("Insurance", None, "expense", "Line 15", "1120S-19", "Business insurance, E&O"),
+    ("Legal & Professional", None, "expense", "Line 17", "1120S-19", "Accountant, lawyer, professional services"),
+    ("Office Expense", None, "expense", "Line 18", "1120S-19", "Office supplies, minor equipment"),
+    ("Rent / Lease", None, "expense", "Line 20b", "1120S-11", "Office rent, coworking"),
+    ("Software & Subscriptions", None, "expense", "Line 18/27a", "1120S-19", "SaaS tools, domain renewals, cloud services"),
+    ("Hosting & Infrastructure", None, "expense", "Line 18/27a", "1120S-19", "AWS, server costs, CDN"),
+    ("Taxes & Licenses", None, "expense", "Line 23", "1120S-12", "Business licenses, state fees"),
+    ("Travel", None, "expense", "Line 24a", "1120S-19", "Flights, hotels, conference travel"),
+    ("Meals", None, "expense", "Line 24b", "1120S-19", "Business meals (50% deductible)"),
+    ("Utilities", None, "expense", "Line 25", "1120S-19", "Internet, phone (business portion)"),
+    ("Payroll — Wages", None, "expense", "Line 26", "1120S-8", "Employee salaries (from Gusto)"),
+    ("Payroll — Taxes", None, "expense", "Line 23", "1120S-12", "Employer payroll taxes (from Gusto)"),
+    ("Payroll — Benefits", None, "expense", "Line 14", "1120S-18", "Health insurance, retirement (from Gusto)"),
+    ("Bank & Merchant Fees", None, "expense", "Line 27a", "1120S-19", "Stripe fees, bank charges, wire fees"),
+    ("Education & Training", None, "expense", "Line 27a", "1120S-19", "Courses, books, conferences"),
+    ("Equipment", None, "expense", "Line 13", "1120S-19", "Hardware, major purchases"),
+    ("Home Office", None, "expense", "Line 30", "1120S-19", "Simplified method or actual expenses"),
+    ("Owner Draw / Distribution", None, "expense", "Not deductible", "K-16d", "Owner payments, distributions"),
+    ("Transfer", None, "expense", "Not deductible", None, "Transfers between own accounts"),
+    ("Uncategorized", None, "expense", "—", None, "Needs review"),
 ]
 
 
@@ -129,8 +130,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     cursor = conn.execute("SELECT count(*) FROM categories")
     if cursor.fetchone()[0] == 0:
         conn.executemany(
-            "INSERT INTO categories (name, parent_id, category_type, tax_line, description) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO categories (name, parent_id, category_type, tax_line, form_line, description) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             DEFAULT_CATEGORIES,
         )
         conn.commit()

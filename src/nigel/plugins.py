@@ -59,7 +59,7 @@ def seed_plugin_categories(conn: sqlite3.Connection, hooks: PluginHooks) -> None
         ).fetchone()
         if existing is None:
             conn.execute(
-                "INSERT INTO categories (name, category_type, tax_line, description) VALUES (?, ?, ?, ?)",
-                (cat["name"], cat["category_type"], cat.get("tax_line"), cat.get("description")),
+                "INSERT INTO categories (name, category_type, tax_line, form_line, description) VALUES (?, ?, ?, ?, ?)",
+                (cat["name"], cat["category_type"], cat.get("tax_line"), cat.get("form_line"), cat.get("description")),
             )
     conn.commit()

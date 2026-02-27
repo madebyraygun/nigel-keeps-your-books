@@ -18,6 +18,7 @@ class Category:
     category_type: str  # income or expense
     parent_id: int | None = None
     tax_line: str | None = None
+    form_line: str | None = None
     description: str | None = None
     is_active: bool = True
 

@@ -56,3 +56,14 @@ def test_init_db_seeds_income_and_expense_categories(tmp_path):
     )
     expense_count = cursor.fetchone()[0]
     assert expense_count >= 20
+
+
+def test_categories_have_form_line_column(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_db(conn)
+
+    row = conn.execute(
+        "SELECT form_line FROM categories WHERE name = 'Payroll — Wages'"
+    ).fetchone()
+    assert row["form_line"] == "1120S-8"
