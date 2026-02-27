@@ -66,6 +66,83 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
+pub fn update(
+    id: i64,
+    pattern: Option<String>,
+    category: Option<String>,
+    vendor: Option<String>,
+    match_type: Option<String>,
+    priority: Option<i64>,
+) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+
+    // Verify rule exists and is active
+    let exists: bool = conn
+        .query_row(
+            "SELECT is_active FROM rules WHERE id = ?1",
+            [id],
+            |row| row.get::<_, i32>(0),
+        )
+        .map(|a| a == 1)
+        .map_err(|_| NigelError::Other(format!("No rule with ID {id}")))?;
+
+    if !exists {
+        return Err(NigelError::Other(format!("Rule {id} is inactive")));
+    }
+
+    if pattern.is_none()
+        && category.is_none()
+        && vendor.is_none()
+        && match_type.is_none()
+        && priority.is_none()
+    {
+        return Err(NigelError::Other(
+            "Nothing to update — provide at least one flag".to_string(),
+        ));
+    }
+
+    let mut updates = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(ref p) = pattern {
+        params.push(Box::new(p.clone()));
+        updates.push(format!("pattern = ?{}", params.len()));
+    }
+    if let Some(ref mt) = match_type {
+        params.push(Box::new(mt.clone()));
+        updates.push(format!("match_type = ?{}", params.len()));
+    }
+    if let Some(ref v) = vendor {
+        params.push(Box::new(v.clone()));
+        updates.push(format!("vendor = ?{}", params.len()));
+    }
+    if let Some(ref cat) = category {
+        let cat_id: i64 = conn
+            .query_row("SELECT id FROM categories WHERE name = ?1", [cat], |row| {
+                row.get(0)
+            })
+            .map_err(|_| NigelError::UnknownCategory(cat.clone()))?;
+        params.push(Box::new(cat_id));
+        updates.push(format!("category_id = ?{}", params.len()));
+    }
+    if let Some(pri) = priority {
+        params.push(Box::new(pri));
+        updates.push(format!("priority = ?{}", params.len()));
+    }
+
+    params.push(Box::new(id));
+    let sql = format!(
+        "UPDATE rules SET {} WHERE id = ?{}",
+        updates.join(", "),
+        params.len()
+    );
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    conn.execute(&sql, param_refs.as_slice())?;
+
+    println!("Updated rule {id}");
+    Ok(())
+}
+
 pub fn delete(id: i64) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
 

@@ -135,6 +135,26 @@ pub enum RulesCommands {
     },
     /// List all categorization rules.
     List,
+    /// Update an existing rule.
+    Update {
+        /// Rule ID (shown in `nigel rules list`)
+        id: i64,
+        /// New pattern
+        #[arg(long)]
+        pattern: Option<String>,
+        /// New category name
+        #[arg(long)]
+        category: Option<String>,
+        /// New vendor name
+        #[arg(long)]
+        vendor: Option<String>,
+        /// New match type: contains, starts_with, regex
+        #[arg(long = "match-type")]
+        match_type: Option<String>,
+        /// New priority
+        #[arg(long)]
+        priority: Option<i64>,
+    },
     /// Delete (deactivate) a rule by ID.
     Delete {
         /// Rule ID (shown in `nigel rules list`)
