@@ -77,3 +77,6 @@ class ImporterInfo:
     account_types: list[str]
     file_extensions: list[str]
     parse: Callable
+    version: str = "1.0"
+    detect: Callable | None = None
+    post_import: Callable | None = None

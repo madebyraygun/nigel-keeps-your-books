@@ -12,12 +12,12 @@ def _compute_checksum(file_path: Path) -> str:
     return hashlib.sha256(file_path.read_bytes()).hexdigest()
 
 
-def _parse_amount(raw: str) -> float:
+def parse_amount(raw: str) -> float:
     """Strip commas and quotes, return float."""
     return float(raw.replace(",", "").replace('"', "").strip())
 
 
-def _parse_date_mdy(raw: str) -> str:
+def parse_date_mdy(raw: str) -> str:
     """Convert MM/DD/YYYY to ISO 8601 YYYY-MM-DD."""
     return datetime.strptime(raw.strip(), "%m/%d/%Y").strftime("%Y-%m-%d")
 
@@ -36,13 +36,13 @@ def parse_bofa_checking(file_path: Path) -> list[ParsedRow]:
             if len(line) < 3 or not line[0].strip():
                 continue
             try:
-                date = _parse_date_mdy(line[0])
+                date = parse_date_mdy(line[0])
             except ValueError:
                 continue
             description = line[1].strip()
             if not description or "Beginning balance" in description:
                 continue
-            amount = _parse_amount(line[2])
+            amount = parse_amount(line[2])
             rows.append(ParsedRow(date=date, description=description, amount=amount))
     return rows
 
@@ -60,11 +60,11 @@ def parse_bofa_credit_card(file_path: Path) -> list[ParsedRow]:
             if len(line) < 10 or not line[2].strip():
                 continue
             try:
-                date = _parse_date_mdy(line[3])  # Trans. Date
+                date = parse_date_mdy(line[3])  # Trans. Date
             except ValueError:
                 continue
             description = line[5].strip()
-            amount = _parse_amount(line[6])
+            amount = parse_amount(line[6])
             txn_type = line[9].strip()
             # D = charge (expense), C = credit/payment
             if txn_type == "D":
@@ -87,18 +87,18 @@ def parse_bofa_line_of_credit(file_path: Path) -> list[ParsedRow]:
             if len(line) < 10 or not line[2].strip():
                 continue
             try:
-                date = _parse_date_mdy(line[3])  # Trans. Date
+                date = parse_date_mdy(line[3])  # Trans. Date
             except ValueError:
                 continue
             description = line[5].strip()
-            amount = _parse_amount(line[6])
+            amount = parse_amount(line[6])
             # Line of credit: positive = charge/expense (negate), negative = payment (keep)
             amount = -amount
             rows.append(ParsedRow(date=date, description=description, amount=amount))
     return rows
 
 
-def _excel_serial_to_date(serial: int | float) -> str:
+def excel_serial_to_date(serial: int | float) -> str:
     """Convert Excel serial date number to ISO 8601 string."""
     from datetime import timedelta
     base = datetime(1899, 12, 30)  # Excel epoch (accounting for the 1900 leap year bug)
@@ -119,7 +119,7 @@ def parse_gusto_payroll(file_path: Path) -> list[ParsedRow]:
     for row in payroll_rows:
         if row[3] is None or row[7] is None:
             continue
-        check_date = _excel_serial_to_date(row[3]) if isinstance(row[3], (int, float)) else str(row[3])
+        check_date = excel_serial_to_date(row[3]) if isinstance(row[3], (int, float)) else str(row[3])
         gross = float(row[7])
         wages_by_date[check_date] = wages_by_date.get(check_date, 0.0) + gross
 
@@ -130,7 +130,7 @@ def parse_gusto_payroll(file_path: Path) -> list[ParsedRow]:
     for row in tax_rows:
         if row[6] != "Employer" or row[3] is None or row[7] is None:
             continue
-        check_date = _excel_serial_to_date(row[3]) if isinstance(row[3], (int, float)) else str(row[3])
+        check_date = excel_serial_to_date(row[3]) if isinstance(row[3], (int, float)) else str(row[3])
         amount = float(row[7])
         employer_taxes_by_date[check_date] = employer_taxes_by_date.get(check_date, 0.0) + amount
 
