@@ -7,24 +7,24 @@ Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBook
 ## Features
 
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
-- **Plugin architecture** — importers, reports, and exports are plugins; add new institutions or output formats without touching core
-- **Format auto-detection** — importers inspect file headers to pick the right parser; override with `--format` when needed
-- **PDF export** — export any report to print-ready PDF via WeasyPrint
+- **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
-- **Interactive review** — step through flagged transactions, assign categories, and create rules on the fly so Nigel learns from every correction
+- **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 
+Importers currently include Bank of America and Gusto, but adding new importers is straightforward. See [docs/importers.md] for more information. The repository also contains a Claude skill that can create an importer from any data file.
+
+Nigel also includes a demo mode** — `nigel demo` which loads sample data so you can explore every feature without requiring any personal data.
+
 ## Install
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Download a pre-built binary from [GitHub Releases](https://github.com/madebyraygun/nigel-keeps-your-books/releases), or build from source:
 
 ```bash
-git clone https://github.com/madebyraygun/nigel-keeps-your-books.git
-cd nigel-keeps-your-books
-uv sync
+cargo install --path .
 ```
 
 ## Quick Start
@@ -33,10 +33,10 @@ uv sync
 # Initialize — prompts for data directory on first run
 nigel init
 
-# Or specify a custom data directory
-nigel init --data-dir ~/my-books
+# Load sample data to explore
+nigel demo
 
-# Add an account
+# Or set up your own accounts
 nigel accounts add "BofA Checking" --type checking --institution "Bank of America"
 
 # Import transactions
@@ -65,46 +65,31 @@ nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 
 ## Walkthrough
 
-See [docs/walkthrough.md](docs/walkthrough.md) for a complete month-end cycle: import a bank statement, categorize, review, reconcile, and run reports.
+See [docs/walkthrough.md](docs/walkthrough.md) for a guided tour using demo data: explore accounts and rules, review flagged transactions, add new rules, and run every report.
 
 ## Configuration
 
-Settings are stored in `~/.config/nigel/settings.json`. The data directory (database, imports, exports) defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`.
+Settings are stored in `~/.config/nigel/settings.json`. The data directory (database, imports) defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`.
 
-## Plugins
+## Feature Flags
 
-Nigel supports plugins via Python entry points. Install a plugin package and run `nigel init` to apply its migrations.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `gusto` | Yes | Gusto payroll XLSX importer + auto-categorization |
 
-| Plugin | Description | Install |
-|--------|-------------|---------|
-| **nigel-bofa** | Bank of America importers (checking, credit card, line of credit) | `uv pip install -e plugins/nigel-bofa` |
-| **nigel-gusto** | Gusto payroll XLSX importer with auto-categorization | `uv pip install -e plugins/nigel-gusto` |
-| **nigel-k1** | K-1 prep report (1120-S / Schedule K) | `uv pip install -e plugins/nigel-k1` |
-| **nigel-export-pdf** | Export any report to print-ready PDF via WeasyPrint | `uv pip install -e plugins/nigel-export-pdf` |
-
-### K-1 Prep Report
+Build without Gusto support:
 
 ```bash
-uv pip install -e plugins/nigel-k1   # Install plugin
-nigel init                             # Run plugin migrations
-nigel k1 setup                         # Configure entity & shareholders
-nigel report k1-prep --year 2025       # Generate K-1 prep worksheet
-```
-
-### PDF Export
-
-```bash
-uv pip install -e plugins/nigel-export-pdf
-nigel export pnl --year 2025                    # Single report
-nigel export all --year 2025 --company "Acme"   # All reports
+cargo build --release --no-default-features
 ```
 
 ## Development
 
 ```bash
-uv sync                    # Install dependencies
-uv run pytest -v           # Run tests
-uv run nigel --help        # CLI help
+cargo build              # Debug build
+cargo build --release    # Release build
+cargo test               # Run all tests
+cargo test --no-default-features  # Test without gusto feature
 ```
 
 ## License
