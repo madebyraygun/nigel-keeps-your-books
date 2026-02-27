@@ -26,9 +26,11 @@ pub enum NigelError {
     #[error("Settings error: {0}")]
     Settings(String),
 
+    #[cfg(feature = "pdf")]
     #[error("PDF error: {0}")]
     Pdf(String),
 
+    #[allow(dead_code)]
     #[error("{0}")]
     Other(String),
 }
