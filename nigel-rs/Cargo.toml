@@ -1,0 +1,30 @@
+[package]
+name = "nigel"
+version = "0.1.0"
+edition = "2021"
+description = "Cash-basis bookkeeping CLI for small consultancies"
+
+[features]
+default = ["gusto"]
+gusto = ["dep:calamine"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+csv = "1"
+calamine = { version = "0.25", optional = true }
+regex = "1"
+comfy-table = "7"
+dialoguer = "0.11"
+colored = "2"
+sha2 = "0.10"
+hex = "0.4"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+anyhow = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
