@@ -1,11 +1,11 @@
 ---
 # nigel-snfs
 title: K-1 prep report plugin
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-02-27T00:56:30Z
-updated_at: 2026-02-27T00:56:30Z
+updated_at: 2026-02-27T01:46:50Z
 blocked_by:
     - nigel-to27
 ---

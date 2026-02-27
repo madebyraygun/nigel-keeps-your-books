@@ -1,11 +1,11 @@
 ---
 # nigel-to27
 title: Plugin system for extending Nigel
-status: todo
+status: completed
 type: feature
 priority: high
 created_at: 2026-02-27T00:56:17Z
-updated_at: 2026-02-27T00:56:34Z
+updated_at: 2026-02-27T01:35:07Z
 blocked_by:
     - nigel-r3cb
 ---

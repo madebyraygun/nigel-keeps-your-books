@@ -1,12 +1,13 @@
 # Nigel
 
-**Nigel keeps your books so you don't have to**
+**A reliable bloke who does his job well.**
 
 Nigel is a cash-basis bookkeeping CLI for small consultancies. Replaces QuickBooks with a simple, local-first workflow: import bank CSVs, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal.
 
 ## Features
 
 - **Bank imports** — CSV/XLSX parsers for industry standard bank and payroll service providers
+- **Plugin architecture** -- Create new importers and reporting features
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
 - **Interactive review** — step through flagged transactions, assign categories, create rules on the fly
@@ -63,6 +64,21 @@ nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 ## Configuration
 
 Settings are stored in `~/.config/nigel/settings.json`. The data directory (database, imports, exports) defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`.
+
+## Plugins
+
+Nigel supports plugins via Python entry points. Install a plugin package and run `nigel init` to apply its migrations.
+
+### K-1 Prep Report (nigel-k1)
+
+```bash
+uv pip install -e plugins/nigel-k1   # Install plugin
+nigel init                             # Run plugin migrations
+nigel k1 setup                         # Configure entity & shareholders
+nigel report k1-prep --year 2025       # Generate K-1 prep worksheet
+```
+
+The K-1 plugin generates 1120-S income summaries, Schedule K breakdowns, per-shareholder K-1 worksheets, and validation checks (uncategorized transactions, compensation-to-distribution ratio warnings).
 
 ## Development
 

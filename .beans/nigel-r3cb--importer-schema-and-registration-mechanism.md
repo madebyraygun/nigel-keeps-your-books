@@ -1,11 +1,11 @@
 ---
 # nigel-r3cb
 title: Importer schema and registration mechanism
-status: todo
+status: completed
 type: feature
 priority: high
 created_at: 2026-02-27T00:56:06Z
-updated_at: 2026-02-27T00:56:06Z
+updated_at: 2026-02-27T01:29:40Z
 ---
 
 Design a flexible importer system that allows new file formats to be added without modifying core code.
@@ -23,3 +23,8 @@ The importer (`src/nigel/importer.py`) has hardcoded parsers mapped via `PARSER_
 ## Out of Scope
 - Plugin loading from external packages (that's the plugin system issue)
 - UI for managing importers
+
+
+## Summary of Changes
+
+Added ImporterRegistry with register/lookup by account type. Built-in parsers self-register with ImporterInfo metadata. import_file() uses registry instead of PARSER_MAP.
