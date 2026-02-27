@@ -1,17 +1,19 @@
 # Nigel
 
-**A reliable bloke who does his job well.**
+*A reliable bloke who does his job well.*
 
-Nigel is a cash-basis bookkeeping CLI for small consultancies. Replaces QuickBooks with a simple, local-first workflow: import bank CSVs, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal.
+Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBooks with a simple, local-first workflow: import bank CSVs and payroll reports, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal.
 
 ## Features
 
-- **Bank imports** — CSV/XLSX parsers for industry standard bank and payroll service providers
-- **Plugin architecture** -- Create new importers and reporting features
+- **Bank imports** — CSV/XLSX parsers with format auto-detection for Bank of America and Gusto payroll
+- **Plugin architecture** — importers, reports, and exports are all plugins; add new institutions or output formats without touching core
+- **Format auto-detection** — importers inspect file headers to pick the right parser; override with `--format` when needed
+- **PDF export** — export any report to print-ready PDF via WeasyPrint
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
 - **Interactive review** — step through flagged transactions, assign categories, create rules on the fly
-- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C), cash flow, balance
+- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 
@@ -20,8 +22,8 @@ Nigel is a cash-basis bookkeeping CLI for small consultancies. Replaces QuickBoo
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/madebyraygun/nigel.git
-cd nigel
+git clone https://github.com/madebyraygun/nigel-keeps-your-books.git
+cd nigel-keeps-your-books
 uv sync
 ```
 
@@ -69,7 +71,14 @@ Settings are stored in `~/.config/nigel/settings.json`. The data directory (data
 
 Nigel supports plugins via Python entry points. Install a plugin package and run `nigel init` to apply its migrations.
 
-### K-1 Prep Report (nigel-k1)
+| Plugin | Description | Install |
+|--------|-------------|---------|
+| **nigel-bofa** | Bank of America importers (checking, credit card, line of credit) | `uv pip install -e plugins/nigel-bofa` |
+| **nigel-gusto** | Gusto payroll XLSX importer with auto-categorization | `uv pip install -e plugins/nigel-gusto` |
+| **nigel-k1** | K-1 prep report (1120-S / Schedule K) | `uv pip install -e plugins/nigel-k1` |
+| **nigel-export-pdf** | Export any report to print-ready PDF via WeasyPrint | `uv pip install -e plugins/nigel-export-pdf` |
+
+### K-1 Prep Report
 
 ```bash
 uv pip install -e plugins/nigel-k1   # Install plugin
@@ -78,7 +87,13 @@ nigel k1 setup                         # Configure entity & shareholders
 nigel report k1-prep --year 2025       # Generate K-1 prep worksheet
 ```
 
-The K-1 plugin generates 1120-S income summaries, Schedule K breakdowns, per-shareholder K-1 worksheets, and validation checks (uncategorized transactions, compensation-to-distribution ratio warnings).
+### PDF Export
+
+```bash
+uv pip install -e plugins/nigel-export-pdf
+nigel export pnl --year 2025                    # Single report
+nigel export all --year 2025 --company "Acme"   # All reports
+```
 
 ## Development
 
