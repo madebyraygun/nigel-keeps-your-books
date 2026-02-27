@@ -94,6 +94,9 @@ fn main() {
             month,
             balance,
         } => cli::reconcile::run(&account, &month, balance),
+        Commands::Load { path } => cli::load::run(&path),
+        Commands::Backup { output } => cli::backup::run(output),
+        Commands::Status => cli::status::run(),
     };
 
     if let Err(e) = result {

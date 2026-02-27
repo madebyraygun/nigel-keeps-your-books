@@ -26,11 +26,5 @@ pub fn run(file: &str, account: &str, format: Option<&str>) -> Result<()> {
         cat_result.categorized, cat_result.still_flagged
     );
 
-    // Archive the import file
-    let dest = data_dir.join("imports").join(file_path.file_name().unwrap_or_default());
-    if !dest.exists() {
-        let _ = std::fs::copy(&file_path, &dest);
-    }
-
     Ok(())
 }

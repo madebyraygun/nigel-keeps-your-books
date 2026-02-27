@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::db::{get_connection, init_db};
 use crate::error::Result;
-use crate::settings::{load_settings, save_settings, Settings};
+use crate::settings::{load_settings, save_settings, shellexpand_path, Settings};
 
 pub fn run(data_dir: Option<String>) -> Result<()> {
     let mut settings = load_settings();
@@ -26,7 +26,6 @@ pub fn run(data_dir: Option<String>) -> Result<()> {
 
     let resolved = PathBuf::from(&settings.data_dir);
     std::fs::create_dir_all(&resolved)?;
-    std::fs::create_dir_all(resolved.join("imports"))?;
     std::fs::create_dir_all(resolved.join("exports"))?;
 
     let conn = get_connection(&resolved.join("nigel.db"))?;
@@ -34,16 +33,4 @@ pub fn run(data_dir: Option<String>) -> Result<()> {
 
     println!("Initialized nigel at {}", resolved.display());
     Ok(())
-}
-
-fn shellexpand_path(path: &str) -> String {
-    if path.starts_with('~') {
-        if let Some(home) = dirs::home_dir() {
-            return path.replacen('~', &home.to_string_lossy(), 1);
-        }
-    }
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|_| PathBuf::from(path))
-        .to_string_lossy()
-        .to_string()
 }

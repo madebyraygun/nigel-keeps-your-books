@@ -23,6 +23,24 @@ pub fn money(val: f64) -> String {
     }
 }
 
+/// Format a byte count as a human-readable string: "1.2 KB", "3.4 MB"
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,5 +52,15 @@ mod tests {
         assert_eq!(money(0.0), "$0.00");
         assert_eq!(money(1000000.99), "$1,000,000.99");
         assert_eq!(money(42.10), "$42.10");
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(1_048_576), "1.0 MB");
+        assert_eq!(format_bytes(1_073_741_824), "1.0 GB");
     }
 }

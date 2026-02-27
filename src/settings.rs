@@ -68,6 +68,18 @@ pub fn get_data_dir() -> PathBuf {
     PathBuf::from(&load_settings().data_dir)
 }
 
+pub fn shellexpand_path(path: &str) -> String {
+    if path.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            return path.replacen('~', &home.to_string_lossy(), 1);
+        }
+    }
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| PathBuf::from(path))
+        .to_string_lossy()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

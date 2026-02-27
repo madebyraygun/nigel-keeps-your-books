@@ -1,14 +1,17 @@
 pub mod accounts;
+pub mod backup;
 pub mod categorize;
 pub mod demo;
 #[cfg(feature = "pdf")]
 pub mod export;
 pub mod import;
 pub mod init;
+pub mod load;
 pub mod reconcile;
 pub mod report;
 pub mod review;
 pub mod rules;
+pub mod status;
 
 use clap::{Parser, Subcommand};
 
@@ -76,6 +79,19 @@ pub enum Commands {
         #[arg(long)]
         balance: f64,
     },
+    /// Switch to an existing Nigel data directory.
+    Load {
+        /// Path to data directory containing nigel.db
+        path: String,
+    },
+    /// Back up the database.
+    Backup {
+        /// Output path (default: <data_dir>/backups/nigel-YYYYMMDD-HHMMSS.db)
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// Show current database and summary statistics.
+    Status,
 }
 
 #[derive(Subcommand)]

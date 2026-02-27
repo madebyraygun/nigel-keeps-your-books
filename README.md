@@ -68,11 +68,21 @@ nigel export all --year 2025 --output-dir ~/exports/
 
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
+
+# See what's active
+nigel status
+
+# Switch between data directories
+nigel load ~/other-books
+
+# Back up your database
+nigel backup
+nigel backup --output /tmp/nigel-backup.db
 ```
 
 ## Configuration
 
-Settings are stored in `~/.config/nigel/settings.json`. The data directory (database, imports) defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`.
+Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics.
 
 ## Feature Flags
 

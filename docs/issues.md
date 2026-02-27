@@ -2,13 +2,17 @@
 
 ## Open
 
-### #3 - Multiple data files
-
-Add the ability to support multiple data files.
+(none)
 
 ---
 
 ## Closed
+
+### #3 — Multi-database support, backup, and cleanup
+
+Added `nigel load <path>` to switch between existing data directories, `nigel backup [--output <path>]` for safe database backups via SQLite backup API, and `nigel status` to show the active database with summary statistics. Removed redundant `imports/` archive folder since duplicate detection uses checksums, not file copies.
+
+---
 
 ### #1 — Bring back K-1 prep report
 

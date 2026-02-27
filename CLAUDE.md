@@ -8,14 +8,14 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, export
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, export, load, backup, status
 - **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_loc, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (interactive review), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, K-1 prep), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
-- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `company_name`, `fiscal_year_start`
-- **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`
+- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `company_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing
+- **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`; switch with `nigel load <path>`
 - **Demo:** `nigel demo` inserts 44 sample transactions + 9 rules directly into the DB (no CSV files), then runs categorization
 
 ## Commands
@@ -41,6 +41,10 @@ nigel report balance                              # Cash position
 nigel report flagged                              # Flagged transactions
 nigel report k1 --year 2025                       # K-1 prep worksheet (1120-S)
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
+nigel status                                      # Show active DB and summary stats
+nigel load ~/other-books                          # Switch to a different data directory
+nigel backup                                      # Back up DB to <data_dir>/backups/
+nigel backup --output /tmp/nigel-backup.db        # Back up to custom path
 nigel export pnl --year 2025                      # Export P&L to PDF
 nigel export expenses --month 2025-03             # Export expenses to PDF
 nigel export tax --year 2025                      # Export tax summary to PDF
@@ -90,6 +94,9 @@ src/
     report.rs           # nigel report (all variants)
     export.rs           # nigel export (PDF export, feature-gated)
     reconcile.rs        # nigel reconcile
+    load.rs             # nigel load (switch data directory)
+    backup.rs           # nigel backup (database backup)
+    status.rs           # nigel status (show active DB + stats)
   db.rs                 # SQLite schema, connection, category seeding
   models.rs             # Structs (Account, Transaction, Rule, ParsedRow, etc.)
   importer.rs           # ImporterKind enum, format detection, CSV/XLSX parsing
@@ -103,4 +110,5 @@ src/
   error.rs              # Error types
 docs/
   walkthrough.md        # Guided tour using demo data
+  skills.md             # Claude skills documentation
 ```
