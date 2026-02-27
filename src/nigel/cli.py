@@ -4,8 +4,14 @@ import typer
 
 from nigel.db import get_connection, init_db
 from nigel.settings import get_data_dir, load_settings, save_settings, DEFAULTS
+from nigel.plugins import load_plugins, apply_migrations, seed_plugin_categories
 
 app = typer.Typer(help="Nigel — cash-basis bookkeeping CLI for small consultancies.", invoke_without_command=True)
+
+report_app = typer.Typer(help="Generate reports.")
+app.add_typer(report_app, name="report")
+
+_plugin_hooks = load_plugins(app, report_app)
 
 
 @app.callback()
@@ -41,6 +47,8 @@ def init(
 
     conn = get_connection(resolved / "nigel.db")
     init_db(conn)
+    apply_migrations(conn, _plugin_hooks)
+    seed_plugin_categories(conn, _plugin_hooks)
     conn.close()
 
     typer.echo(f"Initialized nigel at {resolved}")
@@ -216,10 +224,6 @@ from nigel.reports import (
     get_pnl, get_expense_breakdown, get_tax_summary,
     get_cashflow, get_flagged, get_balance,
 )
-
-report_app = typer.Typer(help="Generate reports.")
-app.add_typer(report_app, name="report")
-
 
 def _parse_date_opts(month: str | None, year: int | None, from_date: str | None, to_date: str | None) -> dict:
     if from_date and to_date:
