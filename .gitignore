@@ -6,3 +6,5 @@ dist/
 data/
 .pytest_cache/
 docs/plans/
+.DS_Store
+uv.lock
