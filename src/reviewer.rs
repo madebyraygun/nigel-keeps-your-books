@@ -62,20 +62,26 @@ pub fn apply_review(
     create_rule: bool,
     rule_pattern: Option<&str>,
 ) -> Result<Option<i64>> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "UPDATE transactions SET category_id = ?1, vendor = ?2, is_flagged = 0, flag_reason = NULL WHERE id = ?3",
         rusqlite::params![category_id, vendor, transaction_id],
     )?;
-    if create_rule {
+    let rule_id = if create_rule {
         if let Some(pattern) = rule_pattern {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO rules (pattern, match_type, vendor, category_id) VALUES (?1, 'contains', ?2, ?3)",
                 rusqlite::params![pattern, vendor, category_id],
             )?;
-            return Ok(Some(conn.last_insert_rowid()));
+            Some(conn.last_insert_rowid())
+        } else {
+            None
         }
-    }
-    Ok(None)
+    } else {
+        None
+    };
+    tx.commit()?;
+    Ok(rule_id)
 }
 
 pub fn undo_review(
@@ -83,13 +89,15 @@ pub fn undo_review(
     transaction_id: i64,
     rule_id: Option<i64>,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE transactions SET category_id = NULL, vendor = NULL, is_flagged = 1, flag_reason = 'No matching rule' WHERE id = ?1",
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE transactions SET category_id = NULL, vendor = NULL, is_flagged = 1, flag_reason = 'Uncategorized' WHERE id = ?1",
         rusqlite::params![transaction_id],
     )?;
     if let Some(rid) = rule_id {
-        conn.execute("DELETE FROM rules WHERE id = ?1", rusqlite::params![rid])?;
+        tx.execute("DELETE FROM rules WHERE id = ?1", rusqlite::params![rid])?;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -184,5 +192,26 @@ mod tests {
 
         let count: i64 = conn.query_row("SELECT count(*) FROM rules", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_undo_review_without_rule() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn);
+        let cat_id: i64 = conn.query_row(
+            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
+        ).unwrap();
+        // Categorize without creating a rule
+        let rule_id = apply_review(&conn, txn_id, cat_id, Some("Adobe"), false, None).unwrap();
+        assert!(rule_id.is_none());
+
+        undo_review(&conn, txn_id, None).unwrap();
+
+        let (is_flagged, category_id): (i32, Option<i64>) = conn.query_row(
+            "SELECT is_flagged, category_id FROM transactions WHERE id = ?1", [txn_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(is_flagged, 1);
+        assert!(category_id.is_none());
     }
 }

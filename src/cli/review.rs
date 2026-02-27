@@ -101,7 +101,7 @@ fn category_pick(prompt: &str, items: &[String], allow_back: bool) -> PickResult
                 }
                 KeyCode::Enter if !matches.is_empty() => break PickResult::Selected(matches[sel].0),
                 KeyCode::Esc if allow_back => break PickResult::Back,
-                KeyCode::Esc => break PickResult::Skipped,
+                KeyCode::Esc => {} // no-op on first transaction
                 KeyCode::Tab => break PickResult::Skipped,
                 _ => {}
             }
@@ -225,12 +225,11 @@ pub fn run() -> Result<()> {
 
         match selection {
             PickResult::Back => {
-                // Undo the previous transaction's review if it was categorized
+                // Pop the previous decision — a single pop handles both
+                // categorized (Some) and skipped (None) entries.
                 i -= 1;
                 if let Some(Some(decision)) = decisions.pop() {
                     undo_review(&conn, decision.transaction_id, decision.rule_id)?;
-                } else {
-                    decisions.pop(); // remove the None entry for skipped transactions
                 }
                 continue;
             }
