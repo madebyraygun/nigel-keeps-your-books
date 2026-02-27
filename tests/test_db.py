@@ -1,4 +1,4 @@
-from bookkeeper.db import init_db, get_connection
+from nigel.db import init_db, get_connection
 
 
 def test_init_db_creates_tables(tmp_path):

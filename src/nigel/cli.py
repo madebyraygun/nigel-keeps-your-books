@@ -1,41 +1,49 @@
-import os
 from pathlib import Path
 
 import typer
 
-from bookkeeper.db import get_connection, init_db
+from nigel.db import get_connection, init_db
+from nigel.settings import get_data_dir, load_settings, save_settings, DEFAULTS
 
-app = typer.Typer(help="Raygun Bookkeeper — cash-basis bookkeeping CLI.", invoke_without_command=True)
+app = typer.Typer(help="Nigel — cash-basis bookkeeping CLI for small consultancies.", invoke_without_command=True)
 
 
 @app.callback()
 def main():
-    """Raygun Bookkeeper — cash-basis bookkeeping CLI."""
-
-DEFAULT_DATA_DIR = Path.home() / "Documents" / "bookkeeper"
-
-
-def get_data_dir() -> Path:
-    return Path(os.environ.get("BOOKKEEPER_DATA_DIR", str(DEFAULT_DATA_DIR)))
+    """Nigel — cash-basis bookkeeping CLI for small consultancies."""
 
 
 def get_db_path() -> Path:
-    return get_data_dir() / "raygun.db"
+    return get_data_dir() / "nigel.db"
 
 
 @app.command()
-def init():
-    """Initialize the bookkeeper database and seed categories."""
-    data_dir = get_data_dir()
-    data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / "imports").mkdir(exist_ok=True)
-    (data_dir / "exports").mkdir(exist_ok=True)
+def init(
+    data_dir: str = typer.Option(None, "--data-dir", help="Path for Nigel data (default: ~/Documents/nigel)"),
+):
+    """Set up Nigel: choose a data directory and initialize the database."""
+    settings = load_settings()
 
-    conn = get_connection(data_dir / "raygun.db")
+    if data_dir:
+        settings["data_dir"] = str(Path(data_dir).expanduser().resolve())
+    elif settings == DEFAULTS:
+        # First run — prompt for data dir
+        default = settings["data_dir"]
+        chosen = typer.prompt("Data directory", default=default)
+        settings["data_dir"] = str(Path(chosen).expanduser().resolve())
+
+    save_settings(settings)
+
+    resolved = Path(settings["data_dir"])
+    resolved.mkdir(parents=True, exist_ok=True)
+    (resolved / "imports").mkdir(exist_ok=True)
+    (resolved / "exports").mkdir(exist_ok=True)
+
+    conn = get_connection(resolved / "nigel.db")
     init_db(conn)
     conn.close()
 
-    typer.echo(f"Initialized bookkeeper at {data_dir}")
+    typer.echo(f"Initialized nigel at {resolved}")
 
 
 # --- Accounts ---
@@ -87,8 +95,8 @@ def accounts_list():
 
 # --- Import ---
 
-from bookkeeper.importer import import_file
-from bookkeeper.categorizer import categorize_transactions
+from nigel.importer import import_file
+from nigel.categorizer import categorize_transactions
 
 
 @app.command("import")
@@ -191,7 +199,7 @@ def rules_list():
 
 # --- Review ---
 
-from bookkeeper.reviewer import run_review
+from nigel.reviewer import run_review
 
 
 @app.command()
@@ -204,7 +212,7 @@ def review():
 
 # --- Reports ---
 
-from bookkeeper.reports import (
+from nigel.reports import (
     get_pnl, get_expense_breakdown, get_tax_summary,
     get_cashflow, get_flagged, get_balance,
 )
@@ -378,7 +386,7 @@ def report_balance():
 
 # --- Reconcile ---
 
-from bookkeeper.reconciler import reconcile
+from nigel.reconciler import reconcile
 
 
 @app.command("reconcile")

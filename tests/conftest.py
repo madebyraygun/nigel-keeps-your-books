@@ -1,6 +1,6 @@
 import pytest
 
-from bookkeeper.db import get_connection, init_db
+from nigel.db import get_connection, init_db
 
 
 @pytest.fixture

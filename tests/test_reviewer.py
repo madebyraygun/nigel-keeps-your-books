@@ -1,4 +1,4 @@
-from bookkeeper.reviewer import get_flagged_transactions, apply_review
+from nigel.reviewer import get_flagged_transactions, apply_review
 
 
 def test_get_flagged_transactions(db):

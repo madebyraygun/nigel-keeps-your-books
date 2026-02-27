@@ -1,4 +1,4 @@
-from bookkeeper.categorizer import categorize_transactions
+from nigel.categorizer import categorize_transactions
 
 
 def test_categorize_by_contains_rule(db):

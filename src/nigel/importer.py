@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from bookkeeper.models import ParsedRow
+from nigel.models import ParsedRow
 
 
 def _compute_checksum(file_path: Path) -> str:

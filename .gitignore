@@ -5,3 +5,4 @@ __pycache__/
 dist/
 data/
 .pytest_cache/
+docs/plans/

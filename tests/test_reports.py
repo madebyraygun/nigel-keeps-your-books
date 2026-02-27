@@ -1,4 +1,4 @@
-from bookkeeper.reports import get_pnl, get_expense_breakdown
+from nigel.reports import get_pnl, get_expense_breakdown
 
 
 def _seed_transactions(db):

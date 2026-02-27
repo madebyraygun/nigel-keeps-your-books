@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from bookkeeper.importer import (
+from nigel.importer import (
     parse_bofa_checking, parse_bofa_credit_card, parse_bofa_line_of_credit,
     parse_gusto_payroll, import_file,
 )
-from bookkeeper.db import init_db, get_connection
+from nigel.db import init_db, get_connection
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

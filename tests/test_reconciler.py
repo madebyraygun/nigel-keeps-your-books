@@ -1,4 +1,4 @@
-from bookkeeper.reconciler import reconcile
+from nigel.reconciler import reconcile
 
 
 def test_reconcile_matching_balance(db):
