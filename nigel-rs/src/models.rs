@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Account {
     pub id: i64,
@@ -7,6 +8,7 @@ pub struct Account {
     pub last_four: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Category {
     pub id: i64,
@@ -19,6 +21,7 @@ pub struct Category {
     pub is_active: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Transaction {
     pub id: Option<i64>,
@@ -34,6 +37,7 @@ pub struct Transaction {
     pub import_id: Option<i64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub id: Option<i64>,
@@ -46,6 +50,7 @@ pub struct Rule {
     pub is_active: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ImportRecord {
     pub id: Option<i64>,

@@ -74,6 +74,7 @@ impl ImporterKind {
         }
     }
 
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             Self::BofaChecking => "Bank of America Checking",
