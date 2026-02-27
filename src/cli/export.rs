@@ -95,6 +95,34 @@ pub fn cashflow(month: Option<String>, year: Option<i32>, output: Option<String>
     write_pdf(&bytes, &path)
 }
 
+pub fn register(
+    month: Option<String>,
+    year: Option<i32>,
+    from_date: Option<String>,
+    to_date: Option<String>,
+    account: Option<String>,
+    output: Option<String>,
+) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let (my, mm) = parse_month_opt(&month);
+    let y = year.or(my);
+    let report = reports::get_register(
+        &conn,
+        y,
+        mm,
+        from_date.as_deref(),
+        to_date.as_deref(),
+        account.as_deref(),
+    )?;
+    let company = load_settings().company_name;
+    let range = date_range_label(&month, &year.or(my).map(|v| v));
+    let bytes = pdf::render_register(&report, &company, &range)?;
+    let path = output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_path("register"));
+    write_pdf(&bytes, &path)
+}
+
 pub fn flagged(output: Option<String>) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let rows = reports::get_flagged(&conn)?;
@@ -153,6 +181,12 @@ pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<()> {
     write_pdf(
         &pdf::render_cashflow(&report, &company, &range)?,
         &path("cashflow"),
+    )?;
+
+    let register = reports::get_register(&conn, year, None, None, None, None)?;
+    write_pdf(
+        &pdf::render_register(&register, &company, &range)?,
+        &path("register"),
     )?;
 
     let rows = reports::get_flagged(&conn)?;

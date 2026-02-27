@@ -141,9 +141,9 @@ impl PdfWriter {
             }
             x += col.width;
         }
-        self.y += ROW_H;
+        self.y += 3.5;
         self.hline(MARGIN_LEFT, PAGE_W - MARGIN_RIGHT);
-        self.y += 2.0;
+        self.y += 5.0;
     }
 
     fn table_row(&mut self, cols: &[Col], values: &[&str], bold: bool) {
@@ -175,8 +175,9 @@ impl PdfWriter {
     }
 
     fn separator(&mut self) {
+        self.y -= 1.0;
         self.hline(MARGIN_LEFT, PAGE_W - MARGIN_RIGHT);
-        self.y += 2.0;
+        self.y += 5.5;
     }
 
     fn to_bytes(self) -> Result<Vec<u8>> {
@@ -322,6 +323,41 @@ pub fn render_cashflow(
         let run = money(m.running_balance);
         pdf.table_row(cols, &[&m.month, &inf, &out, &net, &run], false);
     }
+
+    pdf.to_bytes()
+}
+
+pub fn render_register(
+    report: &RegisterReport,
+    company: &str,
+    date_range: &str,
+) -> Result<Vec<u8>> {
+    let mut pdf = PdfWriter::new("Transaction Register")?;
+    pdf.header(
+        "Transaction Register",
+        company,
+        &format!("{date_range} — {} transactions", report.count),
+    );
+
+    let cols = &[
+        Col { width: 20.0, align: Align::Left },
+        Col { width: 60.0, align: Align::Left },
+        Col { width: 25.0, align: Align::Right },
+        Col { width: 40.0, align: Align::Left },
+        Col { width: 32.8, align: Align::Left },
+    ];
+    pdf.table_header(cols, &["Date", "Description", "Amount", "Category", "Account"]);
+
+    for r in &report.rows {
+        let amt = money(r.amount);
+        let cat = r.category.as_deref().unwrap_or("—");
+        pdf.table_row(cols, &[&r.date, &r.description, &amt, cat, &r.account_name], false);
+    }
+
+    pdf.separator();
+    let total = money(report.total);
+    let count_label = format!("{} transactions", report.count);
+    pdf.table_row(cols, &[&count_label, "", &total, "", ""], true);
 
     pdf.to_bytes()
 }
