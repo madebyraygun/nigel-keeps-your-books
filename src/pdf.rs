@@ -14,12 +14,43 @@ const MARGIN_BOTTOM: f32 = 25.4;
 const MARGIN_LEFT: f32 = 19.05;
 const MARGIN_RIGHT: f32 = 19.05;
 const ROW_H: f32 = 5.0;
+const COL_PAD: f32 = 4.0;
 const FONT_SIZE: f32 = 10.0;
 const TITLE_SIZE: f32 = 16.0;
 const SUBTITLE_SIZE: f32 = 10.0;
 
 fn approx_text_width(text: &str, size: f32) -> f32 {
     text.len() as f32 * size * 0.18
+}
+
+fn wrap_text(text: &str, max_width: f32, font_size: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        let test = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+
+        if approx_text_width(&test, font_size) <= max_width {
+            current = test;
+        } else {
+            if !current.is_empty() {
+                lines.push(current);
+            }
+            current = word.to_string();
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 #[derive(Clone, Copy)]
@@ -135,15 +166,15 @@ impl PdfWriter {
                     Align::Left => self.text(headers[i], x, FONT_SIZE, true),
                     Align::Right => {
                         let tw = approx_text_width(headers[i], FONT_SIZE);
-                        self.text(headers[i], x + col.width - tw, FONT_SIZE, true);
+                        self.text(headers[i], x + col.width - COL_PAD - tw, FONT_SIZE, true);
                     }
                 }
             }
             x += col.width;
         }
-        self.y += ROW_H;
+        self.y += 3.5;
         self.hline(MARGIN_LEFT, PAGE_W - MARGIN_RIGHT);
-        self.y += 2.0;
+        self.y += 5.0;
     }
 
     fn table_row(&mut self, cols: &[Col], values: &[&str], bold: bool) {
@@ -155,13 +186,53 @@ impl PdfWriter {
                     Align::Left => self.text(values[i], x, FONT_SIZE, bold),
                     Align::Right => {
                         let tw = approx_text_width(values[i], FONT_SIZE);
-                        self.text(values[i], x + col.width - tw, FONT_SIZE, bold);
+                        self.text(values[i], x + col.width - COL_PAD - tw, FONT_SIZE, bold);
                     }
                 }
             }
             x += col.width;
         }
         self.y += ROW_H;
+    }
+
+    fn table_row_wrapped(&mut self, cols: &[Col], values: &[&str], bold: bool, font_size: f32) {
+        // Wrap each cell's text to fit its column width minus padding
+        let wrapped: Vec<Vec<String>> = cols
+            .iter()
+            .enumerate()
+            .map(|(i, col)| {
+                if i < values.len() && !values[i].is_empty() {
+                    wrap_text(values[i], col.width - COL_PAD, font_size)
+                } else {
+                    vec![String::new()]
+                }
+            })
+            .collect();
+
+        let max_lines = wrapped.iter().map(|w| w.len()).max().unwrap_or(1);
+        let row_height = max_lines as f32 * ROW_H;
+        self.ensure_space(row_height);
+
+        for line_idx in 0..max_lines {
+            let mut x = MARGIN_LEFT;
+            for (col_idx, col) in cols.iter().enumerate() {
+                if col_idx < wrapped.len() {
+                    if let Some(text) = wrapped[col_idx].get(line_idx) {
+                        if !text.is_empty() {
+                            match col.align {
+                                Align::Left => self.text(text, x, font_size, bold),
+                                Align::Right => {
+                                    let tw = approx_text_width(text, font_size);
+                                    self.text(text, x + col.width - COL_PAD - tw, font_size, bold);
+                                }
+                            }
+                        }
+                    }
+                }
+                x += col.width;
+            }
+            self.y += ROW_H;
+        }
     }
 
     fn section_label(&mut self, label: &str) {
@@ -175,8 +246,9 @@ impl PdfWriter {
     }
 
     fn separator(&mut self) {
+        self.y -= 1.0;
         self.hline(MARGIN_LEFT, PAGE_W - MARGIN_RIGHT);
-        self.y += 2.0;
+        self.y += 5.5;
     }
 
     fn to_bytes(self) -> Result<Vec<u8>> {
@@ -322,6 +394,47 @@ pub fn render_cashflow(
         let run = money(m.running_balance);
         pdf.table_row(cols, &[&m.month, &inf, &out, &net, &run], false);
     }
+
+    pdf.to_bytes()
+}
+
+pub fn render_register(
+    report: &RegisterReport,
+    company: &str,
+    date_range: &str,
+) -> Result<Vec<u8>> {
+    let mut pdf = PdfWriter::new("Transaction Register")?;
+    pdf.header(
+        "Transaction Register",
+        company,
+        &format!("{date_range} — {} transactions", report.count),
+    );
+
+    let cols = &[
+        Col { width: 20.0, align: Align::Left },
+        Col { width: 62.0, align: Align::Left },
+        Col { width: 22.0, align: Align::Right },
+        Col { width: 42.0, align: Align::Left },
+        Col { width: 31.8, align: Align::Left },
+    ];
+    let font_size = 8.0;
+    pdf.table_header(cols, &["Date", "Description", "Amount", "Category", "Account"]);
+
+    for r in &report.rows {
+        let amt = money(r.amount);
+        let cat = r.category.as_deref().unwrap_or("—");
+        pdf.table_row_wrapped(
+            cols,
+            &[&r.date, &r.description, &amt, cat, &r.account_name],
+            false,
+            font_size,
+        );
+    }
+
+    pdf.separator();
+    let total = money(report.total);
+    let count_label = format!("{} transactions", report.count);
+    pdf.table_row(cols, &[&count_label, "", &total, "", ""], true);
 
     pdf.to_bytes()
 }

@@ -156,6 +156,53 @@ pub fn cashflow(month: Option<String>, year: Option<i32>) -> Result<()> {
     Ok(())
 }
 
+pub fn register(
+    month: Option<String>,
+    year: Option<i32>,
+    from_date: Option<String>,
+    to_date: Option<String>,
+    account: Option<String>,
+) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let (my, mm) = parse_month_opt(&month);
+    let y = year.or(my);
+    let data = reports::get_register(
+        &conn,
+        y,
+        mm,
+        from_date.as_deref(),
+        to_date.as_deref(),
+        account.as_deref(),
+    )?;
+
+    if data.rows.is_empty() {
+        println!("No transactions found.");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table.set_header(vec!["Date", "Description", "Amount", "Category", "Vendor", "Account"]);
+    for r in &data.rows {
+        let amt = if r.amount < 0.0 {
+            money(r.amount.abs()).red().to_string()
+        } else {
+            money(r.amount).green().to_string()
+        };
+        let cat = r.category.as_deref().unwrap_or("—");
+        let vendor = r.vendor.as_deref().unwrap_or("");
+        table.add_row(vec![
+            Cell::new(&r.date),
+            Cell::new(&r.description),
+            Cell::new(amt),
+            Cell::new(cat),
+            Cell::new(vendor),
+            Cell::new(&r.account_name),
+        ]);
+    }
+    println!("Transaction Register ({} transactions, net: {})\n{table}", data.count, money(data.total));
+    Ok(())
+}
+
 pub fn flagged() -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let rows = reports::get_flagged(&conn)?;

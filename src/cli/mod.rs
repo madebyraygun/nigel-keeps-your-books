@@ -179,6 +179,21 @@ pub enum ExportCommands {
         #[arg(long)]
         output: Option<String>,
     },
+    /// Export transaction register to PDF.
+    Register {
+        #[arg(long)]
+        month: Option<String>,
+        #[arg(long)]
+        year: Option<i32>,
+        #[arg(long = "from")]
+        from_date: Option<String>,
+        #[arg(long = "to")]
+        to_date: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Export flagged transactions to PDF.
     Flagged {
         #[arg(long)]
@@ -241,6 +256,20 @@ pub enum ReportCommands {
         month: Option<String>,
         #[arg(long)]
         year: Option<i32>,
+    },
+    /// Transaction register — all transactions for a date period.
+    Register {
+        #[arg(long)]
+        month: Option<String>,
+        #[arg(long)]
+        year: Option<i32>,
+        #[arg(long = "from")]
+        from_date: Option<String>,
+        #[arg(long = "to")]
+        to_date: Option<String>,
+        /// Filter by account name
+        #[arg(long)]
+        account: Option<String>,
     },
     /// Show all flagged/uncategorized transactions.
     Flagged,

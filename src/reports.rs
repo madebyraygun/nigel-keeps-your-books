@@ -267,6 +267,74 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
 }
 
 // ---------------------------------------------------------------------------
+// Register (all transactions)
+// ---------------------------------------------------------------------------
+
+pub struct RegisterRow {
+    pub date: String,
+    pub description: String,
+    pub amount: f64,
+    pub category: Option<String>,
+    pub vendor: Option<String>,
+    pub account_name: String,
+}
+
+pub struct RegisterReport {
+    pub rows: Vec<RegisterRow>,
+    pub total: f64,
+    pub count: usize,
+}
+
+pub fn get_register(
+    conn: &Connection,
+    year: Option<i32>,
+    month: Option<u32>,
+    from_date: Option<&str>,
+    to_date: Option<&str>,
+    account: Option<&str>,
+) -> Result<RegisterReport> {
+    let (clause, mut params) = date_filter(year, month, from_date, to_date);
+
+    let account_clause = if account.is_some() {
+        params.push(account.unwrap().to_string());
+        format!(" AND a.name = ?{}", params.len())
+    } else {
+        String::new()
+    };
+
+    let sql = format!(
+        "SELECT t.date, t.description, t.amount, c.name, t.vendor, a.name \
+         FROM transactions t \
+         JOIN accounts a ON t.account_id = a.id \
+         LEFT JOIN categories c ON t.category_id = c.id \
+         WHERE {clause}{account_clause} \
+         ORDER BY t.date, t.id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
+        .iter()
+        .map(|p| p as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows: Vec<RegisterRow> = stmt
+        .query_map(param_values.as_slice(), |row| {
+            Ok(RegisterRow {
+                date: row.get(0)?,
+                description: row.get(1)?,
+                amount: row.get(2)?,
+                category: row.get(3)?,
+                vendor: row.get(4)?,
+                account_name: row.get(5)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let total: f64 = rows.iter().map(|r| r.amount).sum();
+    let count = rows.len();
+    Ok(RegisterReport { rows, total, count })
+}
+
+// ---------------------------------------------------------------------------
 // Flagged
 // ---------------------------------------------------------------------------
 
@@ -563,6 +631,48 @@ mod tests {
         assert_eq!(breakdown.categories[0].name, "Software & Subscriptions");
         assert_eq!(breakdown.categories[0].count, 2);
         assert_eq!(breakdown.total, -60.0);
+    }
+
+    #[test]
+    fn test_register_returns_all_transactions() {
+        let (_dir, conn) = test_db();
+        seed_transactions(&conn);
+        let report = get_register(&conn, Some(2025), None, None, None, None).unwrap();
+        assert_eq!(report.count, 3);
+        // First two are categorized, all should appear
+        assert!(report.rows.iter().all(|r| r.category.is_some()));
+    }
+
+    #[test]
+    fn test_register_shows_uncategorized() {
+        let (_dir, conn) = test_db();
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
+        let acct = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) \
+             VALUES (?1, '2025-01-15', 'UNKNOWN VENDOR', -99.0, 1, 'No matching rule')",
+            rusqlite::params![acct],
+        )
+        .unwrap();
+        let report = get_register(&conn, Some(2025), None, None, None, None).unwrap();
+        assert_eq!(report.count, 1);
+        assert!(report.rows[0].category.is_none());
+    }
+
+    #[test]
+    fn test_register_account_filter() {
+        let (_dir, conn) = test_db();
+        seed_transactions(&conn);
+        let report =
+            get_register(&conn, Some(2025), None, None, None, Some("Test")).unwrap();
+        assert_eq!(report.count, 3);
+        let report =
+            get_register(&conn, Some(2025), None, None, None, Some("Nonexistent")).unwrap();
+        assert_eq!(report.count, 0);
     }
 
     #[test]
