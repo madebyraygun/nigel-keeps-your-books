@@ -54,6 +54,27 @@ pub fn get_categories(conn: &Connection) -> Result<Vec<CategoryChoice>> {
     Ok(rows)
 }
 
+pub fn get_transaction_by_id(conn: &Connection, id: i64) -> Result<Option<FlaggedTxn>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.date, t.description, t.amount, a.name as account_name \
+         FROM transactions t JOIN accounts a ON t.account_id = a.id \
+         WHERE t.id = ?1",
+    )?;
+    let mut rows: Vec<FlaggedTxn> = stmt
+        .query_map([id], |row| {
+            Ok(FlaggedTxn {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                description: row.get(2)?,
+                amount: row.get(3)?,
+                account_name: row.get(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows.pop())
+}
+
 pub fn apply_review(
     conn: &Connection,
     transaction_id: i64,
@@ -126,6 +147,24 @@ mod tests {
         ).unwrap();
         assert_eq!(is_flagged, 0);
         assert_eq!(vendor.as_deref(), Some("Adobe"));
+    }
+
+    #[test]
+    fn test_get_transaction_by_id_found() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn);
+        let result = get_transaction_by_id(&conn, txn_id).unwrap();
+        assert!(result.is_some());
+        let txn = result.unwrap();
+        assert_eq!(txn.id, txn_id);
+        assert_eq!(txn.description, "ADOBE CREATIVE");
+    }
+
+    #[test]
+    fn test_get_transaction_by_id_not_found() {
+        let (_dir, conn) = test_db();
+        let result = get_transaction_by_id(&conn, 99999).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]

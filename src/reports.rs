@@ -271,6 +271,7 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
 // ---------------------------------------------------------------------------
 
 pub struct RegisterRow {
+    pub id: i64,
     pub date: String,
     pub description: String,
     pub amount: f64,
@@ -303,7 +304,7 @@ pub fn get_register(
     };
 
     let sql = format!(
-        "SELECT t.date, t.description, t.amount, c.name, t.vendor, a.name \
+        "SELECT t.id, t.date, t.description, t.amount, c.name, t.vendor, a.name \
          FROM transactions t \
          JOIN accounts a ON t.account_id = a.id \
          LEFT JOIN categories c ON t.category_id = c.id \
@@ -318,12 +319,13 @@ pub fn get_register(
     let rows: Vec<RegisterRow> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok(RegisterRow {
-                date: row.get(0)?,
-                description: row.get(1)?,
-                amount: row.get(2)?,
-                category: row.get(3)?,
-                vendor: row.get(4)?,
-                account_name: row.get(5)?,
+                id: row.get(0)?,
+                date: row.get(1)?,
+                description: row.get(2)?,
+                amount: row.get(3)?,
+                category: row.get(4)?,
+                vendor: row.get(5)?,
+                account_name: row.get(6)?,
             })
         })?
         .filter_map(|r| r.ok())

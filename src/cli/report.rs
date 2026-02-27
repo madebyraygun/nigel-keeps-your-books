@@ -181,7 +181,7 @@ pub fn register(
     }
 
     let mut table = Table::new();
-    table.set_header(vec!["Date", "Description", "Amount", "Category", "Vendor", "Account"]);
+    table.set_header(vec!["ID", "Date", "Description", "Amount", "Category", "Vendor", "Account"]);
     for r in &data.rows {
         let amt = if r.amount < 0.0 {
             money(r.amount.abs()).red().to_string()
@@ -191,6 +191,7 @@ pub fn register(
         let cat = r.category.as_deref().unwrap_or("—");
         let vendor = r.vendor.as_deref().unwrap_or("");
         table.add_row(vec![
+            Cell::new(r.id),
             Cell::new(&r.date),
             Cell::new(&r.description),
             Cell::new(amt),

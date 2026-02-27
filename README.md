@@ -13,7 +13,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
-- **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly
+- **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; review individual transactions by ID with `nigel review --id <ID>`
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
 - **PDF export** — export any report to PDF, individually or all at once
 - **Monthly reconciliation** — compare calculated balances against bank statements
@@ -54,6 +54,9 @@ nigel categorize
 
 # Review flagged transactions
 nigel review
+
+# Review a specific transaction by ID (shown in register report)
+nigel review --id 185
 
 # Generate reports
 nigel report pnl --year 2025

@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
-use crate::reviewer::{apply_review, get_categories, get_flagged_transactions};
+use crate::reviewer::{apply_review, get_categories, get_flagged_transactions, get_transaction_by_id};
 use crate::settings::get_data_dir;
 
 /// Custom category picker: shows nothing until the user types, then filters inline.
@@ -113,9 +113,20 @@ fn category_pick(prompt: &str, items: &[String]) -> Option<usize> {
     result
 }
 
-pub fn run() -> Result<()> {
+pub fn run(id: Option<i64>) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let flagged = get_flagged_transactions(&conn)?;
+
+    let flagged = if let Some(txn_id) = id {
+        match get_transaction_by_id(&conn, txn_id)? {
+            Some(txn) => vec![txn],
+            None => {
+                eprintln!("Transaction {txn_id} not found.");
+                return Ok(());
+            }
+        }
+    } else {
+        get_flagged_transactions(&conn)?
+    };
 
     if flagged.is_empty() {
         println!("{}", "No flagged transactions to review.".green());
@@ -124,7 +135,11 @@ pub fn run() -> Result<()> {
 
     let categories = get_categories(&conn)?;
     let total = flagged.len();
-    println!("\n{total} transactions to review\n");
+    if id.is_some() {
+        println!("\nReviewing transaction {}\n", id.unwrap());
+    } else {
+        println!("\n{total} transactions to review\n");
+    }
 
     let labels: Vec<String> = categories
         .iter()

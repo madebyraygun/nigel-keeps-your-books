@@ -411,21 +411,23 @@ pub fn render_register(
     );
 
     let cols = &[
-        Col { width: 20.0, align: Align::Left },
-        Col { width: 62.0, align: Align::Left },
+        Col { width: 14.0, align: Align::Left },
+        Col { width: 18.0, align: Align::Left },
+        Col { width: 56.0, align: Align::Left },
         Col { width: 22.0, align: Align::Right },
-        Col { width: 42.0, align: Align::Left },
-        Col { width: 31.8, align: Align::Left },
+        Col { width: 38.0, align: Align::Left },
+        Col { width: 29.8, align: Align::Left },
     ];
     let font_size = 8.0;
-    pdf.table_header(cols, &["Date", "Description", "Amount", "Category", "Account"]);
+    pdf.table_header(cols, &["ID", "Date", "Description", "Amount", "Category", "Account"]);
 
     for r in &report.rows {
+        let id = r.id.to_string();
         let amt = money(r.amount);
         let cat = r.category.as_deref().unwrap_or("—");
         pdf.table_row_wrapped(
             cols,
-            &[&r.date, &r.description, &amt, cat, &r.account_name],
+            &[&id, &r.date, &r.description, &amt, cat, &r.account_name],
             false,
             font_size,
         );
@@ -434,7 +436,7 @@ pub fn render_register(
     pdf.separator();
     let total = money(report.total);
     let count_label = format!("{} transactions", report.count);
-    pdf.table_row(cols, &[&count_label, "", &total, "", ""], true);
+    pdf.table_row(cols, &["", &count_label, "", &total, "", ""], true);
 
     pdf.to_bytes()
 }
