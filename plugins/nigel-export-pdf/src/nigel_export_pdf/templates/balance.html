@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<table>
+  <thead><tr><th>Account</th><th>Type</th><th class="amount">Balance</th></tr></thead>
+  <tbody>
+  {% for a in accounts %}
+  <tr>
+    <td>{{ a.name }}</td>
+    <td>{{ a.type }}</td>
+    <td class="amount {% if a.balance >= 0 %}positive{% else %}negative{% endif %}">{{ a.balance | currency }}</td>
+  </tr>
+  {% endfor %}
+  <tr class="total"><td>Total</td><td></td><td class="amount">{{ total | currency }}</td></tr>
+  </tbody>
+</table>
+<p><strong>YTD Net Income:</strong> {{ ytd_net_income | currency }}</p>
+{% endblock %}

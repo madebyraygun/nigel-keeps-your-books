@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<table>
+  <thead><tr><th>Category</th><th class="amount">Amount</th><th class="amount">%</th><th class="amount">Count</th></tr></thead>
+  <tbody>
+  {% for item in categories %}
+  <tr>
+    <td>{{ item.name }}</td>
+    <td class="amount">{{ item.total | abs | currency }}</td>
+    <td class="amount">{{ "%.1f" | format(item.pct) }}%</td>
+    <td class="amount">{{ item.count }}</td>
+  </tr>
+  {% endfor %}
+  <tr class="total"><td>Total</td><td class="amount">{{ total | abs | currency }}</td><td></td><td></td></tr>
+  </tbody>
+</table>
+{% if top_vendors %}
+<h2>Top Vendors</h2>
+<table>
+  <thead><tr><th>Vendor</th><th class="amount">Amount</th><th class="amount">Count</th></tr></thead>
+  <tbody>
+  {% for v in top_vendors %}
+  <tr><td>{{ v.vendor }}</td><td class="amount">{{ v.total | abs | currency }}</td><td class="amount">{{ v.count }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

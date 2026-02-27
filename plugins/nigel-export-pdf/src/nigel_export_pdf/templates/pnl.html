@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<table>
+  <thead><tr><th>Category</th><th class="amount">Amount</th></tr></thead>
+  <tbody>
+  {% if income %}
+  <tr class="section-header"><td colspan="2">INCOME</td></tr>
+  {% for item in income %}
+  <tr><td>&nbsp;&nbsp;{{ item.name }}</td><td class="amount positive">{{ item.total | currency }}</td></tr>
+  {% endfor %}
+  <tr class="total"><td>Total Income</td><td class="amount">{{ total_income | currency }}</td></tr>
+  {% endif %}
+  {% if expenses %}
+  <tr class="section-header"><td colspan="2">EXPENSES</td></tr>
+  {% for item in expenses %}
+  <tr><td>&nbsp;&nbsp;{{ item.name }}</td><td class="amount negative">{{ item.total | abs | currency }}</td></tr>
+  {% endfor %}
+  <tr class="total"><td>Total Expenses</td><td class="amount">{{ total_expenses | abs | currency }}</td></tr>
+  {% endif %}
+  <tr class="total">
+    <td>NET {{ "PROFIT" if net >= 0 else "LOSS" }}</td>
+    <td class="amount {% if net >= 0 %}positive{% else %}negative{% endif %}">{{ net | currency }}</td>
+  </tr>
+  </tbody>
+</table>
+{% endblock %}
