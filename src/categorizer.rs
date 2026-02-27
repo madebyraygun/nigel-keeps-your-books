@@ -36,15 +36,13 @@ pub fn categorize_transactions(conn: &Connection) -> Result<CategorizeResult> {
                 row.get(4)?,
             ))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut txn_stmt =
         conn.prepare("SELECT id, description FROM transactions WHERE category_id IS NULL")?;
     let flagged: Vec<(i64, String)> = txn_stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut categorized = 0usize;
     let mut still_flagged = 0usize;

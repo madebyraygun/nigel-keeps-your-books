@@ -27,8 +27,7 @@ pub fn list() -> Result<()> {
                 row.get(4)?,
             ))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut table = Table::new();
     table.set_header(vec!["ID", "Name", "Type", "Institution", "Last Four"]);

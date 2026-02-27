@@ -32,8 +32,7 @@ pub fn get_flagged_transactions(conn: &Connection) -> Result<Vec<FlaggedTxn>> {
                 account_name: row.get(4)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -49,8 +48,7 @@ pub fn get_categories(conn: &Connection) -> Result<Vec<CategoryChoice>> {
                 category_type: row.get(2)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
