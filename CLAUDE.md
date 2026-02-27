@@ -72,6 +72,7 @@ Do not merge or mark work complete if docs are stale.
 ## Key Design Constraints
 
 - All financial modifications require user confirmation — auto-categorizes but never silently changes confirmed data
+- Interactive review supports back navigation: Esc goes back to re-review the previous transaction (undoing its categorization and any created rule), Tab skips forward
 - Duplicate detection uses file checksums (imports table) and transaction-level matching (date + amount + description + account)
 - Rules are ordered by priority DESC; first match wins
 - Gusto imports extract only aggregate totals, never individual employee data

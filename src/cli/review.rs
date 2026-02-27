@@ -10,12 +10,18 @@ use std::io::{self, Write};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
-use crate::reviewer::{apply_review, get_categories, get_flagged_transactions};
+use crate::reviewer::{apply_review, get_categories, get_flagged_transactions, undo_review};
 use crate::settings::get_data_dir;
 
+enum PickResult {
+    Selected(usize),
+    Skipped,
+    Back,
+}
+
 /// Custom category picker: shows nothing until the user types, then filters inline.
-/// Returns Some(index) on Enter, None on Esc.
-fn category_pick(prompt: &str, items: &[String]) -> Option<usize> {
+/// Returns Selected(index) on Enter, Skipped on Tab, Back on Esc.
+fn category_pick(prompt: &str, items: &[String], allow_back: bool) -> PickResult {
     let mut stdout = io::stdout();
     terminal::enable_raw_mode().unwrap();
 
@@ -93,8 +99,10 @@ fn category_pick(prompt: &str, items: &[String]) -> Option<usize> {
                         sel = (sel + 1).min(matches.len() - 1);
                     }
                 }
-                KeyCode::Enter if !matches.is_empty() => break Some(matches[sel].0),
-                KeyCode::Esc => break None,
+                KeyCode::Enter if !matches.is_empty() => break PickResult::Selected(matches[sel].0),
+                KeyCode::Esc if allow_back => break PickResult::Back,
+                KeyCode::Esc => break PickResult::Skipped,
+                KeyCode::Tab => break PickResult::Skipped,
                 _ => {}
             }
         }
@@ -102,15 +110,27 @@ fn category_pick(prompt: &str, items: &[String]) -> Option<usize> {
 
     // Clean up — show what was selected, restore terminal
     queue!(stdout, cursor::MoveToColumn(0), Clear(ClearType::FromCursorDown)).unwrap();
-    if let Some(idx) = result {
-        write!(stdout, "{prompt}: {}\r\n", items[idx]).unwrap();
-    } else {
-        write!(stdout, "{prompt}: {}\r\n", "(skipped)".bright_black()).unwrap();
+    match &result {
+        PickResult::Selected(idx) => {
+            write!(stdout, "{prompt}: {}\r\n", items[*idx]).unwrap();
+        }
+        PickResult::Skipped => {
+            write!(stdout, "{prompt}: {}\r\n", "(skipped)".bright_black()).unwrap();
+        }
+        PickResult::Back => {
+            write!(stdout, "{prompt}: {}\r\n", "(back)".bright_black()).unwrap();
+        }
     }
     stdout.flush().unwrap();
     terminal::disable_raw_mode().unwrap();
 
     result
+}
+
+/// Tracks a review decision so it can be undone when navigating back.
+struct ReviewDecision {
+    transaction_id: i64,
+    rule_id: Option<i64>,
 }
 
 pub fn run() -> Result<()> {
@@ -131,8 +151,14 @@ pub fn run() -> Result<()> {
         .map(|c| format!("{} ({})", c.name, c.category_type))
         .collect();
 
+    // Track decisions for undo when navigating back
+    let mut decisions: Vec<Option<ReviewDecision>> = Vec::new();
+
     let mut stdout = io::stdout();
-    for (i, txn) in flagged.iter().enumerate() {
+    let mut i: usize = 0;
+    while i < total {
+        let txn = &flagged[i];
+
         // Clear screen so the category chart is always pinned at the top
         execute!(stdout, Clear(ClearType::All), cursor::MoveTo(0, 0)).unwrap();
 
@@ -189,60 +215,88 @@ pub fn run() -> Result<()> {
         println!("  Account:     {}", txn.account_name);
         println!();
 
-        let selection = category_pick("Category (type to filter, Esc=skip)", &labels);
-
-        let idx = match selection {
-            Some(idx) => idx,
-            None => continue,
-        };
-        let cat = &categories[idx];
-
-        let vendor: String = Input::new()
-            .with_prompt("Vendor name (Enter to skip)")
-            .default(String::new())
-            .interact_text()
-            .unwrap_or_default();
-        let vendor = if vendor.is_empty() {
-            None
+        let allow_back = i > 0;
+        let hint = if allow_back {
+            "Category (type to filter, Esc=back, Tab=skip)"
         } else {
-            Some(vendor.as_str())
+            "Category (type to filter, Tab=skip)"
         };
+        let selection = category_pick(hint, &labels, allow_back);
 
-        let create_rule = Confirm::new()
-            .with_prompt("Create rule for future matches?")
-            .default(false)
-            .interact()
-            .unwrap_or(false);
+        match selection {
+            PickResult::Back => {
+                // Undo the previous transaction's review if it was categorized
+                i -= 1;
+                if let Some(Some(decision)) = decisions.pop() {
+                    undo_review(&conn, decision.transaction_id, decision.rule_id)?;
+                } else {
+                    decisions.pop(); // remove the None entry for skipped transactions
+                }
+                continue;
+            }
+            PickResult::Skipped => {
+                decisions.push(None);
+                i += 1;
+                continue;
+            }
+            PickResult::Selected(idx) => {
+                let cat = &categories[idx];
 
-        let mut rule_pattern = None;
-        if create_rule {
-            let words: Vec<&str> = txn.description.split_whitespace().collect();
-            let suggested = if words.len() >= 2 {
-                format!("{} {}", words[0], words[1])
-            } else {
-                words.first().unwrap_or(&"").to_string()
-            };
-            let pattern: String = Input::new()
-                .with_prompt("Rule pattern")
-                .default(suggested)
-                .interact_text()
-                .unwrap_or_default();
-            rule_pattern = Some(pattern);
+                let vendor: String = Input::new()
+                    .with_prompt("Vendor name (Enter to skip)")
+                    .default(String::new())
+                    .interact_text()
+                    .unwrap_or_default();
+                let vendor = if vendor.is_empty() {
+                    None
+                } else {
+                    Some(vendor.as_str())
+                };
+
+                let create_rule = Confirm::new()
+                    .with_prompt("Create rule for future matches?")
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
+
+                let mut rule_pattern = None;
+                if create_rule {
+                    let words: Vec<&str> = txn.description.split_whitespace().collect();
+                    let suggested = if words.len() >= 2 {
+                        format!("{} {}", words[0], words[1])
+                    } else {
+                        words.first().unwrap_or(&"").to_string()
+                    };
+                    let pattern: String = Input::new()
+                        .with_prompt("Rule pattern")
+                        .default(suggested)
+                        .interact_text()
+                        .unwrap_or_default();
+                    rule_pattern = Some(pattern);
+                }
+
+                let rule_id = apply_review(
+                    &conn,
+                    txn.id,
+                    cat.id,
+                    vendor,
+                    create_rule,
+                    rule_pattern.as_deref(),
+                )?;
+
+                decisions.push(Some(ReviewDecision {
+                    transaction_id: txn.id,
+                    rule_id,
+                }));
+
+                println!(
+                    "{}",
+                    format!("\u{2192} Categorized as {}", cat.name).green()
+                );
+                println!();
+                i += 1;
+            }
         }
-
-        apply_review(
-            &conn,
-            txn.id,
-            cat.id,
-            vendor,
-            create_rule,
-            rule_pattern.as_deref(),
-        )?;
-        println!(
-            "{}",
-            format!("\u{2192} Categorized as {}", cat.name).green()
-        );
-        println!();
     }
 
     println!("{}", "Review complete!".green());
