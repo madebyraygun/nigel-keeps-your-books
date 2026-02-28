@@ -9,7 +9,10 @@ use ratatui::{
 
 use crate::db::get_connection;
 use crate::error::Result;
-use crate::reviewer::{apply_review, get_categories, get_flagged_transactions, CategoryChoice, FlaggedTxn};
+use crate::reviewer::{
+    apply_review, get_categories, get_flagged_transactions, undo_review, CategoryChoice,
+    FlaggedTxn,
+};
 use crate::settings::get_data_dir;
 use crate::tui::money_span;
 
@@ -18,6 +21,12 @@ enum ReviewState {
     InputVendor,
     ConfirmRule,
     InputRulePattern,
+}
+
+/// Tracks a review decision so it can be undone when navigating back.
+struct ReviewDecision {
+    transaction_id: i64,
+    rule_id: Option<i64>,
 }
 
 struct TransactionReviewer {
@@ -32,6 +41,8 @@ struct TransactionReviewer {
     confirm_value: bool,
     selected_category_idx: Option<usize>,
     vendor: Option<String>,
+    /// Stack of decisions for undo; None = skipped transaction
+    decisions: Vec<Option<ReviewDecision>>,
 }
 
 impl TransactionReviewer {
@@ -39,7 +50,11 @@ impl TransactionReviewer {
         let labels: Vec<String> = categories
             .iter()
             .map(|c| {
-                let tag = if c.category_type == "income" { "inc" } else { "exp" };
+                let tag = if c.category_type == "income" {
+                    "inc"
+                } else {
+                    "exp"
+                };
                 format!("{} ({})", c.name, tag)
             })
             .collect();
@@ -55,6 +70,7 @@ impl TransactionReviewer {
             confirm_value: false,
             selected_category_idx: None,
             vendor: None,
+            decisions: Vec::new(),
         }
     }
 
@@ -70,6 +86,10 @@ impl TransactionReviewer {
             .map(|(i, s)| (i, s.as_str()))
             .take(9)
             .collect()
+    }
+
+    fn allow_back(&self) -> bool {
+        self.current_txn > 0
     }
 
     fn draw(&self, frame: &mut Frame) {
@@ -93,9 +113,10 @@ impl TransactionReviewer {
             .areas(area);
 
         // Category chart
-        let mut chart_lines: Vec<Line> = vec![Line::from(
-            Span::styled("Categories", Style::default().fg(Color::DarkGray)),
-        )];
+        let mut chart_lines: Vec<Line> = vec![Line::from(Span::styled(
+            "Categories",
+            Style::default().fg(Color::DarkGray),
+        ))];
         let rows = ((self.labels.len() + cols - 1) / cols).max(1);
         for row in 0..rows {
             let mut spans = Vec::new();
@@ -122,7 +143,10 @@ impl TransactionReviewer {
         let empty = bar_width - filled;
         let progress_line = Line::from(vec![
             Span::raw(format!("[{} of {}] ", self.current_txn + 1, total)),
-            Span::styled("\u{2501}".repeat(filled), Style::default().fg(Color::Green)),
+            Span::styled(
+                "\u{2501}".repeat(filled),
+                Style::default().fg(Color::Green),
+            ),
             Span::styled(
                 "\u{2501}".repeat(empty),
                 Style::default().fg(Color::DarkGray),
@@ -199,14 +223,24 @@ impl TransactionReviewer {
         };
         frame.render_widget(Paragraph::new(interaction_lines), interaction_area);
 
-        // Hints
+        // Hints — vary by state and whether back is available
         let hints = match &self.state {
             ReviewState::PickCategory => {
-                "Type to filter, Enter=select, Esc=skip, Ctrl+C=quit"
+                if self.allow_back() {
+                    "Type to filter, Enter=select, Tab=skip, Esc=back, Ctrl+C=quit"
+                } else {
+                    "Type to filter, Enter=select, Tab=skip, Ctrl+C=quit"
+                }
             }
-            ReviewState::InputVendor => "Enter=confirm (empty to skip), Ctrl+C=quit",
-            ReviewState::ConfirmRule => "y/n or Left/Right to toggle, Enter=confirm, Ctrl+C=quit",
-            ReviewState::InputRulePattern => "Enter=confirm, Ctrl+C=quit",
+            ReviewState::InputVendor => {
+                "Enter=confirm (empty to skip), Esc=back to category, Ctrl+C=quit"
+            }
+            ReviewState::ConfirmRule => {
+                "y/n or Left/Right to toggle, Enter=confirm, Esc=back to category, Ctrl+C=quit"
+            }
+            ReviewState::InputRulePattern => {
+                "Enter=confirm (non-empty required), Esc=back to category, Ctrl+C=quit"
+            }
         };
         frame.render_widget(
             Paragraph::new(hints).style(Style::default().fg(Color::DarkGray)),
@@ -234,8 +268,7 @@ impl TransactionReviewer {
                 KeyCode::Down => {
                     let matches = self.filtered_categories();
                     if !matches.is_empty() {
-                        self.cat_selection =
-                            (self.cat_selection + 1).min(matches.len() - 1);
+                        self.cat_selection = (self.cat_selection + 1).min(matches.len() - 1);
                     }
                     HandleResult::Continue
                 }
@@ -249,10 +282,14 @@ impl TransactionReviewer {
                     }
                     HandleResult::Continue
                 }
-                KeyCode::Esc => {
+                // Tab = skip (advance without categorizing)
+                KeyCode::Tab => {
+                    self.decisions.push(None);
                     self.advance();
                     HandleResult::check_done(self)
                 }
+                // Esc = go back to previous transaction (undo)
+                KeyCode::Esc if self.allow_back() => HandleResult::UndoPrevious,
                 _ => HandleResult::Continue,
             },
             ReviewState::InputVendor => match code {
@@ -273,6 +310,11 @@ impl TransactionReviewer {
                     self.text_input.clear();
                     self.confirm_value = false;
                     self.state = ReviewState::ConfirmRule;
+                    HandleResult::Continue
+                }
+                // Esc = back to category selection for this transaction
+                KeyCode::Esc => {
+                    self.reset_to_pick_category();
                     HandleResult::Continue
                 }
                 _ => HandleResult::Continue,
@@ -306,6 +348,11 @@ impl TransactionReviewer {
                     }
                     HandleResult::Continue
                 }
+                // Esc = back to category selection for this transaction
+                KeyCode::Esc => {
+                    self.reset_to_pick_category();
+                    HandleResult::Continue
+                }
                 _ => HandleResult::Continue,
             },
             ReviewState::InputRulePattern => match code {
@@ -317,7 +364,16 @@ impl TransactionReviewer {
                     self.text_input.pop();
                     HandleResult::Continue
                 }
-                KeyCode::Enter => HandleResult::CommitAndAdvance,
+                // Only commit if pattern is non-empty
+                KeyCode::Enter if !self.text_input.trim().is_empty() => {
+                    HandleResult::CommitAndAdvance
+                }
+                KeyCode::Enter => HandleResult::Continue, // ignore Enter on empty pattern
+                // Esc = back to category selection for this transaction
+                KeyCode::Esc => {
+                    self.reset_to_pick_category();
+                    HandleResult::Continue
+                }
                 _ => HandleResult::Continue,
             },
         }
@@ -329,13 +385,13 @@ impl TransactionReviewer {
         let cat = &self.categories[cat_idx];
 
         let create_rule = self.confirm_value;
-        let rule_pattern = if create_rule && !self.text_input.is_empty() {
+        let rule_pattern = if create_rule && !self.text_input.trim().is_empty() {
             Some(self.text_input.as_str())
         } else {
             None
         };
 
-        apply_review(
+        let rule_id = apply_review(
             conn,
             txn.id,
             cat.id,
@@ -344,12 +400,29 @@ impl TransactionReviewer {
             rule_pattern,
         )?;
 
+        self.decisions.push(Some(ReviewDecision {
+            transaction_id: txn.id,
+            rule_id,
+        }));
+
         self.advance();
         Ok(())
     }
 
-    fn advance(&mut self) {
-        self.current_txn += 1;
+    fn undo_previous(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+        self.current_txn -= 1;
+        if let Some(Some(decision)) = self.decisions.pop() {
+            undo_review(conn, decision.transaction_id, decision.rule_id)?;
+        } else {
+            // Was a skipped transaction — just pop and go back
+            self.decisions.pop();
+        }
+        self.reset_to_pick_category();
+        Ok(())
+    }
+
+    /// Reset interaction state back to category picker for the current transaction.
+    fn reset_to_pick_category(&mut self) {
         self.state = ReviewState::PickCategory;
         self.cat_query.clear();
         self.cat_selection = 0;
@@ -357,6 +430,11 @@ impl TransactionReviewer {
         self.confirm_value = false;
         self.selected_category_idx = None;
         self.vendor = None;
+    }
+
+    fn advance(&mut self) {
+        self.current_txn += 1;
+        self.reset_to_pick_category();
     }
 
     fn is_done(&self) -> bool {
@@ -367,6 +445,7 @@ impl TransactionReviewer {
 enum HandleResult {
     Continue,
     CommitAndAdvance,
+    UndoPrevious,
     Done,
 }
 
@@ -391,41 +470,62 @@ pub fn run() -> Result<()> {
 
     let categories = get_categories(&conn)?;
     let total = flagged.len();
-    println!("{total} transactions to review");
 
     let mut reviewer = TransactionReviewer::new(flagged, categories);
     let mut terminal = ratatui::init();
+    let mut interrupted = false;
 
     let result = loop {
-        terminal.draw(|frame| reviewer.draw(frame)).unwrap();
+        if let Err(e) = terminal.draw(|frame| reviewer.draw(frame)) {
+            break Err(e.into());
+        }
 
-        if let Event::Key(key) = event::read().unwrap() {
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                break Ok(());
-            }
-
-            match reviewer.handle_key(key.code) {
-                HandleResult::Continue => {}
-                HandleResult::CommitAndAdvance => {
-                    if let Err(e) = reviewer.commit_review(&conn) {
-                        break Err(e);
-                    }
-                    if reviewer.is_done() {
-                        break Ok(());
-                    }
+        match event::read() {
+            Err(e) => break Err(e.into()),
+            Ok(Event::Key(key)) => {
+                if key.kind != KeyEventKind::Press {
+                    continue;
                 }
-                HandleResult::Done => break Ok(()),
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('c')
+                {
+                    interrupted = true;
+                    break Ok(());
+                }
+
+                match reviewer.handle_key(key.code) {
+                    HandleResult::Continue => {}
+                    HandleResult::CommitAndAdvance => {
+                        if let Err(e) = reviewer.commit_review(&conn) {
+                            break Err(e);
+                        }
+                        if reviewer.is_done() {
+                            break Ok(());
+                        }
+                    }
+                    HandleResult::UndoPrevious => {
+                        if let Err(e) = reviewer.undo_previous(&conn) {
+                            break Err(e);
+                        }
+                    }
+                    HandleResult::Done => break Ok(()),
+                }
             }
+            _ => {}
         }
     };
 
     ratatui::restore();
 
     match &result {
-        Ok(()) => println!("Review complete!"),
+        Ok(()) => {
+            if interrupted {
+                // Match standard SIGINT exit behavior
+                std::process::exit(130);
+            }
+            println!("{total} transactions to review");
+            println!("Review complete!");
+        }
         Err(e) => eprintln!("Review error: {e}"),
     }
     result
