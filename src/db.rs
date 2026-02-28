@@ -157,8 +157,8 @@ mod tests {
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
         for expected in &["accounts", "categories", "transactions", "rules", "imports", "reconciliations"] {
             assert!(tables.contains(&expected.to_string()), "missing table: {expected}");
         }

@@ -12,23 +12,33 @@ fn date_filter(
     month: Option<u32>,
     from_date: Option<&str>,
     to_date: Option<&str>,
-) -> (String, Vec<String>) {
+) -> Result<(String, Vec<String>)> {
     if let (Some(from), Some(to)) = (from_date, to_date) {
-        return (
+        return Ok((
             "t.date BETWEEN ?1 AND ?2".to_string(),
             vec![from.to_string(), to.to_string()],
-        );
+        ));
+    }
+    if from_date.is_some() {
+        return Err(crate::error::NigelError::Other(
+            "--from requires --to (both date boundaries must be specified)".to_string(),
+        ));
+    }
+    if to_date.is_some() {
+        return Err(crate::error::NigelError::Other(
+            "--to requires --from (both date boundaries must be specified)".to_string(),
+        ));
     }
     if let (Some(y), Some(m)) = (year, month) {
         let prefix = format!("{y:04}-{m:02}");
-        return ("t.date LIKE ?1".to_string(), vec![format!("{prefix}%")]);
+        return Ok(("t.date LIKE ?1".to_string(), vec![format!("{prefix}%")]));
     }
     if let Some(y) = year {
-        return ("t.date LIKE ?1".to_string(), vec![format!("{y}%")]);
+        return Ok(("t.date LIKE ?1".to_string(), vec![format!("{y}%")]));
     }
     // Default: current year
     let current_year = chrono::Local::now().year();
-    ("t.date LIKE ?1".to_string(), vec![format!("{current_year}%")])
+    Ok(("t.date LIKE ?1".to_string(), vec![format!("{current_year}%")]))
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +65,7 @@ pub fn get_pnl(
     from_date: Option<&str>,
     to_date: Option<&str>,
 ) -> Result<PnlReport> {
-    let (clause, params) = date_filter(year, month, from_date, to_date);
+    let (clause, params) = date_filter(year, month, from_date, to_date)?;
 
     let income = query_category_totals(conn, &clause, &params, "income", "total DESC")?;
     let expenses = query_category_totals(conn, &clause, &params, "expense", "total ASC")?;
@@ -96,7 +106,7 @@ fn query_category_totals(
             total: row.get(1)?,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +137,9 @@ pub fn get_expense_breakdown(
     year: Option<i32>,
     month: Option<u32>,
 ) -> Result<ExpenseBreakdown> {
-    let (clause, params) = date_filter(year, month, None, None);
+    // Custom date ranges (--from/--to) not supported here; expense breakdown
+    // is scoped by year/month only, matching the CLI subcommand interface.
+    let (clause, params) = date_filter(year, month, None, None)?;
 
     let sql = format!(
         "SELECT c.name, SUM(t.amount) as total, COUNT(*) as count \
@@ -138,8 +150,7 @@ pub fn get_expense_breakdown(
     let mut stmt = conn.prepare(&sql)?;
     let raw: Vec<(String, f64, i64)> = stmt
         .query_map([&params[0]], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: f64 = raw.iter().map(|(_, t, _)| t).sum();
     let categories = raw
@@ -167,8 +178,7 @@ pub fn get_expense_breakdown(
                 count: row.get(2)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(ExpenseBreakdown {
         categories,
@@ -193,7 +203,7 @@ pub struct TaxSummary {
 }
 
 pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummary> {
-    let (clause, params) = date_filter(year, None, None, None);
+    let (clause, params) = date_filter(year, None, None, None)?;
 
     let sql = format!(
         "SELECT c.name, c.tax_line, c.category_type, SUM(t.amount) as total \
@@ -212,8 +222,7 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
                 total: row.get(3)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(TaxSummary { line_items: items })
 }
@@ -235,7 +244,7 @@ pub struct CashflowReport {
 }
 
 pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) -> Result<CashflowReport> {
-    let (clause, params) = date_filter(year, month, None, None);
+    let (clause, params) = date_filter(year, month, None, None)?;
 
     let sql = format!(
         "SELECT substr(t.date, 1, 7) as month, \
@@ -247,8 +256,7 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
     let mut stmt = conn.prepare(&sql)?;
     let raw: Vec<(String, f64, f64)> = stmt
         .query_map([&params[0]], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut months = Vec::new();
     let mut running = 0.0f64;
@@ -293,7 +301,7 @@ pub fn get_register(
     to_date: Option<&str>,
     account: Option<&str>,
 ) -> Result<RegisterReport> {
-    let (clause, mut params) = date_filter(year, month, from_date, to_date);
+    let (clause, mut params) = date_filter(year, month, from_date, to_date)?;
 
     let account_clause = if account.is_some() {
         params.push(account.unwrap().to_string());
@@ -326,8 +334,7 @@ pub fn get_register(
                 account_name: row.get(5)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: f64 = rows.iter().map(|r| r.amount).sum();
     let count = rows.len();
@@ -362,8 +369,7 @@ pub fn get_flagged(conn: &Connection) -> Result<Vec<FlaggedTransaction>> {
                 account_name: row.get(4)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -397,8 +403,7 @@ pub fn get_balance(conn: &Connection) -> Result<BalanceReport> {
                 balance: row.get(3)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: f64 = accounts.iter().map(|a| a.balance).sum();
 
@@ -456,7 +461,7 @@ pub struct K1PrepReport {
 }
 
 pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport> {
-    let (clause, params) = date_filter(year, None, None, None);
+    let (clause, params) = date_filter(year, None, None, None)?;
 
     // Query all categorized transactions grouped by form_line
     let sql = format!(
@@ -472,8 +477,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
         .query_map(param_values.as_slice(), |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut gross_receipts = 0.0f64;
     let mut other_income = 0.0f64;
@@ -607,6 +611,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_pnl(&conn, Some(2025), None, None, None).unwrap();
+        // seed_transactions: 1×1000.0 income, 2 expenses (−50.0 + −10.0 = −60.0)
         assert_eq!(report.total_income, 1000.0);
         assert_eq!(report.total_expenses, -60.0);
         assert_eq!(report.net, 940.0);
@@ -617,6 +622,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_pnl(&conn, Some(2025), Some(1), None, None).unwrap();
+        // seed_transactions Jan only: 1×1000.0 income, 1×−50.0 expense (GitHub −10.0 is Feb)
         assert_eq!(report.total_income, 1000.0);
         assert_eq!(report.total_expenses, -50.0);
         assert_eq!(report.net, 950.0);
@@ -627,6 +633,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let breakdown = get_expense_breakdown(&conn, Some(2025), None).unwrap();
+        // seed_transactions: 2 expenses in "Software & Subscriptions" (−50.0 + −10.0)
         assert_eq!(breakdown.categories.len(), 1);
         assert_eq!(breakdown.categories[0].name, "Software & Subscriptions");
         assert_eq!(breakdown.categories[0].count, 2);
@@ -689,6 +696,34 @@ mod tests {
         assert!(sw.is_some(), "Software & Subscriptions should appear in deduction_lines");
         assert_eq!(sw.unwrap().total, 60.0); // abs of -60
         assert_eq!(report.validation.uncategorized_count, 0);
+    }
+
+    #[test]
+    fn test_date_filter_rejects_from_without_to() {
+        let (_dir, conn) = test_db();
+        let result = get_pnl(&conn, None, None, Some("2025-01-01"), None);
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("--from requires --to"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_date_filter_rejects_to_without_from() {
+        let (_dir, conn) = test_db();
+        let result = get_pnl(&conn, None, None, None, Some("2025-12-31"));
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("--to requires --from"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_date_filter_accepts_both_from_and_to() {
+        let (_dir, conn) = test_db();
+        seed_transactions(&conn);
+        // Jan range captures: 1×1000.0 income, 1×−50.0 expense (GitHub −10.0 is Feb)
+        let report = get_pnl(&conn, None, None, Some("2025-01-01"), Some("2025-01-31")).unwrap();
+        assert_eq!(report.total_income, 1000.0);
+        assert_eq!(report.total_expenses, -50.0);
     }
 
     #[test]
