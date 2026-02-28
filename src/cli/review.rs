@@ -1,9 +1,9 @@
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{LineGauge, Paragraph},
     Frame,
 };
 
@@ -113,22 +113,18 @@ impl TransactionReviewer {
         frame.render_widget(Paragraph::new(chart_lines), chart_area);
 
         // Progress bar
-        let bar_width: usize = 40;
-        let filled = if total > 1 {
-            (self.current_txn * bar_width) / (total - 1)
+        let ratio = if total > 1 {
+            self.current_txn as f64 / (total - 1) as f64
         } else {
-            bar_width
+            1.0
         };
-        let empty = bar_width - filled;
-        let progress_line = Line::from(vec![
-            Span::raw(format!("[{} of {}] ", self.current_txn + 1, total)),
-            Span::styled("\u{2501}".repeat(filled), Style::default().fg(Color::Green)),
-            Span::styled(
-                "\u{2501}".repeat(empty),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-        frame.render_widget(Paragraph::new(progress_line), progress_area);
+        let gauge = LineGauge::default()
+            .label(format!("{} of {}", self.current_txn + 1, total))
+            .ratio(ratio)
+            .filled_style(Style::default().fg(Color::Green).bold())
+            .unfilled_style(Style::default().fg(Color::DarkGray))
+            .line_set(ratatui::symbols::line::THICK);
+        frame.render_widget(gauge, progress_area);
 
         // Transaction details
         let detail_lines = vec![
