@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{BarChart, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, Paragraph},
     Frame,
 };
 
@@ -63,6 +63,7 @@ struct HomeData {
     balances: Vec<(String, f64)>,
     cashflow_labels: Vec<String>,
     cashflow_income: Vec<u64>,
+    cashflow_expenses: Vec<u64>,
 }
 
 struct Dashboard {
@@ -139,6 +140,12 @@ impl Dashboard {
             .map(|m| m.inflows as u64)
             .collect();
 
+        let cashflow_expenses: Vec<u64> = cashflow
+            .months
+            .iter()
+            .map(|m| m.outflows.abs() as u64)
+            .collect();
+
         self.home_data = Some(HomeData {
             total_income: pnl.total_income,
             total_expenses: pnl.total_expenses,
@@ -148,6 +155,7 @@ impl Dashboard {
             balances,
             cashflow_labels,
             cashflow_income,
+            cashflow_expenses,
         });
         Ok(())
     }
@@ -230,19 +238,35 @@ impl Dashboard {
             }
             frame.render_widget(Paragraph::new(balance_lines), right_area);
 
-            // Bar chart — income per month
-            let bar_data: Vec<(&str, u64)> = data
-                .cashflow_labels
-                .iter()
-                .zip(data.cashflow_income.iter())
-                .map(|(label, val)| (label.as_str(), *val))
-                .collect();
-            if !bar_data.is_empty() {
-                let chart = BarChart::default()
-                    .data(&bar_data)
-                    .bar_width(3)
-                    .bar_gap(1)
-                    .bar_style(Style::default().fg(Color::Green));
+            // Bar chart — income (green) and expenses (red) side by side per month
+            if !data.cashflow_labels.is_empty() {
+                let income_style = Style::default().fg(Color::Green);
+                let expense_style = Style::default().fg(Color::Red);
+
+                let groups: Vec<BarGroup> = data
+                    .cashflow_labels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| {
+                        let inc = data.cashflow_income.get(i).copied().unwrap_or(0);
+                        let exp = data.cashflow_expenses.get(i).copied().unwrap_or(0);
+                        let bars = vec![
+                            Bar::default().value(inc).style(income_style),
+                            Bar::default().value(exp).style(expense_style),
+                        ];
+                        BarGroup::default()
+                            .label(Line::from(label.as_str()))
+                            .bars(&bars)
+                    })
+                    .collect();
+
+                let mut chart = BarChart::default()
+                    .bar_width(2)
+                    .bar_gap(0)
+                    .group_gap(1);
+                for group in &groups {
+                    chart = chart.data(group.clone());
+                }
                 frame.render_widget(chart, chart_area);
             }
         }
