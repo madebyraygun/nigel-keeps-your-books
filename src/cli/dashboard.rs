@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::browser::RegisterBrowser;
+use crate::browser::{BrowseAction, RegisterBrowser};
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::db::get_connection;
 use crate::error::Result;
@@ -564,9 +564,17 @@ impl Dashboard {
         let year = chrono::Local::now().year();
         match reports::get_register(conn, Some(year), None, None, None, None) {
             Ok(data) => {
+                let categories = match get_categories(conn) {
+                    Ok(c) => c,
+                    Err(_) => vec![],
+                };
                 self.status_message = None;
-                let browser =
-                    RegisterBrowser::new(data.rows, data.total, format!("year: {year}"));
+                let browser = RegisterBrowser::new(
+                    data.rows,
+                    data.total,
+                    format!("year: {year}"),
+                    categories,
+                );
                 DashboardScreen::Browse(browser)
             }
             Err(e) => {
@@ -842,7 +850,22 @@ pub fn run() -> Result<()> {
                             }
                         }
                         DashboardScreen::Browse(browser) => {
-                            return_home = browser.handle_key_event(key.code);
+                            match browser.handle_key_event(key.code) {
+                                BrowseAction::Close => {
+                                    return_home = true;
+                                }
+                                BrowseAction::Continue => {}
+                                BrowseAction::CommitEdit => {
+                                    if let Err(e) = browser.commit_edit(&conn) {
+                                        browser.set_status(format!("Edit failed: {e}"));
+                                    }
+                                }
+                                BrowseAction::ToggleFlag => {
+                                    if let Err(e) = browser.toggle_flag(&conn) {
+                                        browser.set_status(format!("Flag toggle failed: {e}"));
+                                    }
+                                }
+                            }
                             false
                         }
                         DashboardScreen::Review(reviewer) => {

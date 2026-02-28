@@ -284,8 +284,10 @@ pub struct RegisterRow {
     pub description: String,
     pub amount: f64,
     pub category: Option<String>,
+    pub category_id: Option<i64>,
     pub vendor: Option<String>,
     pub account_name: String,
+    pub is_flagged: bool,
 }
 
 pub struct RegisterReport {
@@ -311,7 +313,7 @@ pub fn get_register(
     };
 
     let sql = format!(
-        "SELECT t.id, t.date, t.description, t.amount, c.name, t.vendor, a.name \
+        "SELECT t.id, t.date, t.description, t.amount, c.name, t.category_id, t.vendor, a.name, t.is_flagged \
          FROM transactions t \
          JOIN accounts a ON t.account_id = a.id \
          LEFT JOIN categories c ON t.category_id = c.id \
@@ -331,8 +333,10 @@ pub fn get_register(
                 description: row.get(2)?,
                 amount: row.get(3)?,
                 category: row.get(4)?,
-                vendor: row.get(5)?,
-                account_name: row.get(6)?,
+                category_id: row.get(5)?,
+                vendor: row.get(6)?,
+                account_name: row.get(7)?,
+                is_flagged: row.get(8)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
