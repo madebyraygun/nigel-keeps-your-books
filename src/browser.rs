@@ -378,8 +378,10 @@ mod tests {
                 description: format!("Transaction {}", i + 1),
                 amount: if i % 2 == 0 { 100.0 } else { -50.0 },
                 category: Some("Test Category".to_string()),
+                category_id: Some(1),
                 vendor: None,
                 account_name: "Test Account".to_string(),
+                is_flagged: false,
             })
             .collect()
     }
