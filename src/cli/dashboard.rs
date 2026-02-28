@@ -2,10 +2,10 @@ use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rand::seq::SliceRandom;
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
     Frame,
 };
 
@@ -47,6 +47,9 @@ const MENU_ITEMS: &[&str] = &[
     "Export a report",
 ];
 
+/// Number of menu items in the left column; remainder goes in the right column.
+const MENU_LEFT_COUNT: usize = 4;
+
 enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
@@ -64,6 +67,7 @@ struct HomeData {
     cashflow_labels: Vec<String>,
     cashflow_income: Vec<u64>,
     cashflow_expenses: Vec<u64>,
+    top_expenses: Vec<(String, f64)>,
 }
 
 struct Dashboard {
@@ -109,7 +113,6 @@ impl Dashboard {
             .months
             .iter()
             .map(|m| {
-                // Extract month abbreviation from "YYYY-MM" format
                 let parts: Vec<&str> = m.month.split('-').collect();
                 if parts.len() == 2 {
                     match parts[1] {
@@ -146,6 +149,14 @@ impl Dashboard {
             .map(|m| m.outflows.abs() as u64)
             .collect();
 
+        // Top 5 expense categories (pnl.expenses is sorted by total ASC, most negative first)
+        let top_expenses: Vec<(String, f64)> = pnl
+            .expenses
+            .iter()
+            .take(5)
+            .map(|e| (e.name.clone(), e.total.abs()))
+            .collect();
+
         self.home_data = Some(HomeData {
             total_income: pnl.total_income,
             total_expenses: pnl.total_expenses,
@@ -156,6 +167,7 @@ impl Dashboard {
             cashflow_labels,
             cashflow_income,
             cashflow_expenses,
+            top_expenses,
         });
         Ok(())
     }
@@ -178,22 +190,36 @@ impl Dashboard {
 
     fn draw_home(&self, frame: &mut Frame) {
         let area = frame.area();
+        let border_style = Style::default().fg(Color::DarkGray);
 
-        let [header_area, stats_area, chart_area, menu_area, hints_area] =
+        // Menu rows = max(left_count, right_count) + 1 for title
+        let menu_rows = MENU_LEFT_COUNT as u16 + 1;
+
+        let [header_area, sep1, stats_area, sep2, charts_area, sep3, menu_area, hints_area] =
             Layout::vertical([
                 Constraint::Length(1),
+                Constraint::Length(1),
                 Constraint::Length(5),
-                Constraint::Length(8),
+                Constraint::Length(1),
                 Constraint::Fill(1),
+                Constraint::Length(1),
+                Constraint::Length(menu_rows),
                 Constraint::Length(1),
             ])
             .areas(area);
 
         // Header — branding + greeting
         frame.render_widget(
-            Paragraph::new(format!("Nigel: {}", self.greeting)).style(HEADER_STYLE),
+            Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
             header_area,
         );
+
+        // Thick separator lines
+        let sep_line = "━".repeat(area.width as usize);
+        let sep_widget = Paragraph::new(sep_line.as_str()).style(border_style);
+        frame.render_widget(sep_widget.clone(), sep1);
+        frame.render_widget(sep_widget.clone(), sep2);
+        frame.render_widget(sep_widget.clone(), sep3);
 
         if let Some(data) = &self.home_data {
             // Stats + Balances side by side
@@ -232,13 +258,20 @@ impl Dashboard {
             ))];
             for (name, bal) in &data.balances {
                 balance_lines.push(Line::from(vec![
-                    Span::raw(format!("  {:<16}", name)),
+                    Span::raw(format!("  {:<20}", name)),
                     money_span(*bal),
                 ]));
             }
             frame.render_widget(Paragraph::new(balance_lines), right_area);
 
-            // Bar chart — income (green) and expenses (red) side by side per month
+            // Charts side by side: bar chart (left) + top expenses (right)
+            let [chart_left, chart_right] = Layout::horizontal([
+                Constraint::Percentage(60),
+                Constraint::Percentage(40),
+            ])
+            .areas(charts_area);
+
+            // Monthly Cash Flow bar chart
             if !data.cashflow_labels.is_empty() {
                 let income_style = Style::default().fg(Color::Green);
                 let expense_style = Style::default().fg(Color::Red);
@@ -260,47 +293,92 @@ impl Dashboard {
                     })
                     .collect();
 
+                let block = Block::default()
+                    .title(" Monthly Cash Flow ")
+                    .title_style(Style::default().add_modifier(Modifier::BOLD))
+                    .borders(Borders::NONE);
+
                 let mut chart = BarChart::default()
+                    .block(block)
                     .bar_width(2)
                     .bar_gap(0)
                     .group_gap(1);
                 for group in &groups {
                     chart = chart.data(group.clone());
                 }
-                frame.render_widget(chart, chart_area);
+                frame.render_widget(chart, chart_left);
+            }
+
+            // Top Expenses by Category — horizontal bar chart
+            if !data.top_expenses.is_empty() {
+                let bar_data: Vec<Bar> = data
+                    .top_expenses
+                    .iter()
+                    .map(|(name, val)| {
+                        Bar::default()
+                            .value(*val as u64)
+                            .label(Line::from(name.as_str()))
+                            .style(Style::default().fg(Color::Red))
+                            .value_style(Style::default().fg(Color::White))
+                            .text_value(money(*val))
+                    })
+                    .collect();
+
+                let group = BarGroup::default().bars(&bar_data);
+
+                let block = Block::default()
+                    .title(" Top Expenses ")
+                    .title_style(Style::default().add_modifier(Modifier::BOLD))
+                    .borders(Borders::NONE);
+
+                let chart = BarChart::default()
+                    .block(block)
+                    .direction(Direction::Horizontal)
+                    .data(group)
+                    .bar_width(1)
+                    .bar_gap(0);
+                frame.render_widget(chart, chart_right);
             }
         }
 
-        // Command menu
+        // Command menu — 2 columns
         let flagged_count = self
             .home_data
             .as_ref()
             .map(|d| d.flagged_count)
             .unwrap_or(0);
 
-        let mut menu_lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(
+        let [menu_title_area, menu_cols_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(menu_area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
                 "  What would you like to do?",
                 Style::default().add_modifier(Modifier::BOLD),
             )),
-            Line::from(""),
-        ];
-        for (i, item) in MENU_ITEMS.iter().enumerate() {
-            let marker = if i == self.menu_selection { ">" } else { " " };
-            let label = if i == 2 {
-                format!("  {marker} {item} ({flagged_count})")
-            } else {
-                format!("  {marker} {item}")
-            };
-            let style = if i == self.menu_selection {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            menu_lines.push(Line::from(Span::styled(label, style)));
-        }
-        frame.render_widget(Paragraph::new(menu_lines), menu_area);
+            menu_title_area,
+        );
+
+        let [menu_left, menu_right] = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .areas(menu_cols_area);
+
+        // Left column: items 0..MENU_LEFT_COUNT
+        let left_lines: Vec<Line> = (0..MENU_LEFT_COUNT)
+            .map(|i| self.menu_item_line(i, flagged_count))
+            .collect();
+        frame.render_widget(Paragraph::new(left_lines), menu_left);
+
+        // Right column: items MENU_LEFT_COUNT..
+        let right_lines: Vec<Line> = (MENU_LEFT_COUNT..MENU_ITEMS.len())
+            .map(|i| self.menu_item_line(i, flagged_count))
+            .collect();
+        frame.render_widget(Paragraph::new(right_lines), menu_right);
 
         // Hints
         frame.render_widget(
@@ -308,6 +386,22 @@ impl Dashboard {
                 .style(FOOTER_STYLE),
             hints_area,
         );
+    }
+
+    fn menu_item_line(&self, i: usize, flagged_count: usize) -> Line<'static> {
+        let marker = if i == self.menu_selection { ">" } else { " " };
+        let item = MENU_ITEMS[i];
+        let label = if i == 2 {
+            format!("  {marker} {item} ({flagged_count})")
+        } else {
+            format!("  {marker} {item}")
+        };
+        let style = if i == self.menu_selection {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        Line::from(Span::styled(label, style))
     }
 
     fn draw_stub(&self, frame: &mut Frame, label: &str) {
@@ -320,7 +414,7 @@ impl Dashboard {
         .areas(area);
 
         frame.render_widget(
-            Paragraph::new(format!("Nigel: {}", self.greeting)).style(HEADER_STYLE),
+            Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
             header_area,
         );
         frame.render_widget(
