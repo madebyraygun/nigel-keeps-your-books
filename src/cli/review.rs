@@ -413,10 +413,8 @@ impl TransactionReviewer {
         self.current_txn -= 1;
         if let Some(Some(decision)) = self.decisions.pop() {
             undo_review(conn, decision.transaction_id, decision.rule_id)?;
-        } else {
-            // Was a skipped transaction — just pop and go back
-            self.decisions.pop();
         }
+        // If pop() returned Some(None), it was a skipped transaction — already popped, nothing to undo.
         self.reset_to_pick_category();
         Ok(())
     }
