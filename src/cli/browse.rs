@@ -3,6 +3,7 @@ use crate::browser::RegisterBrowser;
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::reports;
+use crate::reviewer::get_categories;
 use crate::settings::get_data_dir;
 
 pub fn register(
@@ -49,7 +50,8 @@ pub fn register(
     let filters_desc = filters.join(", ");
 
     let total = data.total;
-    let mut browser = RegisterBrowser::new(data.rows, total, filters_desc);
+    let categories = get_categories(&conn).unwrap_or_default();
+    let mut browser = RegisterBrowser::new(data.rows, total, filters_desc, categories);
     browser.run()?;
     Ok(())
 }
