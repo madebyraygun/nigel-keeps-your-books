@@ -24,6 +24,18 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
+        None => cli::dashboard::run(),
+        Some(command) => dispatch(command),
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn dispatch(command: Commands) -> error::Result<()> {
+    match command {
         Commands::Init { data_dir } => cli::init::run(data_dir),
         Commands::Accounts { command } => match command {
             AccountsCommands::Add {
@@ -132,10 +144,5 @@ fn main() {
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
         Commands::Status => cli::status::run(),
-    };
-
-    if let Err(e) = result {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
     }
 }

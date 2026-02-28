@@ -61,7 +61,8 @@ impl RegisterBrowser {
         result
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    /// Draw the browser into the given frame. Callable from an external event loop.
+    pub fn draw_frame(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let narrow = area.width < 120;
 
@@ -226,9 +227,50 @@ impl RegisterBrowser {
         frame.render_widget(keys_widget, keys_area);
     }
 
+    /// Handle a key event. Returns true if the browser should close (q/Esc).
+    /// Callable from an external event loop (e.g. dashboard).
+    pub fn handle_key_event(&mut self, code: KeyCode) -> bool {
+        self.status_message = None;
+
+        let in_input = !matches!(self.input_mode, InputMode::Normal);
+
+        if !in_input {
+            match code {
+                KeyCode::Char('q') | KeyCode::Esc => return true,
+                KeyCode::Char('n') | KeyCode::Right | KeyCode::PageDown => {
+                    self.scroll_down();
+                }
+                KeyCode::Char('p') | KeyCode::Left | KeyCode::PageUp => {
+                    self.scroll_up();
+                }
+                KeyCode::Home => self.offset = 0,
+                KeyCode::End => self.scroll_to_end(),
+                KeyCode::Char('g') => {
+                    self.input_mode = InputMode::GotoPage(String::new());
+                }
+                KeyCode::Char('d') => {
+                    self.input_mode = InputMode::GotoDate(String::new());
+                }
+                KeyCode::Char('/') => {
+                    self.input_mode = InputMode::FindId(String::new());
+                }
+                _ => {}
+            }
+        } else {
+            match code {
+                KeyCode::Esc => self.input_mode = InputMode::Normal,
+                KeyCode::Enter => self.submit_input(),
+                KeyCode::Backspace => self.input_backspace(),
+                KeyCode::Char(c) => self.input_push(c),
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         loop {
-            terminal.draw(|frame| self.draw(frame))?;
+            terminal.draw(|frame| self.draw_frame(frame))?;
 
             if let Event::Key(KeyEvent {
                 code,
@@ -245,41 +287,8 @@ impl RegisterBrowser {
                     break;
                 }
 
-                // Clear status message on any keypress
-                self.status_message = None;
-
-                let in_input = !matches!(self.input_mode, InputMode::Normal);
-
-                if !in_input {
-                    match code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Char('n') | KeyCode::Right | KeyCode::PageDown => {
-                            self.scroll_down();
-                        }
-                        KeyCode::Char('p') | KeyCode::Left | KeyCode::PageUp => {
-                            self.scroll_up();
-                        }
-                        KeyCode::Home => self.offset = 0,
-                        KeyCode::End => self.scroll_to_end(),
-                        KeyCode::Char('g') => {
-                            self.input_mode = InputMode::GotoPage(String::new());
-                        }
-                        KeyCode::Char('d') => {
-                            self.input_mode = InputMode::GotoDate(String::new());
-                        }
-                        KeyCode::Char('/') => {
-                            self.input_mode = InputMode::FindId(String::new());
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match code {
-                        KeyCode::Esc => self.input_mode = InputMode::Normal,
-                        KeyCode::Enter => self.submit_input(),
-                        KeyCode::Backspace => self.input_backspace(),
-                        KeyCode::Char(c) => self.input_push(c),
-                        _ => {}
-                    }
+                if self.handle_key_event(code) {
+                    break;
                 }
             }
         }

@@ -1,14 +1,14 @@
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{LineGauge, Paragraph},
     Frame,
 };
 
 use crate::db::get_connection;
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 use crate::reviewer::{
     apply_review, get_categories, get_flagged_transactions, undo_review, CategoryChoice,
     FlaggedTxn,
@@ -29,7 +29,7 @@ struct ReviewDecision {
     rule_id: Option<i64>,
 }
 
-struct TransactionReviewer {
+pub struct TransactionReviewer {
     flagged: Vec<FlaggedTxn>,
     categories: Vec<CategoryChoice>,
     labels: Vec<String>,
@@ -46,7 +46,7 @@ struct TransactionReviewer {
 }
 
 impl TransactionReviewer {
-    fn new(flagged: Vec<FlaggedTxn>, categories: Vec<CategoryChoice>) -> Self {
+    pub fn new(flagged: Vec<FlaggedTxn>, categories: Vec<CategoryChoice>) -> Self {
         let labels: Vec<String> = categories
             .iter()
             .map(|c| {
@@ -92,7 +92,7 @@ impl TransactionReviewer {
         self.current_txn > 0
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    pub fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         let txn = &self.flagged[self.current_txn];
         let total = self.flagged.len();
@@ -134,25 +134,14 @@ impl TransactionReviewer {
         frame.render_widget(Paragraph::new(chart_lines), chart_area);
 
         // Progress bar
-        let bar_width: usize = 40;
-        let filled = if total > 1 {
-            (self.current_txn * bar_width) / (total - 1)
-        } else {
-            bar_width
-        };
-        let empty = bar_width - filled;
-        let progress_line = Line::from(vec![
-            Span::raw(format!("[{} of {}] ", self.current_txn + 1, total)),
-            Span::styled(
-                "\u{2501}".repeat(filled),
-                Style::default().fg(Color::Green),
-            ),
-            Span::styled(
-                "\u{2501}".repeat(empty),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-        frame.render_widget(Paragraph::new(progress_line), progress_area);
+        let ratio = (self.current_txn + 1) as f64 / total as f64;
+        let gauge = LineGauge::default()
+            .label(format!("{}/{}", self.current_txn + 1, total))
+            .ratio(ratio)
+            .filled_style(Style::default().fg(Color::Rgb(80, 220, 100)).bold())
+            .unfilled_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+            .line_set(ratatui::symbols::line::DOUBLE);
+        frame.render_widget(gauge, progress_area);
 
         // Transaction details
         let detail_lines = vec![
@@ -198,13 +187,13 @@ impl TransactionReviewer {
             ReviewState::ConfirmRule => {
                 let (yes_style, no_style) = if self.confirm_value {
                     (
-                        Style::default().fg(Color::White).bg(Color::Blue),
+                        Style::default().fg(Color::Black).bg(Color::Gray),
                         Style::default(),
                     )
                 } else {
                     (
                         Style::default(),
-                        Style::default().fg(Color::White).bg(Color::Blue),
+                        Style::default().fg(Color::Black).bg(Color::Gray),
                     )
                 };
                 vec![Line::from(vec![
@@ -248,7 +237,7 @@ impl TransactionReviewer {
         );
     }
 
-    fn handle_key(&mut self, code: KeyCode) -> HandleResult {
+    pub fn handle_key(&mut self, code: KeyCode) -> HandleResult {
         match &self.state {
             ReviewState::PickCategory => match code {
                 KeyCode::Char(c) => {
@@ -288,8 +277,9 @@ impl TransactionReviewer {
                     self.advance();
                     HandleResult::check_done(self)
                 }
-                // Esc = go back to previous transaction (undo)
+                // Esc = go back to previous transaction (undo), or exit if at first
                 KeyCode::Esc if self.allow_back() => HandleResult::UndoPrevious,
+                KeyCode::Esc => HandleResult::Done,
                 _ => HandleResult::Continue,
             },
             ReviewState::InputVendor => match code {
@@ -379,9 +369,11 @@ impl TransactionReviewer {
         }
     }
 
-    fn commit_review(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+    pub fn commit_review(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         let txn = &self.flagged[self.current_txn];
-        let cat_idx = self.selected_category_idx.unwrap();
+        let cat_idx = self
+            .selected_category_idx
+            .ok_or_else(|| NigelError::Other("commit_review called without category".into()))?;
         let cat = &self.categories[cat_idx];
 
         let create_rule = self.confirm_value;
@@ -409,7 +401,7 @@ impl TransactionReviewer {
         Ok(())
     }
 
-    fn undo_previous(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+    pub fn undo_previous(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         self.current_txn -= 1;
         if let Some(Some(decision)) = self.decisions.pop() {
             undo_review(conn, decision.transaction_id, decision.rule_id)?;
@@ -435,12 +427,12 @@ impl TransactionReviewer {
         self.reset_to_pick_category();
     }
 
-    fn is_done(&self) -> bool {
+    pub fn is_done(&self) -> bool {
         self.current_txn >= self.flagged.len()
     }
 }
 
-enum HandleResult {
+pub enum HandleResult {
     Continue,
     CommitAndAdvance,
     UndoPrevious,

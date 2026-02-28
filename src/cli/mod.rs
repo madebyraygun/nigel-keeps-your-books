@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod backup;
 pub mod browse;
 pub mod categorize;
+pub mod dashboard;
 pub mod demo;
 #[cfg(feature = "pdf")]
 pub mod export;
@@ -32,7 +33,7 @@ pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u3
 #[command(name = "nigel", about = "Cash-basis bookkeeping CLI for small consultancies.")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
