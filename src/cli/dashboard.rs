@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rand::seq::SliceRandom;
@@ -45,16 +47,50 @@ const MENU_ITEMS: &[&str] = &[
     "View or edit categorization rules",
     "View a report",
     "Export a report",
+    "Load a different data file",
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
 const MENU_LEFT_COUNT: usize = 4;
 
+const REPORT_TYPES: &[&str] = &[
+    "Profit & Loss",
+    "Expense Breakdown",
+    "Tax Summary",
+    "Cash Flow",
+    "Transaction Register",
+    "Flagged Transactions",
+    "Cash Position",
+    "K-1 Prep (1120-S)",
+];
+
+const EXPORT_TYPES: &[&str] = &[
+    "Profit & Loss",
+    "Expense Breakdown",
+    "Tax Summary",
+    "Cash Flow",
+    "Transaction Register",
+    "Flagged Transactions",
+    "Cash Position",
+    "K-1 Prep (1120-S)",
+    "All Reports",
+];
+
 enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
     Review(TransactionReviewer),
-    Stub(&'static str),
+    ReportPicker(usize),
+    ExportPicker(usize),
+}
+
+enum TerminalCommand {
+    RulesList,
+    Import,
+    Load,
+    Reconcile,
+    Report(usize),
+    Export(usize),
 }
 
 struct HomeData {
@@ -75,6 +111,7 @@ struct Dashboard {
     greeting: String,
     menu_selection: usize,
     home_data: Option<HomeData>,
+    terminal_action: Option<TerminalCommand>,
 }
 
 impl Dashboard {
@@ -89,6 +126,7 @@ impl Dashboard {
             greeting,
             menu_selection: 0,
             home_data: None,
+            terminal_action: None,
         }
     }
 
@@ -181,8 +219,12 @@ impl Dashboard {
             reviewer.draw(frame);
             return;
         }
-        if let DashboardScreen::Stub(label) = self.screen {
-            self.draw_stub(frame, label);
+        if let DashboardScreen::ReportPicker(sel) = self.screen {
+            self.draw_picker(frame, "Select a report", REPORT_TYPES, sel);
+            return;
+        }
+        if let DashboardScreen::ExportPicker(sel) = self.screen {
+            self.draw_picker(frame, "Select a report to export", EXPORT_TYPES, sel);
             return;
         }
         self.draw_home(frame);
@@ -419,6 +461,54 @@ impl Dashboard {
         );
     }
 
+    fn draw_picker(&self, frame: &mut Frame, title: &str, items: &[&str], selection: usize) {
+        let area = frame.area();
+        let border_style = Style::default().fg(Color::DarkGray);
+
+        let [header_area, sep, content_area, hints_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget(
+            Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
+            header_area,
+        );
+
+        let sep_line = "━".repeat(area.width as usize);
+        frame.render_widget(Paragraph::new(sep_line.as_str()).style(border_style), sep);
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" {title}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+        for (i, item) in items.iter().enumerate() {
+            let marker = if i == selection { ">" } else { " " };
+            let style = if i == selection {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {marker} {item}"),
+                style,
+            )));
+        }
+        frame.render_widget(Paragraph::new(lines), content_area);
+
+        frame.render_widget(
+            Paragraph::new(" Up/Down=navigate  Enter=select  Esc=back").style(FOOTER_STYLE),
+            hints_area,
+        );
+    }
+
     fn menu_item_line(&self, i: usize, flagged_count: usize) -> Line<'static> {
         let marker = if i == self.menu_selection { ">" } else { " " };
         let item = MENU_ITEMS[i];
@@ -435,29 +525,6 @@ impl Dashboard {
         Line::from(Span::styled(label, style))
     }
 
-    fn draw_stub(&self, frame: &mut Frame, label: &str) {
-        let area = frame.area();
-        let [header_area, content_area, hints_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ])
-        .areas(area);
-
-        frame.render_widget(
-            Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
-            header_area,
-        );
-        frame.render_widget(
-            Paragraph::new(format!("  {label} — coming soon. Press Esc to go back.")),
-            content_area,
-        );
-        frame.render_widget(
-            Paragraph::new(" Esc=back  q=quit").style(FOOTER_STYLE),
-            hints_area,
-        );
-    }
-
     fn handle_home_key(&mut self, code: KeyCode, conn: &rusqlite::Connection) -> bool {
         match code {
             KeyCode::Up => {
@@ -467,18 +534,17 @@ impl Dashboard {
                 self.menu_selection = (self.menu_selection + 1).min(MENU_ITEMS.len() - 1);
             }
             KeyCode::Char('q') => return true,
-            KeyCode::Enter => {
-                self.screen = match self.menu_selection {
-                    0 => self.enter_browse(conn),
-                    1 => DashboardScreen::Stub("Import a statement"),
-                    2 => self.enter_review(conn),
-                    3 => DashboardScreen::Stub("Reconcile an account"),
-                    4 => DashboardScreen::Stub("View or edit categorization rules"),
-                    5 => DashboardScreen::Stub("View a report"),
-                    6 => DashboardScreen::Stub("Export a report"),
-                    _ => DashboardScreen::Home,
-                };
-            }
+            KeyCode::Enter => match self.menu_selection {
+                0 => self.screen = self.enter_browse(conn),
+                1 => self.terminal_action = Some(TerminalCommand::Import),
+                2 => self.screen = self.enter_review(conn),
+                3 => self.terminal_action = Some(TerminalCommand::Reconcile),
+                4 => self.terminal_action = Some(TerminalCommand::RulesList),
+                5 => self.screen = DashboardScreen::ReportPicker(0),
+                6 => self.screen = DashboardScreen::ExportPicker(0),
+                7 => self.terminal_action = Some(TerminalCommand::Load),
+                _ => {}
+            },
             _ => {}
         }
         false
@@ -510,23 +576,15 @@ impl Dashboard {
         };
         DashboardScreen::Review(TransactionReviewer::new(flagged, categories))
     }
-
-    fn handle_stub_key(&mut self, code: KeyCode) -> bool {
-        match code {
-            KeyCode::Esc => {
-                self.screen = DashboardScreen::Home;
-            }
-            KeyCode::Char('q') => return true,
-            _ => {}
-        }
-        false
-    }
 }
 
 /// Pick nice round y-axis tick values (top and mid) given a max data value.
 fn y_axis_ticks(max_val: f64) -> (f64, f64) {
     // Round steps: 1k, 2.5k, 5k, 10k, 25k, 50k, 100k, 250k, ...
-    let steps = [1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0, 100000.0, 250000.0, 500000.0, 1000000.0];
+    let steps = [
+        1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0, 100000.0, 250000.0, 500000.0,
+        1000000.0,
+    ];
     let top = steps
         .iter()
         .copied()
@@ -557,87 +615,294 @@ fn format_k(val: f64) -> String {
     }
 }
 
-pub fn run() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let mut dashboard = Dashboard::new();
-    dashboard.load_data(&conn)?;
+// ---------------------------------------------------------------------------
+// Terminal-mode helpers
+// ---------------------------------------------------------------------------
 
+fn prompt(label: &str) -> String {
+    print!("{label}");
+    std::io::stdout().flush().unwrap();
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).unwrap();
+    input.trim().to_string()
+}
+
+fn wait_for_enter() {
+    println!("\nPress Enter to return to the dashboard...");
+    let _ = std::io::stdin().read_line(&mut String::new());
+}
+
+fn run_terminal_command(cmd: TerminalCommand) {
+    let result = match cmd {
+        TerminalCommand::RulesList => super::rules::list(),
+        TerminalCommand::Import => run_import(),
+        TerminalCommand::Load => run_load(),
+        TerminalCommand::Reconcile => run_reconcile(),
+        TerminalCommand::Report(idx) => run_report(idx),
+        TerminalCommand::Export(idx) => run_export(idx),
+    };
+    if let Err(e) = result {
+        eprintln!("\nError: {e}");
+    }
+    wait_for_enter();
+}
+
+fn run_import() -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+
+    let mut stmt = conn.prepare("SELECT name FROM accounts ORDER BY name")?;
+    let accounts: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(stmt);
+    drop(conn);
+
+    if accounts.is_empty() {
+        println!("No accounts found. Add one with: nigel accounts add <name> --type <type>");
+        return Ok(());
+    }
+
+    let file = prompt("File path: ");
+    if file.is_empty() {
+        return Ok(());
+    }
+
+    println!("\nAccounts:");
+    for (i, name) in accounts.iter().enumerate() {
+        println!("  {}) {name}", i + 1);
+    }
+    let choice = prompt("Select account number: ");
+    let idx: usize = choice.parse::<usize>().unwrap_or(0);
+    if idx == 0 || idx > accounts.len() {
+        println!("Invalid selection.");
+        return Ok(());
+    }
+
+    super::import::run(&file, &accounts[idx - 1], None)
+}
+
+fn run_load() -> Result<()> {
+    let current = get_data_dir();
+    println!("Current data directory: {}", current.display());
+    let path = prompt("New data directory: ");
+    if path.is_empty() {
+        return Ok(());
+    }
+    super::load::run(&path)
+}
+
+fn run_reconcile() -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+
+    let mut stmt = conn.prepare("SELECT name FROM accounts ORDER BY name")?;
+    let accounts: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(stmt);
+    drop(conn);
+
+    if accounts.is_empty() {
+        println!("No accounts found.");
+        return Ok(());
+    }
+
+    println!("Accounts:");
+    for (i, name) in accounts.iter().enumerate() {
+        println!("  {}) {name}", i + 1);
+    }
+    let choice = prompt("Select account number: ");
+    let idx: usize = choice.parse::<usize>().unwrap_or(0);
+    if idx == 0 || idx > accounts.len() {
+        println!("Invalid selection.");
+        return Ok(());
+    }
+
+    let month = prompt("Month (YYYY-MM): ");
+    if month.is_empty() {
+        return Ok(());
+    }
+
+    let balance_str = prompt("Statement balance: $");
+    let balance: f64 = match balance_str.replace(['$', ','], "").parse() {
+        Ok(b) => b,
+        Err(_) => {
+            println!("Invalid balance.");
+            return Ok(());
+        }
+    };
+
+    super::reconcile::run(&accounts[idx - 1], &month, balance)
+}
+
+fn run_report(idx: usize) -> Result<()> {
+    let year = Some(chrono::Local::now().year());
+    match idx {
+        0 => super::report::pnl(None, year, None, None),
+        1 => super::report::expenses(None, year),
+        2 => super::report::tax(year),
+        3 => super::report::cashflow(None, year),
+        4 => super::report::register(None, year, None, None, None),
+        5 => super::report::flagged(),
+        6 => super::report::balance(),
+        7 => super::report::k1(year),
+        _ => Ok(()),
+    }
+}
+
+fn run_export(idx: usize) -> Result<()> {
+    #[cfg(not(feature = "pdf"))]
+    {
+        let _ = idx;
+        println!("PDF export is not available — build with the 'pdf' feature.");
+        return Ok(());
+    }
+    #[cfg(feature = "pdf")]
+    {
+        let year = Some(chrono::Local::now().year());
+        match idx {
+            0 => super::export::pnl(None, year, None, None, None),
+            1 => super::export::expenses(None, year, None),
+            2 => super::export::tax(year, None),
+            3 => super::export::cashflow(None, year, None),
+            4 => super::export::register(None, year, None, None, None, None),
+            5 => super::export::flagged(None),
+            6 => super::export::balance(None),
+            7 => super::export::k1(year, None),
+            8 => super::export::all(year, None),
+            _ => Ok(()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+pub fn run() -> Result<()> {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         ratatui::restore();
         hook(info);
     }));
 
-    let mut terminal = ratatui::init();
+    loop {
+        let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+        let mut dashboard = Dashboard::new();
+        dashboard.load_data(&conn)?;
 
-    let result = loop {
-        if let Err(e) = terminal.draw(|frame| dashboard.draw(frame)) {
-            break Err(e.into());
-        }
+        let mut terminal = ratatui::init();
 
-        match event::read() {
-            Err(e) => break Err(e.into()),
-            Ok(Event::Key(key)) => {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('c')
-                {
-                    break Ok(());
-                }
+        let exit: std::result::Result<Option<TerminalCommand>, crate::error::NigelError> = loop {
+            if let Err(e) = terminal.draw(|frame| dashboard.draw(frame)) {
+                break Err(e.into());
+            }
 
-                let mut return_home = false;
-                let should_quit = match &mut dashboard.screen {
-                    DashboardScreen::Home => {
-                        if key.code == KeyCode::Char('r') {
-                            let _ = dashboard.load_data(&conn);
-                            false
-                        } else {
-                            dashboard.handle_home_key(key.code, &conn)
+            match event::read() {
+                Err(e) => break Err(e.into()),
+                Ok(Event::Key(key)) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
+                        break Ok(None);
+                    }
+
+                    let mut return_home = false;
+                    let should_quit = match &mut dashboard.screen {
+                        DashboardScreen::Home => {
+                            if key.code == KeyCode::Char('r') {
+                                let _ = dashboard.load_data(&conn);
+                                false
+                            } else {
+                                dashboard.handle_home_key(key.code, &conn)
+                            }
                         }
-                    }
-                    DashboardScreen::Browse(browser) => {
-                        return_home = browser.handle_key_event(key.code);
-                        false
-                    }
-                    DashboardScreen::Review(reviewer) => {
-                        match reviewer.handle_key(key.code) {
-                            HandleResult::Continue => {}
-                            HandleResult::CommitAndAdvance => {
-                                if let Err(e) = reviewer.commit_review(&conn) {
-                                    break Err(e);
+                        DashboardScreen::Browse(browser) => {
+                            return_home = browser.handle_key_event(key.code);
+                            false
+                        }
+                        DashboardScreen::Review(reviewer) => {
+                            match reviewer.handle_key(key.code) {
+                                HandleResult::Continue => {}
+                                HandleResult::CommitAndAdvance => {
+                                    if let Err(e) = reviewer.commit_review(&conn) {
+                                        break Err(e);
+                                    }
+                                    if reviewer.is_done() {
+                                        return_home = true;
+                                    }
                                 }
-                                if reviewer.is_done() {
+                                HandleResult::UndoPrevious => {
+                                    if let Err(e) = reviewer.undo_previous(&conn) {
+                                        break Err(e);
+                                    }
+                                }
+                                HandleResult::Done => {
                                     return_home = true;
                                 }
                             }
-                            HandleResult::UndoPrevious => {
-                                if let Err(e) = reviewer.undo_previous(&conn) {
-                                    break Err(e);
-                                }
-                            }
-                            HandleResult::Done => {
-                                return_home = true;
-                            }
+                            false
                         }
-                        false
+                        DashboardScreen::ReportPicker(sel) => {
+                            match key.code {
+                                KeyCode::Up => *sel = sel.saturating_sub(1),
+                                KeyCode::Down => {
+                                    *sel = (*sel + 1).min(REPORT_TYPES.len() - 1)
+                                }
+                                KeyCode::Esc => return_home = true,
+                                KeyCode::Enter => {
+                                    dashboard.terminal_action =
+                                        Some(TerminalCommand::Report(*sel));
+                                }
+                                _ => {}
+                            }
+                            key.code == KeyCode::Char('q')
+                        }
+                        DashboardScreen::ExportPicker(sel) => {
+                            match key.code {
+                                KeyCode::Up => *sel = sel.saturating_sub(1),
+                                KeyCode::Down => {
+                                    *sel = (*sel + 1).min(EXPORT_TYPES.len() - 1)
+                                }
+                                KeyCode::Esc => return_home = true,
+                                KeyCode::Enter => {
+                                    dashboard.terminal_action =
+                                        Some(TerminalCommand::Export(*sel));
+                                }
+                                _ => {}
+                            }
+                            key.code == KeyCode::Char('q')
+                        }
+                    };
+
+                    if return_home {
+                        dashboard.screen = DashboardScreen::Home;
+                        let _ = dashboard.load_data(&conn);
                     }
-                    DashboardScreen::Stub(_) => dashboard.handle_stub_key(key.code),
-                };
-                if return_home {
-                    dashboard.screen = DashboardScreen::Home;
-                    let _ = dashboard.load_data(&conn);
-                }
 
-                if should_quit {
-                    break Ok(());
+                    if let Some(cmd) = dashboard.terminal_action.take() {
+                        break Ok(Some(cmd));
+                    }
+
+                    if should_quit {
+                        break Ok(None);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-    };
+        };
 
-    ratatui::restore();
-    result
+        drop(terminal);
+        ratatui::restore();
+
+        match exit {
+            Err(e) => return Err(e),
+            Ok(None) => return Ok(()),
+            Ok(Some(cmd)) => {
+                run_terminal_command(cmd);
+            }
+        }
+    }
 }
