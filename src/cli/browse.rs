@@ -52,6 +52,6 @@ pub fn register(
     let total = data.total;
     let categories = get_categories(&conn).unwrap_or_default();
     let mut browser = RegisterBrowser::new(data.rows, total, filters_desc, categories);
-    browser.run()?;
+    browser.run(&conn)?;
     Ok(())
 }

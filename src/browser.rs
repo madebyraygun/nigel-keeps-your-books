@@ -77,7 +77,7 @@ impl RegisterBrowser {
         }
     }
 
-    pub fn run(&mut self) -> io::Result<()> {
+    pub fn run(&mut self, conn: &rusqlite::Connection) -> io::Result<()> {
         if self.rows.is_empty() {
             println!("No transactions found.");
             return Ok(());
@@ -90,7 +90,7 @@ impl RegisterBrowser {
         }));
 
         let mut terminal = ratatui::init();
-        let result = self.event_loop(&mut terminal);
+        let result = self.event_loop(&mut terminal, conn);
         ratatui::restore();
         result
     }
@@ -349,7 +349,11 @@ impl RegisterBrowser {
         BrowseAction::Continue
     }
 
-    fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    fn event_loop(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        conn: &rusqlite::Connection,
+    ) -> io::Result<()> {
         loop {
             terminal.draw(|frame| self.draw_frame(frame))?;
 
@@ -371,8 +375,16 @@ impl RegisterBrowser {
                 match self.handle_key_event(code) {
                     BrowseAction::Close => break,
                     BrowseAction::Continue => {}
-                    // No DB connection in standalone mode — ignore edit actions
-                    BrowseAction::CommitEdit | BrowseAction::ToggleFlag => {}
+                    BrowseAction::CommitEdit => {
+                        if let Err(e) = self.commit_edit(conn) {
+                            self.status_message = Some(format!("Edit failed: {e}"));
+                        }
+                    }
+                    BrowseAction::ToggleFlag => {
+                        if let Err(e) = self.toggle_flag(conn) {
+                            self.status_message = Some(format!("Flag toggle failed: {e}"));
+                        }
+                    }
                 }
             }
         }
