@@ -10,10 +10,12 @@ use ratatui::{
 };
 
 use crate::browser::RegisterBrowser;
+use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
 use crate::reports;
+use crate::reviewer::{get_categories, get_flagged_transactions};
 use crate::settings::get_data_dir;
 use crate::tui::{money_span, FOOTER_STYLE, HEADER_STYLE};
 
@@ -48,6 +50,7 @@ const MENU_ITEMS: &[&str] = &[
 enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
+    Review(TransactionReviewer),
     Stub(&'static str),
 }
 
@@ -152,6 +155,10 @@ impl Dashboard {
     fn draw(&mut self, frame: &mut Frame) {
         if let DashboardScreen::Browse(ref mut browser) = self.screen {
             browser.draw_frame(frame);
+            return;
+        }
+        if let DashboardScreen::Review(ref reviewer) = self.screen {
+            reviewer.draw(frame);
             return;
         }
         if let DashboardScreen::Stub(label) = self.screen {
@@ -315,7 +322,7 @@ impl Dashboard {
                 self.screen = match self.menu_selection {
                     0 => self.enter_browse(conn),
                     1 => DashboardScreen::Stub("Import a statement"),
-                    2 => DashboardScreen::Stub("Review flagged transactions"),
+                    2 => self.enter_review(conn),
                     3 => DashboardScreen::Stub("Reconcile an account"),
                     4 => DashboardScreen::Stub("View or edit categorization rules"),
                     5 => DashboardScreen::Stub("View a report"),
@@ -338,6 +345,21 @@ impl Dashboard {
             }
             Err(_) => DashboardScreen::Home,
         }
+    }
+
+    fn enter_review(&self, conn: &rusqlite::Connection) -> DashboardScreen {
+        let flagged = match get_flagged_transactions(conn) {
+            Ok(f) => f,
+            Err(_) => return DashboardScreen::Home,
+        };
+        if flagged.is_empty() {
+            return DashboardScreen::Home;
+        }
+        let categories = match get_categories(conn) {
+            Ok(c) => c,
+            Err(_) => return DashboardScreen::Home,
+        };
+        DashboardScreen::Review(TransactionReviewer::new(flagged, categories))
     }
 
     fn handle_stub_key(&mut self, code: KeyCode) -> bool {
@@ -394,6 +416,28 @@ pub fn run() -> Result<()> {
                     }
                     DashboardScreen::Browse(browser) => {
                         return_home = browser.handle_key_event(key.code);
+                        false
+                    }
+                    DashboardScreen::Review(reviewer) => {
+                        match reviewer.handle_key(key.code) {
+                            HandleResult::Continue => {}
+                            HandleResult::CommitAndAdvance => {
+                                if let Err(e) = reviewer.commit_review(&conn) {
+                                    break Err(e);
+                                }
+                                if reviewer.is_done() {
+                                    return_home = true;
+                                }
+                            }
+                            HandleResult::UndoPrevious => {
+                                if let Err(e) = reviewer.undo_previous(&conn) {
+                                    break Err(e);
+                                }
+                            }
+                            HandleResult::Done => {
+                                return_home = true;
+                            }
+                        }
                         false
                     }
                     DashboardScreen::Stub(_) => dashboard.handle_stub_key(key.code),

@@ -29,7 +29,7 @@ struct ReviewDecision {
     rule_id: Option<i64>,
 }
 
-struct TransactionReviewer {
+pub struct TransactionReviewer {
     flagged: Vec<FlaggedTxn>,
     categories: Vec<CategoryChoice>,
     labels: Vec<String>,
@@ -46,7 +46,7 @@ struct TransactionReviewer {
 }
 
 impl TransactionReviewer {
-    fn new(flagged: Vec<FlaggedTxn>, categories: Vec<CategoryChoice>) -> Self {
+    pub fn new(flagged: Vec<FlaggedTxn>, categories: Vec<CategoryChoice>) -> Self {
         let labels: Vec<String> = categories
             .iter()
             .map(|c| {
@@ -92,7 +92,7 @@ impl TransactionReviewer {
         self.current_txn > 0
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    pub fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         let txn = &self.flagged[self.current_txn];
         let total = self.flagged.len();
@@ -237,7 +237,7 @@ impl TransactionReviewer {
         );
     }
 
-    fn handle_key(&mut self, code: KeyCode) -> HandleResult {
+    pub fn handle_key(&mut self, code: KeyCode) -> HandleResult {
         match &self.state {
             ReviewState::PickCategory => match code {
                 KeyCode::Char(c) => {
@@ -277,8 +277,9 @@ impl TransactionReviewer {
                     self.advance();
                     HandleResult::check_done(self)
                 }
-                // Esc = go back to previous transaction (undo)
+                // Esc = go back to previous transaction (undo), or exit if at first
                 KeyCode::Esc if self.allow_back() => HandleResult::UndoPrevious,
+                KeyCode::Esc => HandleResult::Done,
                 _ => HandleResult::Continue,
             },
             ReviewState::InputVendor => match code {
@@ -368,7 +369,7 @@ impl TransactionReviewer {
         }
     }
 
-    fn commit_review(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+    pub fn commit_review(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         let txn = &self.flagged[self.current_txn];
         let cat_idx = self.selected_category_idx.unwrap();
         let cat = &self.categories[cat_idx];
@@ -398,7 +399,7 @@ impl TransactionReviewer {
         Ok(())
     }
 
-    fn undo_previous(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+    pub fn undo_previous(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         self.current_txn -= 1;
         if let Some(Some(decision)) = self.decisions.pop() {
             undo_review(conn, decision.transaction_id, decision.rule_id)?;
@@ -426,12 +427,12 @@ impl TransactionReviewer {
         self.reset_to_pick_category();
     }
 
-    fn is_done(&self) -> bool {
+    pub fn is_done(&self) -> bool {
         self.current_txn >= self.flagged.len()
     }
 }
 
-enum HandleResult {
+pub enum HandleResult {
     Continue,
     CommitAndAdvance,
     UndoPrevious,
