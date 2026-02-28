@@ -12,6 +12,10 @@ pub const FOOTER_STYLE: Style = Style::new().fg(Color::DarkGray);
 pub const AMOUNT_POS_STYLE: Style = Style::new().fg(Color::Rgb(80, 220, 100));
 pub const AMOUNT_NEG_STYLE: Style = Style::new().fg(Color::Red);
 
+pub const SELECTED_STYLE: Style = Style::new()
+    .bg(Color::Rgb(40, 40, 60))
+    .add_modifier(Modifier::BOLD);
+
 /// Format an amount as a colored Span (green for income, red for expense).
 /// Shows absolute value — color conveys the sign.
 pub fn money_span(amount: f64) -> Span<'static> {
