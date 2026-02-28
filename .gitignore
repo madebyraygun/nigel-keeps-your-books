@@ -3,3 +3,4 @@ target/
 data/
 docs/plans/
 storage
+.worktrees/
