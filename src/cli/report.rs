@@ -1,23 +1,12 @@
 use colored::Colorize;
 use comfy_table::{Cell, Table};
 
+use super::parse_month_opt;
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
 use crate::reports;
 use crate::settings::get_data_dir;
-
-fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
-    if let Some(m) = month {
-        let parts: Vec<&str> = m.split('-').collect();
-        if parts.len() == 2 {
-            let year = parts[0].parse().ok();
-            let month = parts[1].parse().ok();
-            return (year, month);
-        }
-    }
-    (None, None)
-}
 
 pub fn pnl(
     month: Option<String>,
@@ -181,7 +170,7 @@ pub fn register(
     }
 
     let mut table = Table::new();
-    table.set_header(vec!["Date", "Description", "Amount", "Category", "Vendor", "Account"]);
+    table.set_header(vec!["ID", "Date", "Description", "Amount", "Category", "Vendor", "Account"]);
     for r in &data.rows {
         let amt = if r.amount < 0.0 {
             money(r.amount.abs()).red().to_string()
@@ -191,6 +180,7 @@ pub fn register(
         let cat = r.category.as_deref().unwrap_or("—");
         let vendor = r.vendor.as_deref().unwrap_or("");
         table.add_row(vec![
+            Cell::new(r.id),
             Cell::new(&r.date),
             Cell::new(&r.description),
             Cell::new(amt),

@@ -2,23 +2,12 @@ use std::path::PathBuf;
 
 use chrono::Datelike;
 
+use super::parse_month_opt;
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::pdf;
 use crate::reports;
 use crate::settings::{get_data_dir, load_settings};
-
-fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
-    if let Some(m) = month {
-        let parts: Vec<&str> = m.split('-').collect();
-        if parts.len() == 2 {
-            let year = parts[0].parse().ok();
-            let month = parts[1].parse().ok();
-            return (year, month);
-        }
-    }
-    (None, None)
-}
 
 fn date_range_label(month: &Option<String>, year: &Option<i32>) -> String {
     if let Some(m) = month {

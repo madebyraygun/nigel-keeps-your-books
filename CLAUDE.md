@@ -8,10 +8,11 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, export, load, backup, status
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, browse, export, load, backup, status
 - **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_loc, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
-- **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (interactive review), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
+- **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`) for interactive screens; `browser.rs` uses ratatui `Terminal::draw()` render loop with scroll-based navigation
+- **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (interactive review), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with scroll navigation and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
 - **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `company_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing
@@ -45,6 +46,8 @@ nigel report register --year 2025                 # All transactions for a perio
 nigel report register --account "BofA Checking"   # Filter by account
 nigel report flagged                              # Flagged transactions
 nigel report k1 --year 2025                       # K-1 prep worksheet (1120-S)
+nigel browse register --year 2025                 # Interactive register browser
+nigel browse register --account "BofA Checking"   # Browse filtered by account
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 nigel status                                      # Show active DB and summary stats
 nigel load ~/other-books                          # Switch to a different data directory
@@ -89,7 +92,7 @@ Do not merge or mark work complete if docs are stale.
 src/
   main.rs               # Entry point, command dispatch
   cli/                  # CLI subcommands
-    mod.rs              # Clap structs (Cli, Commands, subcommands)
+    mod.rs              # Clap structs (Cli, Commands, subcommands), shared helpers
     init.rs             # nigel init
     demo.rs             # nigel demo (sample data)
     accounts.rs         # nigel accounts add/list
@@ -98,6 +101,7 @@ src/
     rules.rs            # nigel rules add/list
     review.rs           # nigel review
     report.rs           # nigel report (all variants)
+    browse.rs           # nigel browse (interactive browsers)
     export.rs           # nigel export (PDF export, feature-gated)
     reconcile.rs        # nigel reconcile
     load.rs             # nigel load (switch data directory)
@@ -109,6 +113,8 @@ src/
   categorizer.rs        # Rules engine (categorize_transactions)
   reviewer.rs           # Interactive review flow
   reports.rs            # Report data functions (pnl, expenses, tax, cashflow, balance, flagged, k1_prep)
+  browser.rs            # Interactive register browser (ratatui, scroll navigation, text wrapping)
+  tui.rs                # Shared ratatui helpers (styles, money_span, wrap_text)
   pdf.rs                # PDF rendering engine (feature-gated behind "pdf")
   reconciler.rs         # Monthly reconciliation
   settings.rs           # Settings management (~/.config/nigel/)

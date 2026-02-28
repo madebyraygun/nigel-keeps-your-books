@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod backup;
+pub mod browse;
 pub mod categorize;
 pub mod demo;
 #[cfg(feature = "pdf")]
@@ -14,6 +15,18 @@ pub mod rules;
 pub mod status;
 
 use clap::{Parser, Subcommand};
+
+pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
+    if let Some(m) = month {
+        let parts: Vec<&str> = m.split('-').collect();
+        if parts.len() == 2 {
+            let year = parts[0].parse().ok();
+            let month = parts[1].parse().ok();
+            return (year, month);
+        }
+    }
+    (None, None)
+}
 
 #[derive(Parser)]
 #[command(name = "nigel", about = "Cash-basis bookkeeping CLI for small consultancies.")]
@@ -89,6 +102,11 @@ pub enum Commands {
         /// Output path (default: <data_dir>/backups/nigel-YYYYMMDD-HHMMSS.db)
         #[arg(long)]
         output: Option<String>,
+    },
+    /// Interactively browse data.
+    Browse {
+        #[command(subcommand)]
+        command: BrowseCommands,
     },
     /// Show current database and summary statistics.
     Status,
@@ -304,5 +322,23 @@ pub enum ReportCommands {
     K1 {
         #[arg(long)]
         year: Option<i32>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BrowseCommands {
+    /// Interactive transaction register browser.
+    Register {
+        #[arg(long)]
+        month: Option<String>,
+        #[arg(long)]
+        year: Option<i32>,
+        #[arg(long = "from")]
+        from_date: Option<String>,
+        #[arg(long = "to")]
+        to_date: Option<String>,
+        /// Filter by account name
+        #[arg(long)]
+        account: Option<String>,
     },
 }
