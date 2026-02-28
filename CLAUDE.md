@@ -83,6 +83,8 @@ Do not merge or mark work complete if docs are stale.
 - `ImporterKind::detect()` inspects file headers for format auto-detection; `--format` CLI flag overrides auto-detect
 - Demo data is inserted directly into the DB (no CSV files); idempotency guard checks for existing account
 - Cash amounts are plain `f64` — negative = expense, positive = income
+- Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
+- Database row deserialization errors are propagated, never silently discarded
 
 ## Project Structure
 
