@@ -9,6 +9,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::browser::RegisterBrowser;
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
@@ -46,6 +47,7 @@ const MENU_ITEMS: &[&str] = &[
 
 enum DashboardScreen {
     Home,
+    Browse(RegisterBrowser),
     Stub(&'static str),
 }
 
@@ -147,11 +149,16 @@ impl Dashboard {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
-        match &self.screen {
-            DashboardScreen::Home => self.draw_home(frame),
-            DashboardScreen::Stub(label) => self.draw_stub(frame, label),
+    fn draw(&mut self, frame: &mut Frame) {
+        if let DashboardScreen::Browse(ref mut browser) = self.screen {
+            browser.draw_frame(frame);
+            return;
         }
+        if let DashboardScreen::Stub(label) = self.screen {
+            self.draw_stub(frame, label);
+            return;
+        }
+        self.draw_home(frame);
     }
 
     fn draw_home(&self, frame: &mut Frame) {
@@ -295,7 +302,7 @@ impl Dashboard {
         );
     }
 
-    fn handle_home_key(&mut self, code: KeyCode) -> bool {
+    fn handle_home_key(&mut self, code: KeyCode, conn: &rusqlite::Connection) -> bool {
         match code {
             KeyCode::Up => {
                 self.menu_selection = self.menu_selection.saturating_sub(1);
@@ -306,7 +313,7 @@ impl Dashboard {
             KeyCode::Char('q') => return true,
             KeyCode::Enter => {
                 self.screen = match self.menu_selection {
-                    0 => DashboardScreen::Stub("Browse the register"),
+                    0 => self.enter_browse(conn),
                     1 => DashboardScreen::Stub("Import a statement"),
                     2 => DashboardScreen::Stub("Review flagged transactions"),
                     3 => DashboardScreen::Stub("Reconcile an account"),
@@ -319,6 +326,18 @@ impl Dashboard {
             _ => {}
         }
         false
+    }
+
+    fn enter_browse(&self, conn: &rusqlite::Connection) -> DashboardScreen {
+        let year = chrono::Local::now().year();
+        match reports::get_register(conn, Some(year), None, None, None, None) {
+            Ok(data) => {
+                let browser =
+                    RegisterBrowser::new(data.rows, data.total, format!("year: {year}"));
+                DashboardScreen::Browse(browser)
+            }
+            Err(_) => DashboardScreen::Home,
+        }
     }
 
     fn handle_stub_key(&mut self, code: KeyCode) -> bool {
@@ -363,17 +382,26 @@ pub fn run() -> Result<()> {
                     break Ok(());
                 }
 
-                let should_quit = match &dashboard.screen {
+                let mut return_home = false;
+                let should_quit = match &mut dashboard.screen {
                     DashboardScreen::Home => {
                         if key.code == KeyCode::Char('r') {
                             let _ = dashboard.load_data(&conn);
                             false
                         } else {
-                            dashboard.handle_home_key(key.code)
+                            dashboard.handle_home_key(key.code, &conn)
                         }
+                    }
+                    DashboardScreen::Browse(browser) => {
+                        return_home = browser.handle_key_event(key.code);
+                        false
                     }
                     DashboardScreen::Stub(_) => dashboard.handle_stub_key(key.code),
                 };
+                if return_home {
+                    dashboard.screen = DashboardScreen::Home;
+                    let _ = dashboard.load_data(&conn);
+                }
 
                 if should_quit {
                     break Ok(());
