@@ -13,7 +13,7 @@ use crate::browser::RegisterBrowser;
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::db::get_connection;
 use crate::error::Result;
-use crate::fmt::{money, number};
+use crate::fmt::number;
 use crate::reports;
 use crate::reviewer::{get_categories, get_flagged_transactions};
 use crate::settings::get_data_dir;
@@ -272,21 +272,23 @@ impl Dashboard {
 
             // Monthly Cash Flow bar chart with y-axis labels
             if !data.cashflow_labels.is_empty() {
-                let income_style = Style::default().fg(Color::Green);
+                let income_style = Style::default().fg(Color::Rgb(80, 220, 100));
                 let expense_style = Style::default().fg(Color::Red);
 
-                // Compute max value for y-axis
+                // Pick round y-axis tick values based on max data value
                 let max_val = data
                     .cashflow_income
                     .iter()
                     .chain(data.cashflow_expenses.iter())
                     .copied()
                     .max()
-                    .unwrap_or(1);
+                    .unwrap_or(1) as f64;
 
-                // Y-axis label width: " $XX,XXX " — use money format of max value
-                let max_label = money(max_val as f64);
-                let y_label_width = (max_label.len() + 1) as u16;
+                // Round ticks: pick nice round numbers for the axis
+                let (top_tick, mid_tick) = y_axis_ticks(max_val);
+                let top_label = format_k(top_tick);
+                let mid_label = format_k(mid_tick);
+                let y_label_width = top_label.len().max(mid_label.len()) as u16 + 1;
 
                 let [y_axis_area, bar_area] = Layout::horizontal([
                     Constraint::Length(y_label_width),
@@ -294,21 +296,20 @@ impl Dashboard {
                 ])
                 .areas(chart_left);
 
-                // Y-axis labels: max at top, mid at middle, 0 at bottom
+                // Y-axis labels: top tick near top, mid tick at middle
                 let inner_height = bar_area.height.saturating_sub(2); // title + month labels
-                let mid_val = max_val / 2;
                 let mid_row = inner_height / 2;
                 let mut y_lines: Vec<Line> = Vec::new();
                 y_lines.push(Line::from("")); // title row
                 for row in 0..inner_height {
                     if row == 0 {
                         y_lines.push(Line::from(Span::styled(
-                            format!("{:>width$}", money(max_val as f64), width = y_label_width as usize),
+                            format!("{:>width$}", top_label, width = y_label_width as usize),
                             FOOTER_STYLE,
                         )));
                     } else if row == mid_row {
                         y_lines.push(Line::from(Span::styled(
-                            format!("{:>width$}", money(mid_val as f64), width = y_label_width as usize),
+                            format!("{:>width$}", mid_label, width = y_label_width as usize),
                             FOOTER_STYLE,
                         )));
                     } else {
@@ -519,6 +520,40 @@ impl Dashboard {
             _ => {}
         }
         false
+    }
+}
+
+/// Pick nice round y-axis tick values (top and mid) given a max data value.
+fn y_axis_ticks(max_val: f64) -> (f64, f64) {
+    // Round steps: 1k, 2.5k, 5k, 10k, 25k, 50k, 100k, 250k, ...
+    let steps = [1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0, 100000.0, 250000.0, 500000.0, 1000000.0];
+    let top = steps
+        .iter()
+        .copied()
+        .find(|&s| s >= max_val)
+        .unwrap_or(max_val);
+    let mid = top / 2.0;
+    (top, mid)
+}
+
+/// Format a dollar amount as compact "$Xk" or "$X.Xk" for thousands, "$XM" for millions.
+fn format_k(val: f64) -> String {
+    if val >= 1_000_000.0 {
+        let m = val / 1_000_000.0;
+        if m == m.floor() {
+            format!("${}M", m as u64)
+        } else {
+            format!("${:.1}M", m)
+        }
+    } else if val >= 1000.0 {
+        let k = val / 1000.0;
+        if k == k.floor() {
+            format!("${}k", k as u64)
+        } else {
+            format!("${:.1}k", k)
+        }
+    } else {
+        format!("${}", val as u64)
     }
 }
 

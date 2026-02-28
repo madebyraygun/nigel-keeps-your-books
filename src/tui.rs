@@ -9,7 +9,7 @@ pub const HEADER_STYLE: Style = Style::new()
 
 pub const FOOTER_STYLE: Style = Style::new().fg(Color::DarkGray);
 
-pub const AMOUNT_POS_STYLE: Style = Style::new().fg(Color::Green);
+pub const AMOUNT_POS_STYLE: Style = Style::new().fg(Color::Rgb(80, 220, 100));
 pub const AMOUNT_NEG_STYLE: Style = Style::new().fg(Color::Red);
 
 /// Format an amount as a colored Span (green for income, red for expense).
