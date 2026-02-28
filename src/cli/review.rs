@@ -1,130 +1,26 @@
-use colored::Colorize;
-use crossterm::{
-    cursor, execute, queue,
-    event::{self, Event, KeyCode, KeyModifiers},
-    terminal::{self, Clear, ClearType},
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::{
+    layout::{Constraint, Layout},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
 };
-use dialoguer::{Confirm, Input};
-use std::io::{self, Write};
 
 use crate::db::get_connection;
 use crate::error::Result;
-use crate::fmt::money;
-use crate::reviewer::{apply_review, get_categories, get_flagged_transactions, undo_review};
+use crate::reviewer::{
+    apply_review, get_categories, get_flagged_transactions, undo_review, CategoryChoice,
+    FlaggedTxn,
+};
 use crate::settings::get_data_dir;
+use crate::tui::money_span;
 
-enum PickResult {
-    Selected(usize),
-    Skipped,
-    Back,
-}
-
-/// Custom category picker: shows nothing until the user types, then filters inline.
-/// Returns Selected(index) on Enter, Skipped on Tab, Back on Esc.
-fn category_pick(prompt: &str, items: &[String], allow_back: bool) -> PickResult {
-    let mut stdout = io::stdout();
-    terminal::enable_raw_mode().unwrap();
-
-    let max_visible: usize = 9;
-    let mut query = String::new();
-    let mut sel: usize = 0;
-
-    let result = loop {
-        // Filter — show nothing until the user types
-        let matches: Vec<(usize, &str)> = if query.is_empty() {
-            vec![]
-        } else {
-            let q = query.to_lowercase();
-            items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| item.to_lowercase().contains(&q))
-                .map(|(i, s)| (i, s.as_str()))
-                .take(max_visible)
-                .collect()
-        };
-
-        sel = if matches.is_empty() {
-            0
-        } else {
-            sel.min(matches.len() - 1)
-        };
-
-        // Render
-        queue!(stdout, cursor::MoveToColumn(0), Clear(ClearType::FromCursorDown)).unwrap();
-        write!(stdout, "{prompt}: {query}").unwrap();
-
-        if !query.is_empty() && matches.is_empty() {
-            write!(stdout, "\r\n  {}", "(no matches)".bright_black()).unwrap();
-            queue!(stdout, cursor::MoveUp(1)).unwrap();
-        } else {
-            for (i, (_, label)) in matches.iter().enumerate() {
-                let marker = if i == sel { ">" } else { " " };
-                write!(stdout, "\r\n  {marker} {label}").unwrap();
-            }
-            if !matches.is_empty() {
-                queue!(stdout, cursor::MoveUp(matches.len() as u16)).unwrap();
-            }
-        }
-
-        queue!(
-            stdout,
-            cursor::MoveToColumn((prompt.len() + 2 + query.len()) as u16)
-        )
-        .unwrap();
-        stdout.flush().unwrap();
-
-        // Handle input
-        if let Ok(Event::Key(key)) = event::read() {
-            match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    queue!(stdout, cursor::MoveToColumn(0), Clear(ClearType::FromCursorDown))
-                        .unwrap();
-                    write!(stdout, "\r\n").unwrap();
-                    stdout.flush().unwrap();
-                    terminal::disable_raw_mode().unwrap();
-                    std::process::exit(130);
-                }
-                KeyCode::Char(c) => {
-                    query.push(c);
-                    sel = 0;
-                }
-                KeyCode::Backspace => {
-                    query.pop();
-                    sel = 0;
-                }
-                KeyCode::Up => sel = sel.saturating_sub(1),
-                KeyCode::Down => {
-                    if !matches.is_empty() {
-                        sel = (sel + 1).min(matches.len() - 1);
-                    }
-                }
-                KeyCode::Enter if !matches.is_empty() => break PickResult::Selected(matches[sel].0),
-                KeyCode::Esc if allow_back => break PickResult::Back,
-                KeyCode::Esc => {} // no-op on first transaction
-                KeyCode::Tab => break PickResult::Skipped,
-                _ => {}
-            }
-        }
-    };
-
-    // Clean up — show what was selected, restore terminal
-    queue!(stdout, cursor::MoveToColumn(0), Clear(ClearType::FromCursorDown)).unwrap();
-    match &result {
-        PickResult::Selected(idx) => {
-            write!(stdout, "{prompt}: {}\r\n", items[*idx]).unwrap();
-        }
-        PickResult::Skipped => {
-            write!(stdout, "{prompt}: {}\r\n", "(skipped)".bright_black()).unwrap();
-        }
-        PickResult::Back => {
-            write!(stdout, "{prompt}: {}\r\n", "(back)".bright_black()).unwrap();
-        }
-    }
-    stdout.flush().unwrap();
-    terminal::disable_raw_mode().unwrap();
-
-    result
+enum ReviewState {
+    PickCategory,
+    InputVendor,
+    ConfirmRule,
+    InputRulePattern,
 }
 
 /// Tracks a review decision so it can be undone when navigating back.
@@ -133,171 +29,502 @@ struct ReviewDecision {
     rule_id: Option<i64>,
 }
 
+struct TransactionReviewer {
+    flagged: Vec<FlaggedTxn>,
+    categories: Vec<CategoryChoice>,
+    labels: Vec<String>,
+    current_txn: usize,
+    state: ReviewState,
+    cat_query: String,
+    cat_selection: usize,
+    text_input: String,
+    confirm_value: bool,
+    selected_category_idx: Option<usize>,
+    vendor: Option<String>,
+    /// Stack of decisions for undo; None = skipped transaction
+    decisions: Vec<Option<ReviewDecision>>,
+}
+
+impl TransactionReviewer {
+    fn new(flagged: Vec<FlaggedTxn>, categories: Vec<CategoryChoice>) -> Self {
+        let labels: Vec<String> = categories
+            .iter()
+            .map(|c| {
+                let tag = if c.category_type == "income" {
+                    "inc"
+                } else {
+                    "exp"
+                };
+                format!("{} ({})", c.name, tag)
+            })
+            .collect();
+        Self {
+            flagged,
+            categories,
+            labels,
+            current_txn: 0,
+            state: ReviewState::PickCategory,
+            cat_query: String::new(),
+            cat_selection: 0,
+            text_input: String::new(),
+            confirm_value: false,
+            selected_category_idx: None,
+            vendor: None,
+            decisions: Vec::new(),
+        }
+    }
+
+    fn filtered_categories(&self) -> Vec<(usize, &str)> {
+        if self.cat_query.is_empty() {
+            return vec![];
+        }
+        let q = self.cat_query.to_lowercase();
+        self.labels
+            .iter()
+            .enumerate()
+            .filter(|(_, label)| label.to_lowercase().contains(&q))
+            .map(|(i, s)| (i, s.as_str()))
+            .take(9)
+            .collect()
+    }
+
+    fn allow_back(&self) -> bool {
+        self.current_txn > 0
+    }
+
+    fn draw(&self, frame: &mut Frame) {
+        let area = frame.area();
+        let txn = &self.flagged[self.current_txn];
+        let total = self.flagged.len();
+
+        // Compute category chart rows dynamically
+        let col_width = self.labels.iter().map(|e| e.len()).max().unwrap_or(20) + 2;
+        let cols = (area.width as usize / col_width).max(1);
+        let chart_rows = ((self.labels.len() + cols - 1) / cols) as u16 + 1; // +1 for "Categories" header
+
+        let [chart_area, progress_area, detail_area, interaction_area, hints_area] =
+            Layout::vertical([
+                Constraint::Length(chart_rows),
+                Constraint::Length(1),
+                Constraint::Length(6),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+        // Category chart
+        let mut chart_lines: Vec<Line> = vec![Line::from(Span::styled(
+            "Categories",
+            Style::default().fg(Color::DarkGray),
+        ))];
+        let rows = ((self.labels.len() + cols - 1) / cols).max(1);
+        for row in 0..rows {
+            let mut spans = Vec::new();
+            for col in 0..cols {
+                let idx = col * rows + row;
+                if let Some(entry) = self.labels.get(idx) {
+                    spans.push(Span::styled(
+                        format!("{:<width$}", entry, width = col_width),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+            chart_lines.push(Line::from(spans));
+        }
+        frame.render_widget(Paragraph::new(chart_lines), chart_area);
+
+        // Progress bar
+        let bar_width: usize = 40;
+        let filled = if total > 1 {
+            (self.current_txn * bar_width) / (total - 1)
+        } else {
+            bar_width
+        };
+        let empty = bar_width - filled;
+        let progress_line = Line::from(vec![
+            Span::raw(format!("[{} of {}] ", self.current_txn + 1, total)),
+            Span::styled(
+                "\u{2501}".repeat(filled),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(
+                "\u{2501}".repeat(empty),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(progress_line), progress_area);
+
+        // Transaction details
+        let detail_lines = vec![
+            Line::from(""),
+            Line::from(format!("  Date:        {}", txn.date)),
+            Line::from(format!("  Description: {}", txn.description)),
+            Line::from(vec![
+                Span::raw("  Amount:      "),
+                money_span(txn.amount),
+            ]),
+            Line::from(format!("  Account:     {}", txn.account_name)),
+            Line::from(""),
+        ];
+        frame.render_widget(Paragraph::new(detail_lines), detail_area);
+
+        // Interaction area — changes per state
+        let interaction_lines: Vec<Line> = match &self.state {
+            ReviewState::PickCategory => {
+                let matches = self.filtered_categories();
+                let mut lines = vec![Line::from(format!(
+                    "  Category: {}\u{2588}",
+                    self.cat_query
+                ))];
+                if !self.cat_query.is_empty() && matches.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "    (no matches)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    for (i, (_, label)) in matches.iter().enumerate() {
+                        let marker = if i == self.cat_selection { ">" } else { " " };
+                        lines.push(Line::from(format!("  {marker} {label}")));
+                    }
+                }
+                lines
+            }
+            ReviewState::InputVendor => {
+                vec![Line::from(format!(
+                    "  Vendor (Enter to skip): {}\u{2588}",
+                    self.text_input
+                ))]
+            }
+            ReviewState::ConfirmRule => {
+                let (yes_style, no_style) = if self.confirm_value {
+                    (
+                        Style::default().fg(Color::White).bg(Color::Blue),
+                        Style::default(),
+                    )
+                } else {
+                    (
+                        Style::default(),
+                        Style::default().fg(Color::White).bg(Color::Blue),
+                    )
+                };
+                vec![Line::from(vec![
+                    Span::raw("  Create rule for future matches?  "),
+                    Span::styled(" Yes ", yes_style),
+                    Span::raw("  "),
+                    Span::styled(" No ", no_style),
+                ])]
+            }
+            ReviewState::InputRulePattern => {
+                vec![Line::from(format!(
+                    "  Rule pattern: {}\u{2588}",
+                    self.text_input
+                ))]
+            }
+        };
+        frame.render_widget(Paragraph::new(interaction_lines), interaction_area);
+
+        // Hints — vary by state and whether back is available
+        let hints = match &self.state {
+            ReviewState::PickCategory => {
+                if self.allow_back() {
+                    "Type to filter, Enter=select, Tab=skip, Esc=back, Ctrl+C=quit"
+                } else {
+                    "Type to filter, Enter=select, Tab=skip, Ctrl+C=quit"
+                }
+            }
+            ReviewState::InputVendor => {
+                "Enter=confirm (empty to skip), Esc=back to category, Ctrl+C=quit"
+            }
+            ReviewState::ConfirmRule => {
+                "y/n or Left/Right to toggle, Enter=confirm, Esc=back to category, Ctrl+C=quit"
+            }
+            ReviewState::InputRulePattern => {
+                "Enter=confirm (non-empty required), Esc=back to category, Ctrl+C=quit"
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(hints).style(Style::default().fg(Color::DarkGray)),
+            hints_area,
+        );
+    }
+
+    fn handle_key(&mut self, code: KeyCode) -> HandleResult {
+        match &self.state {
+            ReviewState::PickCategory => match code {
+                KeyCode::Char(c) => {
+                    self.cat_query.push(c);
+                    self.cat_selection = 0;
+                    HandleResult::Continue
+                }
+                KeyCode::Backspace => {
+                    self.cat_query.pop();
+                    self.cat_selection = 0;
+                    HandleResult::Continue
+                }
+                KeyCode::Up => {
+                    self.cat_selection = self.cat_selection.saturating_sub(1);
+                    HandleResult::Continue
+                }
+                KeyCode::Down => {
+                    let matches = self.filtered_categories();
+                    if !matches.is_empty() {
+                        self.cat_selection = (self.cat_selection + 1).min(matches.len() - 1);
+                    }
+                    HandleResult::Continue
+                }
+                KeyCode::Enter => {
+                    let matches = self.filtered_categories();
+                    if !matches.is_empty() {
+                        let sel = self.cat_selection.min(matches.len() - 1);
+                        self.selected_category_idx = Some(matches[sel].0);
+                        self.text_input.clear();
+                        self.state = ReviewState::InputVendor;
+                    }
+                    HandleResult::Continue
+                }
+                // Tab = skip (advance without categorizing)
+                KeyCode::Tab => {
+                    self.decisions.push(None);
+                    self.advance();
+                    HandleResult::check_done(self)
+                }
+                // Esc = go back to previous transaction (undo)
+                KeyCode::Esc if self.allow_back() => HandleResult::UndoPrevious,
+                _ => HandleResult::Continue,
+            },
+            ReviewState::InputVendor => match code {
+                KeyCode::Char(c) => {
+                    self.text_input.push(c);
+                    HandleResult::Continue
+                }
+                KeyCode::Backspace => {
+                    self.text_input.pop();
+                    HandleResult::Continue
+                }
+                KeyCode::Enter => {
+                    self.vendor = if self.text_input.is_empty() {
+                        None
+                    } else {
+                        Some(self.text_input.clone())
+                    };
+                    self.text_input.clear();
+                    self.confirm_value = false;
+                    self.state = ReviewState::ConfirmRule;
+                    HandleResult::Continue
+                }
+                // Esc = back to category selection for this transaction
+                KeyCode::Esc => {
+                    self.reset_to_pick_category();
+                    HandleResult::Continue
+                }
+                _ => HandleResult::Continue,
+            },
+            ReviewState::ConfirmRule => match code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.confirm_value = true;
+                    HandleResult::Continue
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.confirm_value = false;
+                    HandleResult::Continue
+                }
+                KeyCode::Left | KeyCode::Right => {
+                    self.confirm_value = !self.confirm_value;
+                    HandleResult::Continue
+                }
+                KeyCode::Enter => {
+                    if self.confirm_value {
+                        // Prefill rule pattern with first 2 words
+                        let txn = &self.flagged[self.current_txn];
+                        let words: Vec<&str> = txn.description.split_whitespace().collect();
+                        self.text_input = if words.len() >= 2 {
+                            format!("{} {}", words[0], words[1])
+                        } else {
+                            words.first().unwrap_or(&"").to_string()
+                        };
+                        self.state = ReviewState::InputRulePattern;
+                    } else {
+                        return HandleResult::CommitAndAdvance;
+                    }
+                    HandleResult::Continue
+                }
+                // Esc = back to category selection for this transaction
+                KeyCode::Esc => {
+                    self.reset_to_pick_category();
+                    HandleResult::Continue
+                }
+                _ => HandleResult::Continue,
+            },
+            ReviewState::InputRulePattern => match code {
+                KeyCode::Char(c) => {
+                    self.text_input.push(c);
+                    HandleResult::Continue
+                }
+                KeyCode::Backspace => {
+                    self.text_input.pop();
+                    HandleResult::Continue
+                }
+                // Only commit if pattern is non-empty
+                KeyCode::Enter if !self.text_input.trim().is_empty() => {
+                    HandleResult::CommitAndAdvance
+                }
+                KeyCode::Enter => HandleResult::Continue, // ignore Enter on empty pattern
+                // Esc = back to category selection for this transaction
+                KeyCode::Esc => {
+                    self.reset_to_pick_category();
+                    HandleResult::Continue
+                }
+                _ => HandleResult::Continue,
+            },
+        }
+    }
+
+    fn commit_review(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+        let txn = &self.flagged[self.current_txn];
+        let cat_idx = self.selected_category_idx.unwrap();
+        let cat = &self.categories[cat_idx];
+
+        let create_rule = self.confirm_value;
+        let rule_pattern = if create_rule && !self.text_input.trim().is_empty() {
+            Some(self.text_input.as_str())
+        } else {
+            None
+        };
+
+        let rule_id = apply_review(
+            conn,
+            txn.id,
+            cat.id,
+            self.vendor.as_deref(),
+            create_rule,
+            rule_pattern,
+        )?;
+
+        self.decisions.push(Some(ReviewDecision {
+            transaction_id: txn.id,
+            rule_id,
+        }));
+
+        self.advance();
+        Ok(())
+    }
+
+    fn undo_previous(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+        self.current_txn -= 1;
+        if let Some(Some(decision)) = self.decisions.pop() {
+            undo_review(conn, decision.transaction_id, decision.rule_id)?;
+        }
+        // If pop() returned Some(None), it was a skipped transaction — already popped, nothing to undo.
+        self.reset_to_pick_category();
+        Ok(())
+    }
+
+    /// Reset interaction state back to category picker for the current transaction.
+    fn reset_to_pick_category(&mut self) {
+        self.state = ReviewState::PickCategory;
+        self.cat_query.clear();
+        self.cat_selection = 0;
+        self.text_input.clear();
+        self.confirm_value = false;
+        self.selected_category_idx = None;
+        self.vendor = None;
+    }
+
+    fn advance(&mut self) {
+        self.current_txn += 1;
+        self.reset_to_pick_category();
+    }
+
+    fn is_done(&self) -> bool {
+        self.current_txn >= self.flagged.len()
+    }
+}
+
+enum HandleResult {
+    Continue,
+    CommitAndAdvance,
+    UndoPrevious,
+    Done,
+}
+
+impl HandleResult {
+    fn check_done(reviewer: &TransactionReviewer) -> Self {
+        if reviewer.is_done() {
+            HandleResult::Done
+        } else {
+            HandleResult::Continue
+        }
+    }
+}
+
 pub fn run() -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let flagged = get_flagged_transactions(&conn)?;
 
     if flagged.is_empty() {
-        println!("{}", "No flagged transactions to review.".green());
+        println!("No flagged transactions to review.");
         return Ok(());
     }
 
     let categories = get_categories(&conn)?;
     let total = flagged.len();
-    println!("\n{total} transactions to review\n");
 
-    let labels: Vec<String> = categories
-        .iter()
-        .map(|c| format!("{} ({})", c.name, c.category_type))
-        .collect();
+    let mut reviewer = TransactionReviewer::new(flagged, categories);
+    let mut terminal = ratatui::init();
+    let mut interrupted = false;
 
-    // Track decisions for undo when navigating back
-    let mut decisions: Vec<Option<ReviewDecision>> = Vec::new();
-
-    let mut stdout = io::stdout();
-    let mut i: usize = 0;
-    while i < total {
-        let txn = &flagged[i];
-
-        // Clear screen so the category chart is always pinned at the top
-        execute!(stdout, Clear(ClearType::All), cursor::MoveTo(0, 0)).unwrap();
-
-        // Sticky category chart (multi-column)
-        let entries: Vec<String> = categories
-            .iter()
-            .map(|c| {
-                let tag = if c.category_type == "income" { "inc" } else { "exp" };
-                format!("{} ({})", c.name, tag)
-            })
-            .collect();
-        let col_width = entries.iter().map(|e| e.len()).max().unwrap_or(20) + 2;
-        let term_width = crossterm::terminal::size()
-            .map(|(w, _)| w as usize)
-            .unwrap_or(80);
-        let cols = (term_width / col_width).max(1);
-        let rows = (entries.len() + cols - 1) / cols;
-        println!("{}", "Categories".bright_black());
-        for row in 0..rows {
-            let mut line = String::new();
-            for col in 0..cols {
-                let idx = col * rows + row;
-                if let Some(entry) = entries.get(idx) {
-                    line.push_str(&format!("{:<width$}", entry, width = col_width));
-                }
-            }
-            println!("{}", line.bright_black());
+    let result = loop {
+        if let Err(e) = terminal.draw(|frame| reviewer.draw(frame)) {
+            break Err(e.into());
         }
-        println!();
 
-        // Progress bar
-        let bar_width = 40;
-        let filled = if total > 1 {
-            (i * bar_width) / (total - 1)
-        } else {
-            bar_width
-        };
-        let empty = bar_width - filled;
-        println!(
-            "[{} of {}] {}{}",
-            i + 1,
-            total,
-            "\u{2501}".repeat(filled).green(),
-            "\u{2501}".repeat(empty).bright_black(),
-        );
-        println!("  Date:        {}", txn.date);
-        println!("  Description: {}", txn.description);
-        let amt_str = if txn.amount < 0.0 {
-            money(txn.amount.abs()).red().to_string()
-        } else {
-            money(txn.amount.abs()).green().to_string()
-        };
-        println!("  Amount:      {amt_str}");
-        println!("  Account:     {}", txn.account_name);
-        println!();
-
-        let allow_back = i > 0;
-        let hint = if allow_back {
-            "Category (type to filter, Esc=back, Tab=skip)"
-        } else {
-            "Category (type to filter, Tab=skip)"
-        };
-        let selection = category_pick(hint, &labels, allow_back);
-
-        match selection {
-            PickResult::Back => {
-                // Pop the previous decision — a single pop handles both
-                // categorized (Some) and skipped (None) entries.
-                i -= 1;
-                if let Some(Some(decision)) = decisions.pop() {
-                    undo_review(&conn, decision.transaction_id, decision.rule_id)?;
+        match event::read() {
+            Err(e) => break Err(e.into()),
+            Ok(Event::Key(key)) => {
+                if key.kind != KeyEventKind::Press {
+                    continue;
                 }
-                continue;
-            }
-            PickResult::Skipped => {
-                decisions.push(None);
-                i += 1;
-                continue;
-            }
-            PickResult::Selected(idx) => {
-                let cat = &categories[idx];
-
-                let vendor: String = Input::new()
-                    .with_prompt("Vendor name (Enter to skip)")
-                    .default(String::new())
-                    .interact_text()
-                    .unwrap_or_default();
-                let vendor = if vendor.is_empty() {
-                    None
-                } else {
-                    Some(vendor.as_str())
-                };
-
-                let create_rule = Confirm::new()
-                    .with_prompt("Create rule for future matches?")
-                    .default(false)
-                    .interact()
-                    .unwrap_or(false);
-
-                let mut rule_pattern = None;
-                if create_rule {
-                    let words: Vec<&str> = txn.description.split_whitespace().collect();
-                    let suggested = if words.len() >= 2 {
-                        format!("{} {}", words[0], words[1])
-                    } else {
-                        words.first().unwrap_or(&"").to_string()
-                    };
-                    let pattern: String = Input::new()
-                        .with_prompt("Rule pattern")
-                        .default(suggested)
-                        .interact_text()
-                        .unwrap_or_default();
-                    rule_pattern = Some(pattern);
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('c')
+                {
+                    interrupted = true;
+                    break Ok(());
                 }
 
-                let rule_id = apply_review(
-                    &conn,
-                    txn.id,
-                    cat.id,
-                    vendor,
-                    create_rule,
-                    rule_pattern.as_deref(),
-                )?;
-
-                decisions.push(Some(ReviewDecision {
-                    transaction_id: txn.id,
-                    rule_id,
-                }));
-
-                println!(
-                    "{}",
-                    format!("\u{2192} Categorized as {}", cat.name).green()
-                );
-                println!();
-                i += 1;
+                match reviewer.handle_key(key.code) {
+                    HandleResult::Continue => {}
+                    HandleResult::CommitAndAdvance => {
+                        if let Err(e) = reviewer.commit_review(&conn) {
+                            break Err(e);
+                        }
+                        if reviewer.is_done() {
+                            break Ok(());
+                        }
+                    }
+                    HandleResult::UndoPrevious => {
+                        if let Err(e) = reviewer.undo_previous(&conn) {
+                            break Err(e);
+                        }
+                    }
+                    HandleResult::Done => break Ok(()),
+                }
             }
+            _ => {}
         }
+    };
+
+    ratatui::restore();
+
+    match &result {
+        Ok(()) => {
+            if interrupted {
+                // Match standard SIGINT exit behavior
+                std::process::exit(130);
+            }
+            println!("{total} transactions to review");
+            println!("Review complete!");
+        }
+        Err(e) => eprintln!("Review error: {e}"),
     }
-
-    println!("{}", "Review complete!".green());
-    Ok(())
+    result
 }
