@@ -3,6 +3,12 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
 
 jobs:
   claude-review:
@@ -30,21 +36,17 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Review this PR. Focus on:
-            - Correctness and logic errors
-            - Data integrity risks (this is a financial/bookkeeping tool)
-            - Missing error handling
-            - Test coverage for new functionality
+            Please review this pull request and provide feedback on:
+            - Code quality and best practices
+            - Potential bugs or issues
+            - Performance considerations
+            - Security concerns
+            - Test coverage
 
-            Use the repository's CLAUDE.md for guidance on style and conventions.
+            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
 
-            IMPORTANT: To post your review, write the review body to a temp file first,
-            then use `gh pr comment` with `--body-file`. This avoids shell escaping issues
-            with angle brackets, quotes, and flags in Rust code snippets. Example:
+            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
 
-            1. Write your review to /tmp/review.md using the Write tool
-            2. Run: gh pr comment <PR_NUMBER> --body-file /tmp/review.md
-
-            Do NOT pass the review body inline via --body. Always use --body-file.
-
-          claude_args: '--allowed-tools "Write,Read,Glob,Grep,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(cargo test:*),Bash(cargo check:*)"'
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
