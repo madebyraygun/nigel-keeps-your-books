@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::db::get_connection;
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 use crate::reviewer::{
     apply_review, get_categories, get_flagged_transactions, undo_review, CategoryChoice,
     FlaggedTxn,
@@ -371,7 +371,9 @@ impl TransactionReviewer {
 
     pub fn commit_review(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         let txn = &self.flagged[self.current_txn];
-        let cat_idx = self.selected_category_idx.unwrap();
+        let cat_idx = self
+            .selected_category_idx
+            .ok_or_else(|| NigelError::Other("commit_review called without category".into()))?;
         let cat = &self.categories[cat_idx];
 
         let create_rule = self.confirm_value;

@@ -112,6 +112,7 @@ struct Dashboard {
     menu_selection: usize,
     home_data: Option<HomeData>,
     terminal_action: Option<TerminalCommand>,
+    status_message: Option<String>,
 }
 
 impl Dashboard {
@@ -127,6 +128,7 @@ impl Dashboard {
             menu_selection: 0,
             home_data: None,
             terminal_action: None,
+            status_message: None,
         }
     }
 
@@ -178,13 +180,13 @@ impl Dashboard {
         let cashflow_income: Vec<u64> = cashflow
             .months
             .iter()
-            .map(|m| m.inflows as u64)
+            .map(|m| m.inflows.max(0.0) as u64)
             .collect();
 
         let cashflow_expenses: Vec<u64> = cashflow
             .months
             .iter()
-            .map(|m| m.outflows.abs() as u64)
+            .map(|m| m.outflows.abs().max(0.0) as u64)
             .collect();
 
         // Top 5 expense categories (pnl.expenses is sorted by total ASC, most negative first)
@@ -453,12 +455,19 @@ impl Dashboard {
             .collect();
         frame.render_widget(Paragraph::new(right_lines), menu_right);
 
-        // Hints
-        frame.render_widget(
-            Paragraph::new(" Up/Down=navigate  Enter=select  r=refresh  q=quit")
-                .style(FOOTER_STYLE),
-            hints_area,
-        );
+        // Hints / status message
+        if let Some(msg) = &self.status_message {
+            frame.render_widget(
+                Paragraph::new(format!(" {msg}")).style(Style::default().fg(Color::Yellow)),
+                hints_area,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(" Up/Down=navigate  Enter=select  r=refresh  q=quit")
+                    .style(FOOTER_STYLE),
+                hints_area,
+            );
+        }
     }
 
     fn draw_picker(&self, frame: &mut Frame, title: &str, items: &[&str], selection: usize) {
@@ -504,7 +513,7 @@ impl Dashboard {
         frame.render_widget(Paragraph::new(lines), content_area);
 
         frame.render_widget(
-            Paragraph::new(" Up/Down=navigate  Enter=select  Esc=back").style(FOOTER_STYLE),
+            Paragraph::new(" Up/Down=navigate  Enter=select  Esc=back  q=quit").style(FOOTER_STYLE),
             hints_area,
         );
     }
@@ -526,6 +535,7 @@ impl Dashboard {
     }
 
     fn handle_home_key(&mut self, code: KeyCode, conn: &rusqlite::Connection) -> bool {
+        self.status_message = None;
         match code {
             KeyCode::Up => {
                 self.menu_selection = self.menu_selection.saturating_sub(1);
@@ -550,30 +560,42 @@ impl Dashboard {
         false
     }
 
-    fn enter_browse(&self, conn: &rusqlite::Connection) -> DashboardScreen {
+    fn enter_browse(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
         let year = chrono::Local::now().year();
         match reports::get_register(conn, Some(year), None, None, None, None) {
             Ok(data) => {
+                self.status_message = None;
                 let browser =
                     RegisterBrowser::new(data.rows, data.total, format!("year: {year}"));
                 DashboardScreen::Browse(browser)
             }
-            Err(_) => DashboardScreen::Home,
+            Err(e) => {
+                self.status_message = Some(format!("Could not load register: {e}"));
+                DashboardScreen::Home
+            }
         }
     }
 
-    fn enter_review(&self, conn: &rusqlite::Connection) -> DashboardScreen {
+    fn enter_review(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
         let flagged = match get_flagged_transactions(conn) {
             Ok(f) => f,
-            Err(_) => return DashboardScreen::Home,
+            Err(e) => {
+                self.status_message = Some(format!("Could not load flagged transactions: {e}"));
+                return DashboardScreen::Home;
+            }
         };
         if flagged.is_empty() {
+            self.status_message = Some("No flagged transactions to review.".to_string());
             return DashboardScreen::Home;
         }
         let categories = match get_categories(conn) {
             Ok(c) => c,
-            Err(_) => return DashboardScreen::Home,
+            Err(e) => {
+                self.status_message = Some(format!("Could not load categories: {e}"));
+                return DashboardScreen::Home;
+            }
         };
+        self.status_message = None;
         DashboardScreen::Review(TransactionReviewer::new(flagged, categories))
     }
 }
@@ -583,7 +605,7 @@ fn y_axis_ticks(max_val: f64) -> (f64, f64) {
     // Round steps: 1k, 2.5k, 5k, 10k, 25k, 50k, 100k, 250k, ...
     let steps = [
         1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0, 100000.0, 250000.0, 500000.0,
-        1000000.0,
+        1000000.0, 2500000.0, 5000000.0, 10000000.0,
     ];
     let top = steps
         .iter()
