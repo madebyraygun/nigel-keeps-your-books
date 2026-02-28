@@ -78,6 +78,7 @@ Do not merge or mark work complete if docs are stale.
 ## Key Design Constraints
 
 - All financial modifications require user confirmation — auto-categorizes but never silently changes confirmed data
+- Interactive review supports back navigation: Esc goes back to re-review the previous transaction (undoing its categorization and any created rule), Tab skips forward
 - Duplicate detection uses file checksums (imports table) and transaction-level matching (date + amount + description + account)
 - Rules are ordered by priority DESC; first match wins
 - Gusto imports extract only aggregate totals, never individual employee data
@@ -85,6 +86,8 @@ Do not merge or mark work complete if docs are stale.
 - `ImporterKind::detect()` inspects file headers for format auto-detection; `--format` CLI flag overrides auto-detect
 - Demo data is inserted directly into the DB (no CSV files); idempotency guard checks for existing account
 - Cash amounts are plain `f64` — negative = expense, positive = income
+- Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
+- Database row deserialization errors are propagated, never silently discarded
 
 ## Project Structure
 

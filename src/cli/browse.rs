@@ -24,15 +24,18 @@ pub fn register(
         account.as_deref(),
     )?;
 
-    // Build filters description
+    // Build filters description — show effective values
     let mut filters = Vec::new();
     if let Some(ref m) = month {
         filters.push(format!("month: {m}"));
-    }
-    if let Some(yr) = y {
-        if month.is_none() {
-            filters.push(format!("year: {yr}"));
+        // If --year was also passed and differs from the month's year, show it
+        if let Some(yr) = year {
+            if my != Some(yr) {
+                filters.push(format!("year: {yr}"));
+            }
         }
+    } else if let Some(yr) = y {
+        filters.push(format!("year: {yr}"));
     }
     if let Some(ref from) = from_date {
         filters.push(format!("from: {from}"));
@@ -46,8 +49,7 @@ pub fn register(
     let filters_desc = filters.join(", ");
 
     let total = data.total;
-    let count = data.count;
-    let mut browser = RegisterBrowser::new(data.rows, total, count, filters_desc);
+    let mut browser = RegisterBrowser::new(data.rows, total, filters_desc);
     browser.run()?;
     Ok(())
 }

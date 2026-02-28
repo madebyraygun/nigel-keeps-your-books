@@ -407,7 +407,7 @@ pub fn render_register(
     pdf.header(
         "Transaction Register",
         company,
-        &format!("{date_range} — {} transactions", report.count),
+        &format!("{date_range} — {} transactions", report.rows.len()),
     );
 
     let cols = &[
@@ -433,7 +433,7 @@ pub fn render_register(
 
     pdf.separator();
     let total = money(report.total);
-    let count_label = format!("{} transactions", report.count);
+    let count_label = format!("{} transactions", report.rows.len());
     pdf.table_row(cols, &[&count_label, "", &total, "", ""], true);
 
     pdf.to_bytes()

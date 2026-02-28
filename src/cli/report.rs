@@ -189,7 +189,7 @@ pub fn register(
             Cell::new(&r.account_name),
         ]);
     }
-    println!("Transaction Register ({} transactions, net: {})\n{table}", data.count, money(data.total));
+    println!("Transaction Register ({} transactions, net: {})\n{table}", data.rows.len(), money(data.total));
     Ok(())
 }
 
