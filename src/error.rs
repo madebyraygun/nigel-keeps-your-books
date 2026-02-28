@@ -30,7 +30,6 @@ pub enum NigelError {
     #[error("PDF error: {0}")]
     Pdf(String),
 
-    #[allow(dead_code)]
     #[error("{0}")]
     Other(String),
 }

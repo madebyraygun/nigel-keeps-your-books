@@ -13,24 +13,21 @@ fn date_filter(
     from_date: Option<&str>,
     to_date: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
-    match (from_date, to_date) {
-        (Some(from), Some(to)) => {
-            return Ok((
-                "t.date BETWEEN ?1 AND ?2".to_string(),
-                vec![from.to_string(), to.to_string()],
-            ));
-        }
-        (Some(_), None) => {
-            return Err(crate::error::NigelError::Other(
-                "--from requires --to (both date boundaries must be specified)".to_string(),
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(crate::error::NigelError::Other(
-                "--to requires --from (both date boundaries must be specified)".to_string(),
-            ));
-        }
-        (None, None) => {}
+    if let (Some(from), Some(to)) = (from_date, to_date) {
+        return Ok((
+            "t.date BETWEEN ?1 AND ?2".to_string(),
+            vec![from.to_string(), to.to_string()],
+        ));
+    }
+    if from_date.is_some() {
+        return Err(crate::error::NigelError::Other(
+            "--from requires --to (both date boundaries must be specified)".to_string(),
+        ));
+    }
+    if to_date.is_some() {
+        return Err(crate::error::NigelError::Other(
+            "--to requires --from (both date boundaries must be specified)".to_string(),
+        ));
     }
     if let (Some(y), Some(m)) = (year, month) {
         let prefix = format!("{y:04}-{m:02}");
@@ -140,6 +137,8 @@ pub fn get_expense_breakdown(
     year: Option<i32>,
     month: Option<u32>,
 ) -> Result<ExpenseBreakdown> {
+    // Custom date ranges (--from/--to) not supported here; expense breakdown
+    // is scoped by year/month only, matching the CLI subcommand interface.
     let (clause, params) = date_filter(year, month, None, None)?;
 
     let sql = format!(
@@ -612,6 +611,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_pnl(&conn, Some(2025), None, None, None).unwrap();
+        // seed_transactions: 1×1000.0 income, 2 expenses (−50.0 + −10.0 = −60.0)
         assert_eq!(report.total_income, 1000.0);
         assert_eq!(report.total_expenses, -60.0);
         assert_eq!(report.net, 940.0);
@@ -622,6 +622,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_pnl(&conn, Some(2025), Some(1), None, None).unwrap();
+        // seed_transactions Jan only: 1×1000.0 income, 1×−50.0 expense (GitHub −10.0 is Feb)
         assert_eq!(report.total_income, 1000.0);
         assert_eq!(report.total_expenses, -50.0);
         assert_eq!(report.net, 950.0);
@@ -632,6 +633,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let breakdown = get_expense_breakdown(&conn, Some(2025), None).unwrap();
+        // seed_transactions: 2 expenses in "Software & Subscriptions" (−50.0 + −10.0)
         assert_eq!(breakdown.categories.len(), 1);
         assert_eq!(breakdown.categories[0].name, "Software & Subscriptions");
         assert_eq!(breakdown.categories[0].count, 2);
@@ -708,7 +710,7 @@ mod tests {
     #[test]
     fn test_date_filter_rejects_to_without_from() {
         let (_dir, conn) = test_db();
-        let result = get_register(&conn, None, None, None, Some("2025-12-31"), None);
+        let result = get_pnl(&conn, None, None, None, Some("2025-12-31"));
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
         assert!(msg.contains("--to requires --from"), "got: {msg}");
@@ -718,6 +720,7 @@ mod tests {
     fn test_date_filter_accepts_both_from_and_to() {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
+        // Jan range captures: 1×1000.0 income, 1×−50.0 expense (GitHub −10.0 is Feb)
         let report = get_pnl(&conn, None, None, Some("2025-01-01"), Some("2025-01-31")).unwrap();
         assert_eq!(report.total_income, 1000.0);
         assert_eq!(report.total_expenses, -50.0);
