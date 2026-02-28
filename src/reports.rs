@@ -279,6 +279,7 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
 // ---------------------------------------------------------------------------
 
 pub struct RegisterRow {
+    pub id: i64,
     pub date: String,
     pub description: String,
     pub amount: f64,
@@ -290,7 +291,6 @@ pub struct RegisterRow {
 pub struct RegisterReport {
     pub rows: Vec<RegisterRow>,
     pub total: f64,
-    pub count: usize,
 }
 
 pub fn get_register(
@@ -311,7 +311,7 @@ pub fn get_register(
     };
 
     let sql = format!(
-        "SELECT t.date, t.description, t.amount, c.name, t.vendor, a.name \
+        "SELECT t.id, t.date, t.description, t.amount, c.name, t.vendor, a.name \
          FROM transactions t \
          JOIN accounts a ON t.account_id = a.id \
          LEFT JOIN categories c ON t.category_id = c.id \
@@ -326,19 +326,19 @@ pub fn get_register(
     let rows: Vec<RegisterRow> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok(RegisterRow {
-                date: row.get(0)?,
-                description: row.get(1)?,
-                amount: row.get(2)?,
-                category: row.get(3)?,
-                vendor: row.get(4)?,
-                account_name: row.get(5)?,
+                id: row.get(0)?,
+                date: row.get(1)?,
+                description: row.get(2)?,
+                amount: row.get(3)?,
+                category: row.get(4)?,
+                vendor: row.get(5)?,
+                account_name: row.get(6)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: f64 = rows.iter().map(|r| r.amount).sum();
-    let count = rows.len();
-    Ok(RegisterReport { rows, total, count })
+    Ok(RegisterReport { rows, total })
 }
 
 // ---------------------------------------------------------------------------
@@ -645,7 +645,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_register(&conn, Some(2025), None, None, None, None).unwrap();
-        assert_eq!(report.count, 3);
+        assert_eq!(report.rows.len(), 3);
         // First two are categorized, all should appear
         assert!(report.rows.iter().all(|r| r.category.is_some()));
     }
@@ -666,7 +666,7 @@ mod tests {
         )
         .unwrap();
         let report = get_register(&conn, Some(2025), None, None, None, None).unwrap();
-        assert_eq!(report.count, 1);
+        assert_eq!(report.rows.len(), 1);
         assert!(report.rows[0].category.is_none());
     }
 
@@ -676,10 +676,10 @@ mod tests {
         seed_transactions(&conn);
         let report =
             get_register(&conn, Some(2025), None, None, None, Some("Test")).unwrap();
-        assert_eq!(report.count, 3);
+        assert_eq!(report.rows.len(), 3);
         let report =
             get_register(&conn, Some(2025), None, None, None, Some("Nonexistent")).unwrap();
-        assert_eq!(report.count, 0);
+        assert_eq!(report.rows.len(), 0);
     }
 
     #[test]

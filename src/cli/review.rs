@@ -171,8 +171,8 @@ pub fn run() -> Result<()> {
             })
             .collect();
         let col_width = entries.iter().map(|e| e.len()).max().unwrap_or(20) + 2;
-        let term_width = terminal_size::terminal_size()
-            .map(|(w, _)| w.0 as usize)
+        let term_width = crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
             .unwrap_or(80);
         let cols = (term_width / col_width).max(1);
         let rows = (entries.len() + cols - 1) / cols;

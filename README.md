@@ -15,6 +15,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
+- **Interactive browser** — paginated register browser with keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF, individually or all at once
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
@@ -62,6 +63,10 @@ nigel report tax --year 2025
 nigel report cashflow
 nigel report balance
 nigel report flagged
+
+# Interactive register browser
+nigel browse register --year 2025
+nigel browse register --account "BofA Checking"
 
 # Export reports to PDF
 nigel export pnl --year 2025

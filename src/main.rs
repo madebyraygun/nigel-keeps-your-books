@@ -1,3 +1,4 @@
+mod browser;
 mod categorizer;
 mod cli;
 mod db;
@@ -5,6 +6,7 @@ mod error;
 mod fmt;
 mod importer;
 mod models;
+mod tui;
 #[cfg(feature = "pdf")]
 mod pdf;
 mod reconciler;
@@ -16,7 +18,7 @@ use clap::Parser;
 
 #[cfg(feature = "pdf")]
 use cli::ExportCommands;
-use cli::{AccountsCommands, Cli, Commands, ReportCommands, RulesCommands};
+use cli::{AccountsCommands, BrowseCommands, Cli, Commands, ReportCommands, RulesCommands};
 
 fn main() {
     let cli = Cli::parse();
@@ -79,6 +81,15 @@ fn main() {
             ReportCommands::Flagged => cli::report::flagged(),
             ReportCommands::Balance => cli::report::balance(),
             ReportCommands::K1 { year } => cli::report::k1(year),
+        },
+        Commands::Browse { command } => match command {
+            BrowseCommands::Register {
+                month,
+                year,
+                from_date,
+                to_date,
+                account,
+            } => cli::browse::register(month, year, from_date, to_date, account),
         },
         #[cfg(feature = "pdf")]
         Commands::Export { command } => match command {
