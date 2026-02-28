@@ -134,17 +134,13 @@ impl TransactionReviewer {
         frame.render_widget(Paragraph::new(chart_lines), chart_area);
 
         // Progress bar
-        let ratio = if total > 1 {
-            self.current_txn as f64 / (total - 1) as f64
-        } else {
-            1.0
-        };
+        let ratio = (self.current_txn + 1) as f64 / total as f64;
         let gauge = LineGauge::default()
-            .label(format!("{} of {}", self.current_txn + 1, total))
+            .label(format!("{}/{}", self.current_txn + 1, total))
             .ratio(ratio)
-            .filled_style(Style::default().fg(Color::Green).bold())
-            .unfilled_style(Style::default().fg(Color::DarkGray))
-            .line_set(ratatui::symbols::line::THICK);
+            .filled_style(Style::default().fg(Color::Rgb(80, 220, 100)).bold())
+            .unfilled_style(Style::default().fg(Color::Rgb(60, 60, 60)))
+            .line_set(ratatui::symbols::line::DOUBLE);
         frame.render_widget(gauge, progress_area);
 
         // Transaction details
@@ -191,13 +187,13 @@ impl TransactionReviewer {
             ReviewState::ConfirmRule => {
                 let (yes_style, no_style) = if self.confirm_value {
                     (
-                        Style::default().fg(Color::White).bg(Color::Blue),
+                        Style::default().fg(Color::Black).bg(Color::Gray),
                         Style::default(),
                     )
                 } else {
                     (
                         Style::default(),
-                        Style::default().fg(Color::White).bg(Color::Blue),
+                        Style::default().fg(Color::Black).bg(Color::Gray),
                     )
                 };
                 vec![Line::from(vec![
