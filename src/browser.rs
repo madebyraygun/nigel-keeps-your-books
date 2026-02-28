@@ -552,6 +552,7 @@ impl RegisterBrowser {
                 }
             }
             KeyCode::Down => {
+                // Compute count before mutably borrowing self.mode (borrow checker constraint)
                 let count = self.filtered_categories().len();
                 if let BrowseMode::EditCategory { selection, .. } = &mut self.mode {
                     if count > 0 && *selection + 1 < count {
@@ -645,7 +646,9 @@ impl RegisterBrowser {
 
     pub fn commit_edit(&mut self, conn: &rusqlite::Connection) -> crate::error::Result<()> {
         let abs_idx = self.offset + self.selected;
-        let txn_id = self.rows[abs_idx].id;
+        let row = self.rows.get(abs_idx)
+            .ok_or_else(|| crate::error::NigelError::Other("No row selected".into()))?;
+        let txn_id = row.id;
 
         if let Some(cat_idx) = self.pending_category_idx {
             let cat_id = self.categories[cat_idx].id;
@@ -662,18 +665,23 @@ impl RegisterBrowser {
         Ok(())
     }
 
+    /// Toggle the flag on the selected transaction.
+    /// Flags are non-destructive metadata — single-keypress toggle is intentional
+    /// since it's instantly reversible (press `f` again).
+    pub fn set_status(&mut self, msg: String) {
+        self.status_message = Some(msg);
+    }
+
     pub fn toggle_flag(&mut self, conn: &rusqlite::Connection) -> crate::error::Result<()> {
         let abs_idx = self.offset + self.selected;
-        let txn_id = self.rows[abs_idx].id;
+        let row = self.rows.get(abs_idx)
+            .ok_or_else(|| crate::error::NigelError::Other("No row selected".into()))?;
+        let txn_id = row.id;
         let new_state = crate::reviewer::toggle_transaction_flag(conn, txn_id)?;
         self.apply_flag_toggle_to_local_row(new_state);
         let label = if new_state { "flagged" } else { "unflagged" };
         self.status_message = Some(format!("Transaction #{txn_id} {label}"));
         Ok(())
-    }
-
-    pub fn selected_txn_id(&self) -> i64 {
-        self.rows[self.offset + self.selected].id
     }
 }
 

@@ -857,14 +857,12 @@ pub fn run() -> Result<()> {
                                 BrowseAction::Continue => {}
                                 BrowseAction::CommitEdit => {
                                     if let Err(e) = browser.commit_edit(&conn) {
-                                        dashboard.status_message = Some(format!("Edit failed: {e}"));
-                                        return_home = true;
+                                        browser.set_status(format!("Edit failed: {e}"));
                                     }
                                 }
                                 BrowseAction::ToggleFlag => {
                                     if let Err(e) = browser.toggle_flag(&conn) {
-                                        dashboard.status_message = Some(format!("Flag toggle failed: {e}"));
-                                        return_home = true;
+                                        browser.set_status(format!("Flag toggle failed: {e}"));
                                     }
                                 }
                             }
