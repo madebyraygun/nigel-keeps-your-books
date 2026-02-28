@@ -2,7 +2,7 @@ use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rand::seq::SliceRandom;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
@@ -13,7 +13,7 @@ use crate::browser::RegisterBrowser;
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::db::get_connection;
 use crate::error::Result;
-use crate::fmt::money;
+use crate::fmt::{money, number};
 use crate::reports;
 use crate::reviewer::{get_categories, get_flagged_transactions};
 use crate::settings::get_data_dir;
@@ -192,7 +192,6 @@ impl Dashboard {
         let area = frame.area();
         let border_style = Style::default().fg(Color::DarkGray);
 
-        // Menu rows = max(left_count, right_count) + 1 for title
         let menu_rows = MENU_LEFT_COUNT as u16 + 1;
 
         let [header_area, sep1, stats_area, sep2, charts_area, sep3, menu_area, hints_area] =
@@ -208,7 +207,7 @@ impl Dashboard {
             ])
             .areas(area);
 
-        // Header — branding + greeting
+        // Header
         frame.render_widget(
             Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
             header_area,
@@ -222,59 +221,101 @@ impl Dashboard {
         frame.render_widget(sep_widget.clone(), sep3);
 
         if let Some(data) = &self.home_data {
-            // Stats + Balances side by side
+            // Stats + Balances — same 50/50 split used for charts below
             let [left_area, right_area] = Layout::horizontal([
                 Constraint::Percentage(50),
                 Constraint::Percentage(50),
             ])
             .areas(stats_area);
 
-            // YTD summary
+            // YTD summary — 1-space indent to align with "N" in " Nigel:"
             let stats_lines = vec![
                 Line::from(vec![
-                    Span::raw("  YTD Income    "),
+                    Span::raw(" YTD Income     "),
                     money_span(data.total_income),
                 ]),
                 Line::from(vec![
-                    Span::raw("  YTD Expenses "),
+                    Span::raw(" YTD Expenses   "),
                     money_span(data.total_expenses),
                 ]),
                 Line::from(vec![
-                    Span::raw("  Net Profit    "),
+                    Span::raw(" Net Profit     "),
                     money_span(data.net),
                 ]),
                 Line::from(format!(
-                    "  Transactions  {}",
-                    money(data.txn_count as f64)
+                    " Transactions   {}",
+                    number(data.txn_count)
                 )),
-                Line::from(format!("  Flagged       {}", data.flagged_count)),
+                Line::from(format!(" Flagged        {}", data.flagged_count)),
             ];
             frame.render_widget(Paragraph::new(stats_lines), left_area);
 
             // Account balances
             let mut balance_lines = vec![Line::from(Span::styled(
-                "  Account Balances",
+                " Account Balances",
                 Style::default().add_modifier(Modifier::BOLD),
             ))];
             for (name, bal) in &data.balances {
                 balance_lines.push(Line::from(vec![
-                    Span::raw(format!("  {:<20}", name)),
+                    Span::raw(format!(" {:<20}", name)),
                     money_span(*bal),
                 ]));
             }
             frame.render_widget(Paragraph::new(balance_lines), right_area);
 
-            // Charts side by side: bar chart (left) + top expenses (right)
+            // Charts — same 50/50 split so right column aligns with Account Balances
             let [chart_left, chart_right] = Layout::horizontal([
-                Constraint::Percentage(60),
-                Constraint::Percentage(40),
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
             ])
             .areas(charts_area);
 
-            // Monthly Cash Flow bar chart
+            // Monthly Cash Flow bar chart with y-axis labels
             if !data.cashflow_labels.is_empty() {
                 let income_style = Style::default().fg(Color::Green);
                 let expense_style = Style::default().fg(Color::Red);
+
+                // Compute max value for y-axis
+                let max_val = data
+                    .cashflow_income
+                    .iter()
+                    .chain(data.cashflow_expenses.iter())
+                    .copied()
+                    .max()
+                    .unwrap_or(1);
+
+                // Y-axis label width: " $XX,XXX " — use money format of max value
+                let max_label = money(max_val as f64);
+                let y_label_width = (max_label.len() + 1) as u16;
+
+                let [y_axis_area, bar_area] = Layout::horizontal([
+                    Constraint::Length(y_label_width),
+                    Constraint::Fill(1),
+                ])
+                .areas(chart_left);
+
+                // Y-axis labels: max at top, mid at middle, 0 at bottom
+                let inner_height = bar_area.height.saturating_sub(2); // title + month labels
+                let mid_val = max_val / 2;
+                let mid_row = inner_height / 2;
+                let mut y_lines: Vec<Line> = Vec::new();
+                y_lines.push(Line::from("")); // title row
+                for row in 0..inner_height {
+                    if row == 0 {
+                        y_lines.push(Line::from(Span::styled(
+                            format!("{:>width$}", money(max_val as f64), width = y_label_width as usize),
+                            FOOTER_STYLE,
+                        )));
+                    } else if row == mid_row {
+                        y_lines.push(Line::from(Span::styled(
+                            format!("{:>width$}", money(mid_val as f64), width = y_label_width as usize),
+                            FOOTER_STYLE,
+                        )));
+                    } else {
+                        y_lines.push(Line::from(""));
+                    }
+                }
+                frame.render_widget(Paragraph::new(y_lines), y_axis_area);
 
                 let groups: Vec<BarGroup> = data
                     .cashflow_labels
@@ -306,38 +347,29 @@ impl Dashboard {
                 for group in &groups {
                     chart = chart.data(group.clone());
                 }
-                frame.render_widget(chart, chart_left);
+                frame.render_widget(chart, bar_area);
             }
 
-            // Top Expenses by Category — horizontal bar chart
+            // Top Expenses — simple text table (no bars)
             if !data.top_expenses.is_empty() {
-                let bar_data: Vec<Bar> = data
+                let name_width = data
                     .top_expenses
                     .iter()
-                    .map(|(name, val)| {
-                        Bar::default()
-                            .value(*val as u64)
-                            .label(Line::from(name.as_str()))
-                            .style(Style::default().fg(Color::Red))
-                            .value_style(Style::default().fg(Color::White))
-                            .text_value(money(*val))
-                    })
-                    .collect();
+                    .map(|(n, _)| n.len())
+                    .max()
+                    .unwrap_or(10);
 
-                let group = BarGroup::default().bars(&bar_data);
-
-                let block = Block::default()
-                    .title(" Top Expenses ")
-                    .title_style(Style::default().add_modifier(Modifier::BOLD))
-                    .borders(Borders::NONE);
-
-                let chart = BarChart::default()
-                    .block(block)
-                    .direction(Direction::Horizontal)
-                    .data(group)
-                    .bar_width(1)
-                    .bar_gap(0);
-                frame.render_widget(chart, chart_right);
+                let mut lines = vec![Line::from(Span::styled(
+                    " Top Expenses",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ))];
+                for (name, val) in &data.top_expenses {
+                    lines.push(Line::from(vec![
+                        Span::raw(format!(" {:<width$}  ", name, width = name_width)),
+                        money_span(-val), // negative to show as expense (red)
+                    ]));
+                }
+                frame.render_widget(Paragraph::new(lines), chart_right);
             }
         }
 
@@ -356,7 +388,7 @@ impl Dashboard {
 
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "  What would you like to do?",
+                " What would you like to do?",
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             menu_title_area,
@@ -368,13 +400,11 @@ impl Dashboard {
         ])
         .areas(menu_cols_area);
 
-        // Left column: items 0..MENU_LEFT_COUNT
         let left_lines: Vec<Line> = (0..MENU_LEFT_COUNT)
             .map(|i| self.menu_item_line(i, flagged_count))
             .collect();
         frame.render_widget(Paragraph::new(left_lines), menu_left);
 
-        // Right column: items MENU_LEFT_COUNT..
         let right_lines: Vec<Line> = (MENU_LEFT_COUNT..MENU_ITEMS.len())
             .map(|i| self.menu_item_line(i, flagged_count))
             .collect();
@@ -392,9 +422,9 @@ impl Dashboard {
         let marker = if i == self.menu_selection { ">" } else { " " };
         let item = MENU_ITEMS[i];
         let label = if i == 2 {
-            format!("  {marker} {item} ({flagged_count})")
+            format!(" {marker} {item} ({flagged_count})")
         } else {
-            format!("  {marker} {item}")
+            format!(" {marker} {item}")
         };
         let style = if i == self.menu_selection {
             Style::default().add_modifier(Modifier::BOLD)

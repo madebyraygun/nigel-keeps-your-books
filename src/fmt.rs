@@ -23,6 +23,25 @@ pub fn money(val: f64) -> String {
     }
 }
 
+/// Format an integer with thousands separators: 1,224
+pub fn number(val: i64) -> String {
+    let negative = val < 0;
+    let abs = val.unsigned_abs().to_string();
+    let mut with_commas = String::new();
+    for (i, c) in abs.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            with_commas.push(',');
+        }
+        with_commas.push(c);
+    }
+    let with_commas: String = with_commas.chars().rev().collect();
+    if negative {
+        format!("-{with_commas}")
+    } else {
+        with_commas
+    }
+}
+
 /// Format a byte count as a human-readable string: "1.2 KB", "3.4 MB"
 pub fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
