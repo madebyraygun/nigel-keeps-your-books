@@ -99,6 +99,43 @@ pub fn undo_review(
     Ok(())
 }
 
+pub fn update_transaction_category(
+    conn: &Connection,
+    transaction_id: i64,
+    category_id: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE transactions SET category_id = ?1 WHERE id = ?2",
+        rusqlite::params![category_id, transaction_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_transaction_vendor(
+    conn: &Connection,
+    transaction_id: i64,
+    vendor: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE transactions SET vendor = ?1 WHERE id = ?2",
+        rusqlite::params![vendor, transaction_id],
+    )?;
+    Ok(())
+}
+
+pub fn toggle_transaction_flag(conn: &Connection, transaction_id: i64) -> Result<bool> {
+    conn.execute(
+        "UPDATE transactions SET is_flagged = NOT is_flagged WHERE id = ?1",
+        rusqlite::params![transaction_id],
+    )?;
+    let new_state: bool = conn.query_row(
+        "SELECT is_flagged FROM transactions WHERE id = ?1",
+        rusqlite::params![transaction_id],
+        |row| row.get(0),
+    )?;
+    Ok(new_state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +248,53 @@ mod tests {
         ).unwrap();
         assert_eq!(is_flagged, 1);
         assert!(category_id.is_none());
+    }
+
+    #[test]
+    fn test_update_transaction_category() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn);
+        let cat_id: i64 = conn.query_row(
+            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
+        ).unwrap();
+
+        update_transaction_category(&conn, txn_id, cat_id).unwrap();
+
+        let stored: Option<i64> = conn.query_row(
+            "SELECT category_id FROM transactions WHERE id = ?1", [txn_id], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(stored, Some(cat_id));
+    }
+
+    #[test]
+    fn test_update_transaction_vendor() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn);
+
+        update_transaction_vendor(&conn, txn_id, Some("Adobe")).unwrap();
+
+        let vendor: Option<String> = conn.query_row(
+            "SELECT vendor FROM transactions WHERE id = ?1", [txn_id], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(vendor.as_deref(), Some("Adobe"));
+
+        // Clear vendor
+        update_transaction_vendor(&conn, txn_id, None).unwrap();
+        let vendor2: Option<String> = conn.query_row(
+            "SELECT vendor FROM transactions WHERE id = ?1", [txn_id], |r| r.get(0),
+        ).unwrap();
+        assert!(vendor2.is_none());
+    }
+
+    #[test]
+    fn test_toggle_transaction_flag() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn); // starts flagged
+
+        let new_state = toggle_transaction_flag(&conn, txn_id).unwrap();
+        assert!(!new_state); // was flagged, now unflagged
+
+        let new_state2 = toggle_transaction_flag(&conn, txn_id).unwrap();
+        assert!(new_state2); // toggled back to flagged
     }
 }
