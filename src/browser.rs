@@ -3,6 +3,8 @@ use std::io;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout},
+    style::{Color, Style},
+    text::{Line, Span},
     widgets::{Cell, Paragraph, Row, Table, TableState},
     DefaultTerminal, Frame,
 };
@@ -100,13 +102,28 @@ impl RegisterBrowser {
         let area = frame.area();
         let narrow = area.width < 120;
 
-        let [title_area, table_area, status_area, keys_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
+        let edit_height: u16 = match &self.mode {
+            BrowseMode::EditCategory { .. } => {
+                let matches = self.filtered_categories().len();
+                1 + matches.min(9) as u16
+            }
+            BrowseMode::EditVendor(_) => 1,
+            _ => 0,
+        };
+
+        let areas = Layout::vertical([
+            Constraint::Length(1),      // title
+            Constraint::Fill(1),        // table
+            Constraint::Length(edit_height), // edit panel
+            Constraint::Length(1),      // status
+            Constraint::Length(1),      // keys
         ])
-        .areas(area);
+        .split(area);
+        let title_area = areas[0];
+        let table_area = areas[1];
+        let edit_area = areas[2];
+        let status_area = areas[3];
+        let keys_area = areas[4];
 
         // Title
         frame.render_widget(
@@ -116,9 +133,9 @@ impl RegisterBrowser {
 
         // Compute description column width from fixed columns + spacing
         let (fixed_cols, num_cols): (u16, u16) = if narrow {
-            (6 + 10 + 12 + 28, 5)
+            (2 + 6 + 10 + 12 + 28, 6)
         } else {
-            (6 + 10 + 12 + 28 + 20 + 20, 7)
+            (2 + 6 + 10 + 12 + 28 + 20 + 20, 8)
         };
         let spacing = num_cols - 1;
         let desc_width = table_area
@@ -143,9 +160,11 @@ impl RegisterBrowser {
 
             let cat = row_data.category.as_deref().unwrap_or("\u{2014}").to_string();
             let amt = tui::money_span(row_data.amount);
+            let flag_cell = Cell::from(if row_data.is_flagged { "!" } else { "" });
 
             let cells: Vec<Cell> = if narrow {
                 vec![
+                    flag_cell,
                     Cell::from(row_data.id.to_string()),
                     Cell::from(row_data.date.clone()),
                     Cell::from(wrapped_desc),
@@ -155,6 +174,7 @@ impl RegisterBrowser {
             } else {
                 let vendor = row_data.vendor.as_deref().unwrap_or("").to_string();
                 vec![
+                    flag_cell,
                     Cell::from(row_data.id.to_string()),
                     Cell::from(row_data.date.clone()),
                     Cell::from(wrapped_desc),
@@ -175,6 +195,7 @@ impl RegisterBrowser {
         // Table column constraints
         let widths: Vec<Constraint> = if narrow {
             vec![
+                Constraint::Length(2),
                 Constraint::Length(6),
                 Constraint::Length(10),
                 Constraint::Fill(1),
@@ -183,6 +204,7 @@ impl RegisterBrowser {
             ]
         } else {
             vec![
+                Constraint::Length(2),
                 Constraint::Length(6),
                 Constraint::Length(10),
                 Constraint::Fill(1),
@@ -194,9 +216,10 @@ impl RegisterBrowser {
         };
 
         let header_cells: Vec<&str> = if narrow {
-            vec!["ID", "Date", "Description", "Amount", "Category"]
+            vec!["", "ID", "Date", "Description", "Amount", "Category"]
         } else {
             vec![
+                "",
                 "ID",
                 "Date",
                 "Description",
@@ -214,6 +237,35 @@ impl RegisterBrowser {
             .row_highlight_style(SELECTED_STYLE);
 
         frame.render_stateful_widget(table, table_area, &mut self.table_state);
+
+        // Edit panel
+        if edit_height > 0 {
+            let edit_lines: Vec<Line> = match &self.mode {
+                BrowseMode::EditCategory { query, selection } => {
+                    let matches = self.filtered_categories();
+                    let mut lines = vec![Line::from(format!("  Category: {query}\u{2588}"))];
+                    if !query.is_empty() && matches.is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            "    (no matches)",
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    } else {
+                        for (i, (_, label)) in matches.iter().enumerate() {
+                            let marker = if i == *selection { ">" } else { " " };
+                            lines.push(Line::from(format!("  {marker} {label}")));
+                        }
+                    }
+                    lines
+                }
+                BrowseMode::EditVendor(input) => {
+                    vec![Line::from(format!(
+                        "  Vendor (Enter to skip): {input}\u{2588}"
+                    ))]
+                }
+                _ => vec![],
+            };
+            frame.render_widget(Paragraph::new(edit_lines), edit_area);
+        }
 
         // Status line
         let end_row = (self.offset + self.visible_count).min(self.rows.len());
