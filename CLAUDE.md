@@ -8,10 +8,11 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, browse, export, load, backup, status
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, browse, export, load, backup, status
 - **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_loc, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
-- **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`) for interactive screens; `browser.rs` and `cli/review.rs` use ratatui `Terminal::draw()` render loop
+- **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`) for interactive screens; `browser.rs`, `cli/review.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
+- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse and Review screens; remaining commands are stubs
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with scroll navigation and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
@@ -26,6 +27,7 @@ cargo build                                       # Debug build
 cargo build --release                             # Release build
 cargo test                                        # Run all tests
 cargo test --no-default-features                  # Test without gusto/pdf features
+nigel                                             # Interactive dashboard (default)
 nigel --help                                      # CLI help
 nigel init                                        # Initialize (prompts for data dir on first run)
 nigel init --data-dir ~/my-books                  # Initialize with custom data dir
@@ -96,6 +98,7 @@ src/
   main.rs               # Entry point, command dispatch
   cli/                  # CLI subcommands
     mod.rs              # Clap structs (Cli, Commands, subcommands), shared helpers
+    dashboard.rs        # nigel (no args) — interactive dashboard with inline screen transitions
     init.rs             # nigel init
     demo.rs             # nigel demo (sample data)
     accounts.rs         # nigel accounts add/list

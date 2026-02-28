@@ -8,6 +8,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 
 ## Features
 
+- **Interactive dashboard** — run `nigel` with no arguments to see YTD financials, account balances, a monthly income/expense chart, and a command menu with inline transitions to Browse and Review
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
@@ -40,6 +41,9 @@ nigel init
 
 # Load sample data to explore
 nigel demo
+
+# Launch the interactive dashboard
+nigel
 
 # Or set up your own accounts
 nigel accounts add "BofA Checking" --type checking --institution "Bank of America"
