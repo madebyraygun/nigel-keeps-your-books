@@ -283,7 +283,6 @@ pub struct RegisterRow {
 pub struct RegisterReport {
     pub rows: Vec<RegisterRow>,
     pub total: f64,
-    pub count: usize,
 }
 
 pub fn get_register(
@@ -328,12 +327,10 @@ pub fn get_register(
                 account_name: row.get(6)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: f64 = rows.iter().map(|r| r.amount).sum();
-    let count = rows.len();
-    Ok(RegisterReport { rows, total, count })
+    Ok(RegisterReport { rows, total })
 }
 
 // ---------------------------------------------------------------------------
@@ -640,7 +637,7 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_register(&conn, Some(2025), None, None, None, None).unwrap();
-        assert_eq!(report.count, 3);
+        assert_eq!(report.rows.len(), 3);
         // First two are categorized, all should appear
         assert!(report.rows.iter().all(|r| r.category.is_some()));
     }
@@ -661,7 +658,7 @@ mod tests {
         )
         .unwrap();
         let report = get_register(&conn, Some(2025), None, None, None, None).unwrap();
-        assert_eq!(report.count, 1);
+        assert_eq!(report.rows.len(), 1);
         assert!(report.rows[0].category.is_none());
     }
 
@@ -671,10 +668,10 @@ mod tests {
         seed_transactions(&conn);
         let report =
             get_register(&conn, Some(2025), None, None, None, Some("Test")).unwrap();
-        assert_eq!(report.count, 3);
+        assert_eq!(report.rows.len(), 3);
         let report =
             get_register(&conn, Some(2025), None, None, None, Some("Nonexistent")).unwrap();
-        assert_eq!(report.count, 0);
+        assert_eq!(report.rows.len(), 0);
     }
 
     #[test]
