@@ -1,5 +1,12 @@
 use crossterm::event::KeyCode;
 use rand::Rng;
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+    Frame,
+};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -181,5 +188,145 @@ impl SnakeGame {
 
     pub fn tick_rate(&self) -> Duration {
         TICK_RATE.saturating_sub(self.last_tick.elapsed())
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+
+        // Board sizing: leave room for border (2 cols) and title/footer (4 rows)
+        let board_width = (area.width.saturating_sub(2)).min(80);
+        let board_height = (area.height.saturating_sub(4)).min(40);
+
+        // If board size changed, clamp snake and food to new bounds
+        if board_width != self.board_width || board_height != self.board_height {
+            self.board_width = board_width;
+            self.board_height = board_height;
+
+            // Retain only segments within bounds
+            self.body.retain(|&(x, y)| x < board_width && y < board_height);
+            // Ensure at least one segment
+            if self.body.is_empty() {
+                self.body
+                    .push_back((board_width / 2, board_height / 2));
+            }
+            // Respawn food if out of bounds
+            if self.food.0 >= board_width || self.food.1 >= board_height {
+                self.spawn_food();
+            }
+        }
+
+        // Title bar
+        let score_str = format!(" $ Snake $ | Score: ${:.2} ", self.score);
+        let footer_str = " Arrow keys: move | Esc: quit ";
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(
+                Line::from(Span::styled(
+                    score_str,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .alignment(Alignment::Center),
+            )
+            .title_bottom(
+                Line::from(Span::styled(
+                    footer_str,
+                    Style::default().fg(Color::DarkGray),
+                ))
+                .alignment(Alignment::Center),
+            );
+
+        // Build game field
+        let mut lines: Vec<Line> = Vec::with_capacity(board_height as usize);
+        for y in 0..board_height {
+            let mut spans: Vec<Span> = Vec::with_capacity(board_width as usize);
+            for x in 0..board_width {
+                let pos = (x, y);
+                if pos == self.body[0] {
+                    // Snake head
+                    spans.push(Span::styled(
+                        "\u{2588}",
+                        Style::default()
+                            .fg(Color::LightGreen)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else if self.body.contains(&pos) {
+                    // Snake body
+                    spans.push(Span::styled(
+                        "\u{2588}",
+                        Style::default().fg(Color::Green),
+                    ));
+                } else if pos == self.food {
+                    // Food
+                    spans.push(Span::styled(
+                        "$",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::raw(" "));
+                }
+            }
+            lines.push(Line::from(spans));
+        }
+
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, area);
+
+        // Game over overlay
+        if self.game_over {
+            let overlay_width: u16 = 34;
+            let overlay_height: u16 = 5;
+            let ox = area.x + area.width.saturating_sub(overlay_width) / 2;
+            let oy = area.y + area.height.saturating_sub(overlay_height) / 2;
+            let overlay_rect = Rect::new(ox, oy, overlay_width, overlay_height);
+
+            let overlay_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(
+                    Line::from(Span::styled(
+                        " Game Over ",
+                        Style::default()
+                            .fg(Color::Red)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .alignment(Alignment::Center),
+                );
+
+            let overlay_lines = vec![
+                Line::from(Span::styled(
+                    format!("Final Score: ${:.2}", self.score),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(vec![
+                    Span::styled(
+                        "[R]",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Restart  "),
+                    Span::styled(
+                        "[Esc]",
+                        Style::default()
+                            .fg(Color::Red)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Quit"),
+                ]),
+            ];
+
+            let overlay_paragraph = Paragraph::new(overlay_lines)
+                .block(overlay_block)
+                .alignment(Alignment::Center);
+            frame.render_widget(overlay_paragraph, overlay_rect);
+        }
     }
 }
