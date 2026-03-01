@@ -81,13 +81,10 @@ impl RegisterBrowser {
     }
 
     /// Scroll so that the last transaction on or before today is visible.
+    /// Relies on rows being sorted by date ASC (as returned by get_register).
     pub fn scroll_to_today(&mut self) {
         let today = Local::now().format("%Y-%m-%d").to_string();
-        // Find the last row with date <= today
-        let idx = self
-            .rows
-            .iter()
-            .rposition(|r| r.date.as_str() <= today.as_str());
+        let idx = self.rows.iter().rposition(|r| r.date <= today);
         if let Some(i) = idx {
             // Position that row on screen (offset so it's visible, near middle)
             self.offset = i.saturating_sub(PAGE_SIZE / 2);
