@@ -152,7 +152,7 @@ impl TransactionReviewer {
         let gauge = LineGauge::default()
             .label(format!("{}/{}", self.current_txn + 1, total))
             .ratio(ratio)
-            .filled_style(Style::default().fg(Color::Rgb(80, 220, 100)).bold())
+            .filled_style(Style::default().fg(crate::tui::GREEN).bold())
             .unfilled_style(Style::default().fg(Color::Rgb(60, 60, 60)))
             .line_set(ratatui::symbols::line::DOUBLE);
         frame.render_widget(gauge, progress_area);

@@ -51,12 +51,12 @@ pub struct Particle {
 }
 
 impl Particle {
-    /// Spawn a new particle below the visible area so it floats upward.
+    /// Spawn a new particle at a random viewport position, fading in from invisible.
     pub fn new(width: u16, height: u16) -> Self {
         let mut rng = rand::thread_rng();
         Self {
             x: rng.gen_range(0.0..width as f64),
-            y: height as f64 + rng.gen_range(0.0..5.0),
+            y: rng.gen_range(0.0..height as f64),
             speed: rng.gen_range(0.15..0.45),
             drift: rng.gen_range(-0.1..0.1),
             brightness: 0.0,
@@ -92,22 +92,39 @@ impl Particle {
     }
 }
 
-/// Pre-seed a full set of particles spread across the viewport.
+/// Pre-seed particles across the viewport plus a buffer zone below to prevent
+/// a visible gap when the initial batch drifts off the top.
 pub fn pre_seed_particles(width: u16, height: u16) -> Vec<Particle> {
-    (0..MAX_PARTICLES)
+    let mut rng = rand::thread_rng();
+    let mut particles: Vec<Particle> = (0..MAX_PARTICLES)
         .map(|_| Particle::seeded(width, height))
-        .collect()
+        .collect();
+    // Queue up another batch below the viewport — they'll arrive as the visible ones exit
+    for _ in 0..MAX_PARTICLES {
+        particles.push(Particle {
+            x: rng.gen_range(0.0..width as f64),
+            y: height as f64 + rng.gen_range(0.0..height as f64),
+            speed: rng.gen_range(0.15..0.45),
+            drift: rng.gen_range(-0.1..0.1),
+            brightness: 0.0,
+            char_idx: rng.gen_range(0..PARTICLE_CHARS.len()),
+            color_idx: rng.gen_range(0..GRADIENT.len() - 1),
+        });
+    }
+    particles
 }
 
-/// Standard per-tick particle update: advance existing, cull dead, maybe spawn new.
+/// Standard per-tick particle update: advance existing, cull dead, spawn replacements.
 pub fn tick_particles(particles: &mut Vec<Particle>, width: u16, height: u16) {
     for p in particles.iter_mut() {
         p.tick();
     }
     particles.retain(|p| !p.is_dead());
-    let mut rng = rand::thread_rng();
-    if particles.len() < MAX_PARTICLES && rng.gen_range(0..3) == 0 {
+    // Spawn enough to maintain steady density — up to 2 per tick to avoid gaps
+    let mut spawned = 0;
+    while particles.len() < MAX_PARTICLES && spawned < 2 {
         particles.push(Particle::new(width, height));
+        spawned += 1;
     }
 }
 
@@ -215,9 +232,10 @@ mod tests {
     }
 
     #[test]
-    fn particle_new_starts_below_screen() {
+    fn particle_new_starts_within_viewport() {
         let p = Particle::new(80, 24);
-        assert!(p.y >= 24.0);
+        assert!(p.x >= 0.0 && p.x < 80.0);
+        assert!(p.y >= 0.0 && p.y < 24.0);
         assert_eq!(p.brightness, 0.0);
     }
 
@@ -247,9 +265,13 @@ mod tests {
     }
 
     #[test]
-    fn pre_seed_creates_max_particles() {
+    fn pre_seed_creates_visible_and_queued_particles() {
         let particles = pre_seed_particles(80, 24);
-        assert_eq!(particles.len(), MAX_PARTICLES);
+        assert_eq!(particles.len(), MAX_PARTICLES * 2);
+        let visible = particles.iter().filter(|p| p.y < 24.0).count();
+        let queued = particles.iter().filter(|p| p.y >= 24.0).count();
+        assert_eq!(visible, MAX_PARTICLES);
+        assert_eq!(queued, MAX_PARTICLES);
     }
 
     #[test]
@@ -257,10 +279,10 @@ mod tests {
         let mut particles = vec![Particle::new(80, 24)];
         particles[0].y = -2.0; // force dead
         tick_particles(&mut particles, 80, 24);
-        // Dead particle removed, maybe a new one spawned (0 or 1)
-        assert!(particles.len() <= 1);
+        // Dead particle removed, replacements spawned (up to 2 per tick)
         for p in &particles {
             assert!(!p.is_dead());
         }
+        assert!(particles.len() <= MAX_PARTICLES);
     }
 }

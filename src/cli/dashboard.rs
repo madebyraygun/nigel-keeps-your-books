@@ -369,7 +369,7 @@ impl Dashboard {
 
             // Monthly Cash Flow bar chart with y-axis labels
             if !data.cashflow_labels.is_empty() {
-                let income_style = Style::default().fg(Color::Rgb(80, 220, 100));
+                let income_style = Style::default().fg(crate::tui::GREEN);
                 let expense_style = Style::default().fg(Color::Red);
 
                 // Pick round y-axis tick values based on max data value
