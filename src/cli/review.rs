@@ -517,8 +517,11 @@ pub fn run(id: Option<i64>) -> Result<()> {
                 // Match standard SIGINT exit behavior
                 std::process::exit(130);
             }
-            println!("{total} transactions to review");
-            println!("Review complete!");
+            if total == 1 {
+                println!("Transaction reviewed.");
+            } else {
+                println!("{total} transactions reviewed.");
+            }
         }
         Err(e) => eprintln!("Review error: {e}"),
     }

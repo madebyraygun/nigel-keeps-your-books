@@ -39,6 +39,7 @@ nigel rules update 5 --category "Rent / Lease"    # Reassign rule category
 nigel rules delete 3                              # Deactivate a rule (soft-delete)
 nigel categorize                                  # Re-run rules on uncategorized
 nigel review                                      # Interactive review
+nigel review --id 185                             # Re-review a specific transaction by ID
 nigel report pnl --year 2025                      # Profit & Loss
 nigel report expenses --month 2025-03             # Expense breakdown
 nigel report tax --year 2025                      # Tax summary
