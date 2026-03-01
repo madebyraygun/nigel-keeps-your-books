@@ -124,6 +124,8 @@ struct Dashboard {
     pending_export: Option<usize>,
     status_message: Option<String>,
     needs_reload: bool,
+    /// Tracks which report index is currently displayed (for reload on date change)
+    current_report_idx: Option<usize>,
 }
 
 impl Dashboard {
@@ -151,6 +153,7 @@ impl Dashboard {
             pending_export: None,
             status_message: None,
             needs_reload: false,
+            current_report_idx: None,
         }
     }
 
@@ -660,16 +663,26 @@ impl Dashboard {
     }
 
     fn enter_report_view(&mut self, idx: usize, conn: &rusqlite::Connection) -> DashboardScreen {
+        self.enter_report_view_with_date(idx, conn, None, None)
+    }
+
+    fn enter_report_view_with_date(
+        &mut self,
+        idx: usize,
+        conn: &rusqlite::Connection,
+        year: Option<i32>,
+        month: Option<String>,
+    ) -> DashboardScreen {
         // Register (idx 4) delegates to the interactive browser
         if idx == 4 {
             return self.enter_browse(conn);
         }
-        let year = Some(chrono::Local::now().year());
+        let year = year.or_else(|| Some(chrono::Local::now().year()));
         let result = match idx {
-            0 => super::report::view::build_pnl(None, year, None, None),
-            1 => super::report::view::build_expenses(None, year),
+            0 => super::report::view::build_pnl(month.clone(), year, None, None),
+            1 => super::report::view::build_expenses(month.clone(), year),
             2 => super::report::view::build_tax(year),
-            3 => super::report::view::build_cashflow(None, year),
+            3 => super::report::view::build_cashflow(month.clone(), year),
             5 => super::report::view::build_flagged(),
             6 => super::report::view::build_balance(),
             7 => super::report::view::build_k1(year),
@@ -725,23 +738,23 @@ fn format_k(val: f64) -> String {
     }
 }
 
-fn do_export(idx: usize) -> Result<String> {
+fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
     #[cfg(not(feature = "pdf"))]
     {
-        let _ = idx;
+        let _ = (idx, year, month);
         return Err(crate::error::NigelError::Other(
             "PDF export requires the 'pdf' feature".into(),
         ));
     }
     #[cfg(feature = "pdf")]
     {
-        let year = Some(chrono::Local::now().year());
+        let year = year.or_else(|| Some(chrono::Local::now().year()));
         let path = match idx {
-            0 => super::export::pnl(None, year, None, None, None)?,
-            1 => super::export::expenses(None, year, None)?,
+            0 => super::export::pnl(month.clone(), year, None, None, None)?,
+            1 => super::export::expenses(month.clone(), year, None)?,
             2 => super::export::tax(year, None)?,
-            3 => super::export::cashflow(None, year, None)?,
-            4 => super::export::register(None, year, None, None, None, None)?,
+            3 => super::export::cashflow(month.clone(), year, None)?,
+            4 => super::export::register(month.clone(), year, None, None, None, None)?,
             5 => super::export::flagged(None)?,
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
@@ -874,6 +887,7 @@ pub fn run() -> Result<()> {
                     }
 
                     let mut return_home = false;
+                    let mut pending_reload: Option<(usize, Option<i32>, Option<String>)> = None;
                     let should_quit = match &mut dashboard.screen {
                         DashboardScreen::Home => {
                             if key.code == KeyCode::Char('r') {
@@ -973,11 +987,20 @@ pub fn run() -> Result<()> {
                             false
                         }
                         DashboardScreen::ReportView(ref mut view) => {
-                            match view.handle_key(key.code) {
+                            let action = view.handle_key(key.code);
+                            match action {
                                 ReportViewAction::Close => {
+                                    dashboard.current_report_idx = None;
                                     return_home = true;
                                 }
                                 ReportViewAction::Continue => {}
+                                ReportViewAction::Reload => {
+                                    // Stash reload info; handled below after borrow ends
+                                    if let Some(idx) = dashboard.current_report_idx {
+                                        let (year, month) = view.date_params();
+                                        pending_reload = Some((idx, year, month));
+                                    }
+                                }
                             }
                             false
                         }
@@ -1017,17 +1040,31 @@ pub fn run() -> Result<()> {
                         }
                     };
 
+                    if let Some((idx, year, month)) = pending_reload {
+                        dashboard.screen = dashboard.enter_report_view_with_date(
+                            idx, &conn, year, month,
+                        );
+                    }
+
                     if return_home {
                         dashboard.screen = DashboardScreen::Home;
                         let _ = dashboard.load_data(&conn);
                     }
 
                     if let Some(idx) = dashboard.pending_report_view.take() {
+                        dashboard.current_report_idx = Some(idx);
                         dashboard.screen = dashboard.enter_report_view(idx, &conn);
                     }
 
                     if let Some(idx) = dashboard.pending_export.take() {
-                        match do_export(idx) {
+                        // Use the current report view's date params if we have
+                        // one active, otherwise default to current year
+                        let (year, month) = if let DashboardScreen::ReportView(ref view) = dashboard.screen {
+                            view.date_params()
+                        } else {
+                            (None, None)
+                        };
+                        match do_export(idx, year, month) {
                             Ok(msg) => dashboard.status_message = Some(msg),
                             Err(e) => dashboard.status_message = Some(format!("Export failed: {e}")),
                         }
