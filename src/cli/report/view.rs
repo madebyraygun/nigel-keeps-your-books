@@ -97,8 +97,6 @@ impl TableReportView {
 impl ReportView for TableReportView {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
-        let border_style = Style::default().fg(Color::DarkGray);
-
         let [header_area, sep_area, content_area, footer_area] =
             Layout::vertical([
                 Constraint::Length(1),
@@ -116,7 +114,7 @@ impl ReportView for TableReportView {
 
         // Separator
         frame.render_widget(
-            Paragraph::new("━".repeat(area.width as usize)).style(border_style),
+            Paragraph::new("━".repeat(area.width as usize)).style(FOOTER_STYLE),
             sep_area,
         );
 

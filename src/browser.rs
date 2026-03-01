@@ -128,8 +128,6 @@ impl RegisterBrowser {
             _ => 0,
         };
 
-        let border_style = Style::default().fg(Color::DarkGray);
-
         let areas = Layout::vertical([
             Constraint::Length(1),      // title
             Constraint::Length(1),      // separator
@@ -154,7 +152,7 @@ impl RegisterBrowser {
 
         // Separator
         frame.render_widget(
-            Paragraph::new("━".repeat(area.width as usize)).style(border_style),
+            Paragraph::new("━".repeat(area.width as usize)).style(FOOTER_STYLE),
             sep_area,
         );
 

@@ -14,7 +14,7 @@ use crate::reviewer::{
     CategoryChoice, FlaggedTxn,
 };
 use crate::settings::get_data_dir;
-use crate::tui::{money_span, HEADER_STYLE};
+use crate::tui::{money_span, FOOTER_STYLE, HEADER_STYLE};
 
 enum ReviewState {
     PickCategory,
@@ -94,7 +94,6 @@ impl TransactionReviewer {
 
     pub fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
-        let border_style = Style::default().fg(Color::DarkGray);
         let txn = &self.flagged[self.current_txn];
         let total = self.flagged.len();
 
@@ -123,7 +122,7 @@ impl TransactionReviewer {
 
         // Separator
         frame.render_widget(
-            Paragraph::new("━".repeat(area.width as usize)).style(border_style),
+            Paragraph::new("━".repeat(area.width as usize)).style(FOOTER_STYLE),
             sep_area,
         );
 
