@@ -862,12 +862,16 @@ pub fn run() -> Result<()> {
 
             if let DashboardScreen::Snake(ref mut game) = dashboard.screen {
                 let timeout = game.tick_rate();
-                if crossterm::event::poll(timeout).unwrap_or(false) {
-                    // Key is available, fall through to event::read() below
-                } else {
-                    // No input within timeout — advance game tick
-                    game.do_tick();
-                    continue;
+                match crossterm::event::poll(timeout) {
+                    Ok(true) => {
+                        // Key is available, fall through to event::read() below
+                    }
+                    Ok(false) => {
+                        // No input within timeout — advance game tick
+                        game.do_tick();
+                        continue;
+                    }
+                    Err(e) => break Err(e.into()),
                 }
             }
 
@@ -969,9 +973,6 @@ pub fn run() -> Result<()> {
                             key.code == KeyCode::Char('q')
                         }
                         DashboardScreen::Snake(ref mut game) => {
-                            if game.should_tick() {
-                                game.do_tick();
-                            }
                             match game.handle_key(key.code) {
                                 SnakeAction::Quit => {
                                     return_home = true;

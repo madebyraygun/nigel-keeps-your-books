@@ -215,6 +215,12 @@ impl SnakeGame {
 
         if new_head == self.food {
             self.score += self.food_value;
+            // Check if the snake fills the entire board (win condition)
+            let total = self.board_width as usize * self.board_height as usize;
+            if self.body.len() >= total {
+                self.game_over = true;
+                return;
+            }
             self.spawn_food();
         } else {
             self.body.pop_back();
@@ -243,10 +249,6 @@ impl SnakeGame {
             _ => {}
         }
         SnakeAction::Continue
-    }
-
-    pub fn should_tick(&self) -> bool {
-        self.last_tick.elapsed() >= TICK_RATE
     }
 
     pub fn do_tick(&mut self) {
@@ -533,6 +535,52 @@ mod tests {
         assert!(!game.game_over);
         assert_eq!(game.score, 0.0);
         assert_eq!(game.body.len(), 3);
+    }
+
+    #[test]
+    fn self_collision_ends_game() {
+        let mut game = SnakeGame::new();
+        // Set up snake body in a shape that will self-collide when moving right:
+        // head at (5,5) moving right, body loops around so (6,5) is occupied
+        game.body.clear();
+        game.body.push_back((5, 5));
+        game.body.push_back((4, 5));
+        game.body.push_back((4, 6));
+        game.body.push_back((5, 6));
+        game.body.push_back((6, 6));
+        game.body.push_back((6, 5));
+        game.direction = Direction::Right;
+        game.next_direction = Direction::Right;
+        game.tick();
+        assert!(game.game_over);
+    }
+
+    #[test]
+    fn board_full_ends_game() {
+        let mut game = SnakeGame::new();
+        game.board_width = 3;
+        game.board_height = 1;
+        // Fill the board: snake occupies 2 of 3 cells, food at the third
+        game.body.clear();
+        game.body.push_back((0, 0));
+        game.body.push_back((1, 0));
+        game.food = (2, 0); // will be eaten but can't place nothing
+        game.food_value = 1.0;
+        game.direction = Direction::Left;
+        game.next_direction = Direction::Left;
+        // Move left wraps to wall collision, so set up rightward instead
+        game.body.clear();
+        game.body.push_back((1, 0));
+        game.body.push_back((0, 0));
+        game.direction = Direction::Right;
+        game.next_direction = Direction::Right;
+        game.food = (2, 0);
+        game.food_value = 1.0;
+        game.tick();
+        // Snake ate food and now fills all 3 cells — game over (win)
+        assert_eq!(game.body.len(), 3);
+        assert!(game.game_over);
+        assert_eq!(game.score, 1.0);
     }
 
     #[test]
