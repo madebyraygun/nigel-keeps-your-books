@@ -851,10 +851,16 @@ fn do_export(idx: usize) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 pub fn run() -> Result<()> {
+    // Returning users: show splash screen before dashboard
+    let is_first_run = !settings_file_exists();
+    if !is_first_run {
+        super::splash::run()?;
+    }
+
     // First-run: show onboarding, then ensure data dir + DB exist
     let mut post_setup_action = None;
     let mut onboarding_company = None;
-    if !settings_file_exists() {
+    if is_first_run {
         if let Some(result) = super::onboarding::run()? {
             let mut settings = load_settings();
             if !result.user_name.is_empty() {
