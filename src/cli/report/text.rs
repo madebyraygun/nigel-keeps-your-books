@@ -2,11 +2,20 @@ use colored::Colorize;
 use comfy_table::{Cell, Table};
 
 use crate::cli::parse_month_opt;
-use crate::db::get_connection;
+use crate::db::{get_connection, get_metadata};
 use crate::error::Result;
 use crate::fmt::money;
 use crate::reports;
 use crate::settings::get_data_dir;
+
+/// Prepend company name as a header line if non-empty.
+fn with_header(company_name: &str, body: String) -> String {
+    if company_name.is_empty() {
+        body
+    } else {
+        format!("{company_name}\n\n{body}")
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Data-fetching + formatting wrappers (used by dispatch)
@@ -19,30 +28,34 @@ pub fn pnl(
     to_date: Option<String>,
 ) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
     let data = reports::get_pnl(&conn, y, mm, from_date.as_deref(), to_date.as_deref())?;
-    Ok(format_pnl(&data))
+    Ok(with_header(&company, format_pnl(&data)))
 }
 
 pub fn expenses(month: Option<String>, year: Option<i32>) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let (my, mm) = parse_month_opt(&month);
     let data = reports::get_expense_breakdown(&conn, year.or(my), mm)?;
-    Ok(format_expenses(&data))
+    Ok(with_header(&company, format_expenses(&data)))
 }
 
 pub fn tax(year: Option<i32>) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let data = reports::get_tax_summary(&conn, year)?;
-    Ok(format_tax(&data))
+    Ok(with_header(&company, format_tax(&data)))
 }
 
 pub fn cashflow(month: Option<String>, year: Option<i32>) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let (my, mm) = parse_month_opt(&month);
     let data = reports::get_cashflow(&conn, year.or(my), mm)?;
-    Ok(format_cashflow(&data))
+    Ok(with_header(&company, format_cashflow(&data)))
 }
 
 pub fn register(
@@ -53,31 +66,35 @@ pub fn register(
     account: Option<String>,
 ) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
     let data = reports::get_register(
         &conn, y, mm,
         from_date.as_deref(), to_date.as_deref(), account.as_deref(),
     )?;
-    Ok(format_register(&data))
+    Ok(with_header(&company, format_register(&data)))
 }
 
 pub fn flagged() -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let rows = reports::get_flagged(&conn)?;
-    Ok(format_flagged(&rows))
+    Ok(with_header(&company, format_flagged(&rows)))
 }
 
 pub fn balance() -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let data = reports::get_balance(&conn)?;
-    Ok(format_balance(&data))
+    Ok(with_header(&company, format_balance(&data)))
 }
 
 pub fn k1(year: Option<i32>) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let data = reports::get_k1_prep(&conn, year)?;
-    Ok(format_k1(&data))
+    Ok(with_header(&company, format_k1(&data)))
 }
 
 // ---------------------------------------------------------------------------
@@ -366,4 +383,19 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_header;
+
+    #[test]
+    fn with_header_prepends_when_set() {
+        assert_eq!(with_header("Acme Corp", "Report".into()), "Acme Corp\n\nReport");
+    }
+
+    #[test]
+    fn with_header_passthrough_when_empty() {
+        assert_eq!(with_header("", "Report".into()), "Report");
+    }
 }
