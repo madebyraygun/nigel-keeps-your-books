@@ -3,6 +3,8 @@ pub mod accounts;
 pub mod backup;
 pub mod browse;
 pub mod categorize;
+pub mod categories;
+pub mod category_manager;
 pub mod dashboard;
 pub mod demo;
 pub mod export;
@@ -55,6 +57,11 @@ pub enum Commands {
     Accounts {
         #[command(subcommand)]
         command: AccountsCommands,
+    },
+    /// Manage the chart of accounts (categories).
+    Categories {
+        #[command(subcommand)]
+        command: CategoriesCommands,
     },
     /// Import a CSV/XLSX file and auto-categorize transactions.
     Import {
@@ -136,6 +143,38 @@ pub enum AccountsCommands {
     },
     /// List all accounts.
     List,
+}
+
+#[derive(Subcommand)]
+pub enum CategoriesCommands {
+    /// List all categories.
+    List,
+    /// Add a new category.
+    Add {
+        /// Category name
+        name: String,
+        /// Category type: income or expense
+        #[arg(long = "type")]
+        category_type: String,
+        /// IRS tax line mapping
+        #[arg(long)]
+        tax_line: Option<String>,
+        /// Form 1120-S line mapping
+        #[arg(long = "form-line")]
+        form_line: Option<String>,
+    },
+    /// Rename a category by ID.
+    Rename {
+        /// Category ID
+        id: i64,
+        /// New name
+        name: String,
+    },
+    /// Delete (deactivate) a category by ID.
+    Delete {
+        /// Category ID
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
