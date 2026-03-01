@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 const TICK_RATE: Duration = Duration::from_millis(150);
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction {
     Up,
     Down,
@@ -328,5 +328,112 @@ impl SnakeGame {
                 .alignment(Alignment::Center);
             frame.render_widget(overlay_paragraph, overlay_rect);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_game_starts_correctly() {
+        let game = SnakeGame::new();
+        assert_eq!(game.body.len(), 3);
+        assert_eq!(game.score, 0.0);
+        assert!(!game.game_over);
+        assert_eq!(game.direction, Direction::Right);
+    }
+
+    #[test]
+    fn snake_moves_right() {
+        let mut game = SnakeGame::new();
+        let head_before = game.body[0];
+        game.tick();
+        let head_after = game.body[0];
+        assert_eq!(head_after.0, head_before.0 + 1);
+        assert_eq!(head_after.1, head_before.1);
+        assert_eq!(game.body.len(), 3); // no growth without food
+    }
+
+    #[test]
+    fn snake_changes_direction() {
+        let mut game = SnakeGame::new();
+        game.handle_key(KeyCode::Down);
+        game.tick();
+        let head = game.body[0];
+        // Should have moved down
+        assert_eq!(head.1, game.body[1].1 + 1);
+    }
+
+    #[test]
+    fn cannot_reverse_direction() {
+        let mut game = SnakeGame::new();
+        // Moving right, try to go left — should be ignored
+        game.handle_key(KeyCode::Left);
+        game.tick();
+        let head = game.body[0];
+        // Still moving right
+        assert!(head.0 > game.body[1].0);
+    }
+
+    #[test]
+    fn wall_collision_ends_game() {
+        let mut game = SnakeGame::new();
+        // Move right until wall
+        for _ in 0..100 {
+            if game.game_over {
+                break;
+            }
+            game.tick();
+        }
+        assert!(game.game_over);
+    }
+
+    #[test]
+    fn eating_food_grows_snake_and_scores() {
+        let mut game = SnakeGame::new();
+        // Place food directly ahead
+        let head = game.body[0];
+        game.food = (head.0 + 1, head.1);
+        game.food_value = 5.0;
+        let len_before = game.body.len();
+        game.tick();
+        assert_eq!(game.body.len(), len_before + 1);
+        assert_eq!(game.score, 5.0);
+    }
+
+    #[test]
+    fn food_value_in_range() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let val = SnakeGame::random_food_value(&mut rng);
+            assert!(val >= 1.0 && val <= 9.99);
+        }
+    }
+
+    #[test]
+    fn esc_returns_quit() {
+        let mut game = SnakeGame::new();
+        let action = game.handle_key(KeyCode::Esc);
+        assert!(matches!(action, SnakeAction::Quit));
+    }
+
+    #[test]
+    fn restart_resets_game() {
+        let mut game = SnakeGame::new();
+        game.game_over = true;
+        game.score = 42.0;
+        game.handle_key(KeyCode::Char('r'));
+        assert!(!game.game_over);
+        assert_eq!(game.score, 0.0);
+        assert_eq!(game.body.len(), 3);
+    }
+
+    #[test]
+    fn direction_opposite() {
+        assert_eq!(Direction::Up.opposite(), Direction::Down);
+        assert_eq!(Direction::Down.opposite(), Direction::Up);
+        assert_eq!(Direction::Left.opposite(), Direction::Right);
+        assert_eq!(Direction::Right.opposite(), Direction::Left);
     }
 }
