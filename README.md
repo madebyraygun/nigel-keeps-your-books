@@ -59,6 +59,7 @@ nigel categorize
 
 # Review flagged transactions
 nigel review
+nigel review --id 185                 # Re-review a specific transaction by ID
 
 # Generate reports
 nigel report pnl --year 2025

@@ -68,7 +68,11 @@ pub enum Commands {
         command: RulesCommands,
     },
     /// Interactively review flagged transactions.
-    Review,
+    Review {
+        /// Review a specific transaction by ID.
+        #[arg(long)]
+        id: Option<i64>,
+    },
     /// Generate reports.
     Report {
         #[command(subcommand)]
