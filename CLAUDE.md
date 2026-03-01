@@ -12,7 +12,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_loc, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait, `run_report_view()`) for interactive screens; `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
-- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse and Review screens; merged View/Export picker screen for reports; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command
+- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum (includes `Snake(SnakeGame)` variant); Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse, Review, and Snake screens; merged View/Export picker screen for reports; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command. The dashboard menu includes a Snake game easter egg.
 - **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
@@ -108,6 +108,7 @@ src/
       text.rs           # comfy_table text formatters (used for stdout + text file export)
       view.rs           # Ratatui interactive report views (scrollable, colored)
     browse.rs           # nigel browse (interactive browsers)
+    snake.rs            # Snake game easter egg (ratatui, accessible from dashboard)
     export.rs           # PDF export helpers (per-function feature-gated behind "pdf")
     reconcile.rs        # nigel reconcile
     load.rs             # nigel load (switch data directory)
