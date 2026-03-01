@@ -35,6 +35,7 @@ const INTRO_TOTAL_MS: f64 = INTRO_PARTICLES_MS + INTRO_REVEAL_MS + INTRO_UI_DELA
 
 enum Screen {
     NameInput,
+    ConfirmPassword,
     ActionPicker,
 }
 
@@ -48,12 +49,17 @@ enum StepResult {
 pub struct OnboardingResult {
     pub user_name: String,
     pub company_name: String,
+    pub password: Option<String>,
     pub action: PostSetupAction,
 }
 
 struct Onboarding {
     user_name: String,
     company_name: String,
+    password: String,
+    confirm_password: String,
+    confirm_cursor: usize,
+    confirm_mismatch: bool,
     active_field: usize,
     cursor_pos: usize,
     action_selection: usize,
@@ -73,6 +79,10 @@ impl Onboarding {
         Self {
             user_name: String::new(),
             company_name: String::new(),
+            password: String::new(),
+            confirm_password: String::new(),
+            confirm_cursor: 0,
+            confirm_mismatch: false,
             active_field: 0,
             cursor_pos: 0,
             action_selection: 0,
@@ -90,14 +100,16 @@ impl Onboarding {
     fn active_value(&self) -> &str {
         match self.active_field {
             0 => &self.user_name,
-            _ => &self.company_name,
+            1 => &self.company_name,
+            _ => &self.password,
         }
     }
 
     fn active_value_mut(&mut self) -> &mut String {
         match self.active_field {
             0 => &mut self.user_name,
-            _ => &mut self.company_name,
+            1 => &mut self.company_name,
+            _ => &mut self.password,
         }
     }
 
@@ -124,6 +136,7 @@ impl Onboarding {
 
         match self.screen {
             Screen::NameInput => self.draw_name_input(frame, area),
+            Screen::ConfirmPassword => self.draw_confirm_password(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
         }
     }
@@ -137,7 +150,7 @@ impl Onboarding {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Length(2),
+                Constraint::Length(3),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
@@ -184,14 +197,16 @@ impl Onboarding {
         let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
         let centered_form = Rect::new(form_x, form_area.y, form_width, form_area.height);
 
-        let [name_row, biz_row] =
-            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(centered_form);
+        let [name_row, biz_row, pw_row] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
+                .areas(centered_form);
 
-        self.draw_field(frame, name_row, "Your name:", &self.user_name, 0);
-        self.draw_field(frame, biz_row, "Business name:", &self.company_name, 1);
+        self.draw_field(frame, name_row, "Your name:", &self.user_name, 0, false);
+        self.draw_field(frame, biz_row, "Business name:", &self.company_name, 1, false);
+        self.draw_field(frame, pw_row, "Password:", &self.password, 2, true);
 
         // Continue button
-        let btn_style = if self.active_field == 2 {
+        let btn_style = if self.active_field == 3 {
             Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(Color::DarkGray)
@@ -262,6 +277,86 @@ impl Onboarding {
         );
     }
 
+    fn draw_confirm_password(&self, frame: &mut Frame, area: Rect) {
+        let logo_height = LOGO.len() as u16;
+        let error_height = if self.confirm_mismatch { 1 } else { 0 };
+        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, field_area, error_area, _gap3, hints_area, _bottom_pad] =
+            Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(logo_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(error_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
+            .areas(area);
+
+        effects::render_logo(self.phase, frame, logo_area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled("Confirm your password", HEADER_STYLE))
+                .alignment(ratatui::layout::Alignment::Center),
+            prompt_area,
+        );
+
+        let form_width = 50u16.min(area.width.saturating_sub(4));
+        let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
+        let centered_field = Rect::new(form_x, field_area.y, form_width, field_area.height);
+
+        // Render the masked confirm input inline (reuse draw logic but with confirm state)
+        let label_width = 16u16;
+        let [label_area, input_area] = Layout::horizontal([
+            Constraint::Length(label_width),
+            Constraint::Fill(1),
+        ])
+        .areas(centered_field);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("{:<width$}", "Password:", width = label_width as usize),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            label_area,
+        );
+
+        let input_width = input_area.width as usize;
+        let masked = "●".repeat(self.confirm_password.chars().count());
+        let mut display = masked;
+        let byte_pos = display
+            .char_indices()
+            .nth(self.confirm_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(display.len());
+        display.insert(byte_pos, '█');
+        let padded = format!("{:<width$}", display, width = input_width);
+        frame.render_widget(
+            Paragraph::new(Span::styled(padded, SELECTED_STYLE)),
+            input_area,
+        );
+
+        if self.confirm_mismatch {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "Passwords do not match. Try again.",
+                    Style::default().fg(Color::Red),
+                ))
+                .alignment(ratatui::layout::Alignment::Center),
+                error_area,
+            );
+        }
+
+        frame.render_widget(
+            Paragraph::new(" Enter=confirm  Esc=back")
+                .style(FOOTER_STYLE)
+                .alignment(ratatui::layout::Alignment::Center),
+            hints_area,
+        );
+    }
+
     /// Convert a char-index cursor position to a byte offset in the string.
     fn cursor_byte_pos(&self) -> usize {
         self.active_value()
@@ -271,7 +366,15 @@ impl Onboarding {
             .unwrap_or(self.active_value().len())
     }
 
-    fn draw_field(&self, frame: &mut Frame, area: Rect, label: &str, value: &str, field_idx: usize) {
+    fn draw_field(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        label: &str,
+        value: &str,
+        field_idx: usize,
+        masked: bool,
+    ) {
         let label_width = 16u16;
         let [label_area, input_area] = Layout::horizontal([
             Constraint::Length(label_width),
@@ -295,16 +398,23 @@ impl Onboarding {
         let input_width = input_area.width as usize;
         let is_active = self.active_field == field_idx;
 
+        let display_value = if masked {
+            "●".repeat(value.chars().count())
+        } else {
+            value.to_string()
+        };
+
         let display = if is_active {
-            let mut s = value.to_string();
-            let byte_pos = s.char_indices()
+            let mut s = display_value;
+            let byte_pos = s
+                .char_indices()
                 .nth(self.cursor_pos)
                 .map(|(i, _)| i)
                 .unwrap_or(s.len());
             s.insert(byte_pos, '█');
             s
         } else {
-            value.to_string()
+            display_value
         };
 
         let padded = format!("{:<width$}", display, width = input_width);
@@ -320,24 +430,24 @@ impl Onboarding {
 
     fn move_to_field(&mut self, field: usize) {
         self.active_field = field;
-        if field <= 1 {
+        if field <= 2 {
             self.cursor_pos = self.active_value().chars().count();
         }
     }
 
     fn handle_name_key(&mut self, code: KeyCode) -> StepResult {
-        // On the button (field 2), only handle navigation and submit
-        if self.active_field == 2 {
+        // On the button (field 3), only handle navigation and submit
+        if self.active_field == 3 {
             match code {
                 KeyCode::Enter => return StepResult::NextScreen,
-                KeyCode::Up => self.move_to_field(1),
+                KeyCode::Up => self.move_to_field(2),
                 KeyCode::Esc => return StepResult::Skip,
                 _ => {}
             }
             return StepResult::Continue;
         }
 
-        // Text input fields (0 and 1)
+        // Text input fields (0, 1, and 2)
         match code {
             KeyCode::Enter | KeyCode::Down => {
                 self.move_to_field(self.active_field + 1);
@@ -379,6 +489,61 @@ impl Onboarding {
             }
             KeyCode::Home => self.cursor_pos = 0,
             KeyCode::End => self.cursor_pos = self.active_value().chars().count(),
+            _ => {}
+        }
+        StepResult::Continue
+    }
+
+    fn handle_confirm_key(&mut self, code: KeyCode) -> StepResult {
+        match code {
+            KeyCode::Enter => {
+                if self.confirm_password == self.password {
+                    self.confirm_mismatch = false;
+                    return StepResult::NextScreen;
+                }
+                self.confirm_mismatch = true;
+                self.confirm_password.clear();
+                self.confirm_cursor = 0;
+            }
+            KeyCode::Esc => {
+                self.confirm_password.clear();
+                self.confirm_cursor = 0;
+                self.confirm_mismatch = false;
+                self.screen = Screen::NameInput;
+                self.active_field = 2; // return to password field
+                self.cursor_pos = self.password.chars().count();
+            }
+            KeyCode::Char(c) => {
+                let byte_pos = self
+                    .confirm_password
+                    .char_indices()
+                    .nth(self.confirm_cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(self.confirm_password.len());
+                self.confirm_password.insert(byte_pos, c);
+                self.confirm_cursor += 1;
+            }
+            KeyCode::Backspace => {
+                if self.confirm_cursor > 0 {
+                    self.confirm_cursor -= 1;
+                    let byte_pos = self
+                        .confirm_password
+                        .char_indices()
+                        .nth(self.confirm_cursor)
+                        .map(|(i, _)| i)
+                        .unwrap_or(self.confirm_password.len());
+                    self.confirm_password.remove(byte_pos);
+                }
+            }
+            KeyCode::Left => {
+                self.confirm_cursor = self.confirm_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                let len = self.confirm_password.chars().count();
+                self.confirm_cursor = (self.confirm_cursor + 1).min(len);
+            }
+            KeyCode::Home => self.confirm_cursor = 0,
+            KeyCode::End => self.confirm_cursor = self.confirm_password.chars().count(),
             _ => {}
         }
         StepResult::Continue
@@ -431,13 +596,27 @@ pub fn run() -> Result<Option<OnboardingResult>> {
 
                     let step = match onboarding.screen {
                         Screen::NameInput => onboarding.handle_name_key(key.code),
+                        Screen::ConfirmPassword => onboarding.handle_confirm_key(key.code),
                         Screen::ActionPicker => onboarding.handle_action_key(key.code),
                     };
 
                     match step {
                         StepResult::Continue => {}
-                        StepResult::NextScreen => {
-                            onboarding.screen = Screen::ActionPicker;
+                        StepResult::NextScreen => match onboarding.screen {
+                            Screen::NameInput => {
+                                if onboarding.password.trim().is_empty() {
+                                    onboarding.screen = Screen::ActionPicker;
+                                } else {
+                                    onboarding.confirm_password.clear();
+                                    onboarding.confirm_cursor = 0;
+                                    onboarding.confirm_mismatch = false;
+                                    onboarding.screen = Screen::ConfirmPassword;
+                                }
+                            }
+                            Screen::ConfirmPassword => {
+                                onboarding.screen = Screen::ActionPicker;
+                            }
+                            Screen::ActionPicker => {}
                         }
                         StepResult::Finish => {
                             let action = match onboarding.action_selection {
@@ -445,9 +624,11 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                 1 => PostSetupAction::StartFresh,
                                 _ => PostSetupAction::Import,
                             };
+                            let pw = onboarding.password.trim().to_string();
                             break Ok(Some(OnboardingResult {
                                 user_name: onboarding.user_name.trim().to_string(),
                                 company_name: onboarding.company_name.trim().to_string(),
+                                password: if pw.is_empty() { None } else { Some(pw) },
                                 action,
                             }));
                         }
@@ -464,4 +645,173 @@ pub fn run() -> Result<Option<OnboardingResult>> {
     drop(terminal);
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_onboarding() -> Onboarding {
+        Onboarding {
+            user_name: String::new(),
+            company_name: String::new(),
+            password: String::new(),
+            confirm_password: String::new(),
+            confirm_cursor: 0,
+            confirm_mismatch: false,
+            active_field: 0,
+            cursor_pos: 0,
+            action_selection: 0,
+            screen: Screen::NameInput,
+            phase: 0.0,
+            particles: vec![],
+            width: 80,
+            height: 24,
+            start: Instant::now(),
+            reveal_order: vec![],
+            intro_done: true,
+        }
+    }
+
+    #[test]
+    fn field_navigation_cycles_through_all_fields() {
+        let mut ob = make_onboarding();
+        assert_eq!(ob.active_field, 0); // starts at name
+        ob.handle_name_key(KeyCode::Enter);
+        assert_eq!(ob.active_field, 1); // business
+        ob.handle_name_key(KeyCode::Enter);
+        assert_eq!(ob.active_field, 2); // password
+        ob.handle_name_key(KeyCode::Enter);
+        assert_eq!(ob.active_field, 3); // continue button
+    }
+
+    #[test]
+    fn up_from_button_goes_to_password() {
+        let mut ob = make_onboarding();
+        ob.active_field = 3; // button
+        ob.handle_name_key(KeyCode::Up);
+        assert_eq!(ob.active_field, 2); // password
+    }
+
+    #[test]
+    fn active_value_returns_correct_field() {
+        let mut ob = make_onboarding();
+        ob.user_name = "Alice".into();
+        ob.company_name = "Acme".into();
+        ob.password = "secret".into();
+
+        ob.active_field = 0;
+        assert_eq!(ob.active_value(), "Alice");
+        ob.active_field = 1;
+        assert_eq!(ob.active_value(), "Acme");
+        ob.active_field = 2;
+        assert_eq!(ob.active_value(), "secret");
+    }
+
+    #[test]
+    fn typing_into_password_field() {
+        let mut ob = make_onboarding();
+        ob.active_field = 2; // password
+        ob.handle_name_key(KeyCode::Char('a'));
+        ob.handle_name_key(KeyCode::Char('b'));
+        ob.handle_name_key(KeyCode::Char('c'));
+        assert_eq!(ob.password, "abc");
+    }
+
+    #[test]
+    fn password_none_when_empty() {
+        let pw = "".trim().to_string();
+        let result = if pw.is_empty() { None } else { Some(pw) };
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn password_some_when_provided() {
+        let pw = "secret".trim().to_string();
+        let result = if pw.is_empty() { None } else { Some(pw) };
+        assert_eq!(result, Some("secret".to_string()));
+    }
+
+    #[test]
+    fn button_enter_advances_to_next_screen() {
+        let mut ob = make_onboarding();
+        ob.active_field = 3; // button
+        let result = ob.handle_name_key(KeyCode::Enter);
+        assert!(matches!(result, StepResult::NextScreen));
+    }
+
+    #[test]
+    fn down_navigation_through_all_text_fields() {
+        let mut ob = make_onboarding();
+        ob.handle_name_key(KeyCode::Down);
+        assert_eq!(ob.active_field, 1);
+        ob.handle_name_key(KeyCode::Down);
+        assert_eq!(ob.active_field, 2);
+        ob.handle_name_key(KeyCode::Down);
+        assert_eq!(ob.active_field, 3);
+    }
+
+    #[test]
+    fn up_navigation_through_all_text_fields() {
+        let mut ob = make_onboarding();
+        ob.active_field = 2; // password
+        ob.cursor_pos = 0;
+        ob.handle_name_key(KeyCode::Up);
+        assert_eq!(ob.active_field, 1);
+        ob.handle_name_key(KeyCode::Up);
+        assert_eq!(ob.active_field, 0);
+        // Up from 0 stays at 0
+        ob.handle_name_key(KeyCode::Up);
+        assert_eq!(ob.active_field, 0);
+    }
+
+    #[test]
+    fn confirm_match_advances_screen() {
+        let mut ob = make_onboarding();
+        ob.password = "abc".into();
+        ob.screen = Screen::ConfirmPassword;
+        ob.handle_confirm_key(KeyCode::Char('a'));
+        ob.handle_confirm_key(KeyCode::Char('b'));
+        ob.handle_confirm_key(KeyCode::Char('c'));
+        let result = ob.handle_confirm_key(KeyCode::Enter);
+        assert!(matches!(result, StepResult::NextScreen));
+        assert!(!ob.confirm_mismatch);
+    }
+
+    #[test]
+    fn confirm_mismatch_shows_error() {
+        let mut ob = make_onboarding();
+        ob.password = "abc".into();
+        ob.screen = Screen::ConfirmPassword;
+        ob.handle_confirm_key(KeyCode::Char('x'));
+        let result = ob.handle_confirm_key(KeyCode::Enter);
+        assert!(matches!(result, StepResult::Continue));
+        assert!(ob.confirm_mismatch);
+        assert!(ob.confirm_password.is_empty()); // cleared on mismatch
+    }
+
+    #[test]
+    fn confirm_esc_returns_to_password_field() {
+        let mut ob = make_onboarding();
+        ob.password = "abc".into();
+        ob.screen = Screen::ConfirmPassword;
+        ob.handle_confirm_key(KeyCode::Char('x'));
+        ob.handle_confirm_key(KeyCode::Esc);
+        assert!(matches!(ob.screen, Screen::NameInput));
+        assert_eq!(ob.active_field, 2); // password field
+        assert!(ob.confirm_password.is_empty());
+        assert!(!ob.confirm_mismatch);
+    }
+
+    #[test]
+    fn confirm_typing_and_backspace() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::ConfirmPassword;
+        ob.handle_confirm_key(KeyCode::Char('a'));
+        ob.handle_confirm_key(KeyCode::Char('b'));
+        assert_eq!(ob.confirm_password, "ab");
+        ob.handle_confirm_key(KeyCode::Backspace);
+        assert_eq!(ob.confirm_password, "a");
+        assert_eq!(ob.confirm_cursor, 1);
+    }
 }
