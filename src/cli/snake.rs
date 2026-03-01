@@ -87,6 +87,10 @@ impl SnakeGame {
         h: u16,
         rng: &mut rand::rngs::ThreadRng,
     ) -> (u16, u16) {
+        let total = (w as usize) * (h as usize);
+        if body.len() >= total {
+            return (0, 0);
+        }
         loop {
             let x = rng.gen_range(0..w);
             let y = rng.gen_range(0..h);
@@ -152,24 +156,15 @@ impl SnakeGame {
                     *self = Self::new();
                 }
             }
-            KeyCode::Up => {
-                if self.direction != Direction::Down {
-                    self.next_direction = Direction::Up;
-                }
-            }
-            KeyCode::Down => {
-                if self.direction != Direction::Up {
-                    self.next_direction = Direction::Down;
-                }
-            }
-            KeyCode::Left => {
-                if self.direction != Direction::Right {
-                    self.next_direction = Direction::Left;
-                }
-            }
-            KeyCode::Right => {
-                if self.direction != Direction::Left {
-                    self.next_direction = Direction::Right;
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+                let new_dir = match code {
+                    KeyCode::Up => Direction::Up,
+                    KeyCode::Down => Direction::Down,
+                    KeyCode::Left => Direction::Left,
+                    _ => Direction::Right,
+                };
+                if self.direction != new_dir.opposite() {
+                    self.next_direction = new_dir;
                 }
             }
             _ => {}
