@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use crate::effects::{self, gradient_color, Particle, GRADIENT, PARTICLE_CHARS};
 
-const TICK_RATE: Duration = Duration::from_millis(150);
+const BASE_TICK_MS: u64 = 150;
+const MIN_TICK_MS: u64 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction {
@@ -112,8 +113,12 @@ impl SnakeGame {
     }
 
     fn spawn_food(&mut self) {
-        self.food =
-            Self::random_food_pos(&self.body, self.board_width, self.board_height, &mut self.rng);
+        self.food = Self::random_food_pos(
+            &self.body,
+            self.board_width,
+            self.board_height,
+            &mut self.rng,
+        );
         self.food_value = Self::random_food_value(&mut self.rng);
     }
 
@@ -194,18 +199,23 @@ impl SnakeGame {
     }
 
     pub fn tick_rate(&self) -> Duration {
-        TICK_RATE.saturating_sub(self.last_tick.elapsed())
+        // -2ms per segment beyond the initial length of 3, floored at MIN_TICK_MS
+        let speed_ms = BASE_TICK_MS.saturating_sub((self.body.len() as u64).saturating_sub(3) * 2);
+        let tick = Duration::from_millis(speed_ms.max(MIN_TICK_MS));
+        tick.saturating_sub(self.last_tick.elapsed())
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
         let full = frame.area();
 
         // Board sizing: subtract 2 for border on each side
-        let board_width = (full.width.saturating_sub(2)).min(80);
+        // Each cell is 2 chars wide to compensate for terminal aspect ratio
+        let board_width = ((full.width.saturating_sub(2)) / 2).min(40);
         let board_height = (full.height.saturating_sub(2)).min(40);
 
         // Center the play area when terminal is larger than needed
-        let render_w = board_width + 2;
+        // Each cell is 2 chars wide, plus 2 for the border
+        let render_w = board_width * 2 + 2;
         let render_h = board_height + 2;
         let area = Rect::new(
             full.x + full.width.saturating_sub(render_w) / 2,
@@ -220,11 +230,11 @@ impl SnakeGame {
             self.board_height = board_height;
 
             // Retain only segments within bounds
-            self.body.retain(|&(x, y)| x < board_width && y < board_height);
+            self.body
+                .retain(|&(x, y)| x < board_width && y < board_height);
             // Ensure at least one segment
             if self.body.is_empty() {
-                self.body
-                    .push_back((board_width / 2, board_height / 2));
+                self.body.push_back((board_width / 2, board_height / 2));
             }
             // Respawn food if out of bounds
             if self.food.0 >= board_width || self.food.1 >= board_height {
@@ -257,15 +267,16 @@ impl SnakeGame {
             );
 
         // Build game field with rainbow body and background particles
+        // Each cell is 2 chars wide to make movement speed look uniform
         let mut lines: Vec<Line> = Vec::with_capacity(board_height as usize);
         for y in 0..board_height {
-            let mut spans: Vec<Span> = Vec::with_capacity(board_width as usize);
+            let mut spans: Vec<Span> = Vec::with_capacity(board_width as usize * 2);
             for x in 0..board_width {
                 let pos = (x, y);
                 if pos == self.body[0] {
                     // Snake head — bright white to stand out
                     spans.push(Span::styled(
-                        "\u{2588}",
+                        "\u{2588}\u{2588}",
                         Style::default()
                             .fg(Color::White)
                             .add_modifier(Modifier::BOLD),
@@ -273,27 +284,26 @@ impl SnakeGame {
                 } else if let Some(idx) = self.body.iter().position(|&p| p == pos) {
                     // Snake body — rainbow gradient trail
                     let color = gradient_color(self.phase + idx as f64 * 0.05);
-                    spans.push(Span::styled(
-                        "\u{2588}",
-                        Style::default().fg(color),
-                    ));
+                    spans.push(Span::styled("\u{2588}\u{2588}", Style::default().fg(color)));
                 } else if pos == self.food {
-                    // Food
+                    // Food — bright green square
                     spans.push(Span::styled(
-                        "$",
+                        "\u{2588}\u{2588}",
                         Style::default()
-                            .fg(Color::Green)
+                            .fg(crate::tui::GREEN)
                             .add_modifier(Modifier::BOLD),
                     ));
-                } else if let Some(p) = self.particles.iter().find(|p| {
-                    p.x.round() as u16 == x && p.y.round() as u16 == y
-                }) {
-                    // Background particle
+                } else if let Some(p) = self
+                    .particles
+                    .iter()
+                    .find(|p| p.x.round() as u16 == x && p.y.round() as u16 == y)
+                {
+                    // Background particle (pad to 2 chars)
                     let (r, g, b) = GRADIENT[p.color_idx];
                     let a = p.brightness;
                     let ch = PARTICLE_CHARS[p.char_idx];
                     spans.push(Span::styled(
-                        ch.to_string(),
+                        format!("{ch} "),
                         Style::default().fg(Color::Rgb(
                             (r * a) as u8,
                             (g * a) as u8,
@@ -301,7 +311,7 @@ impl SnakeGame {
                         )),
                     ));
                 } else {
-                    spans.push(Span::raw(" "));
+                    spans.push(Span::raw("  "));
                 }
             }
             lines.push(Line::from(spans));
@@ -324,9 +334,7 @@ impl SnakeGame {
                 .title(
                     Line::from(Span::styled(
                         " Game Over ",
-                        Style::default()
-                            .fg(Color::Red)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     ))
                     .alignment(Alignment::Center),
                 );
@@ -348,9 +356,7 @@ impl SnakeGame {
                     Span::raw(" Restart  "),
                     Span::styled(
                         "[Esc]",
-                        Style::default()
-                            .fg(Color::Red)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" Quit"),
                 ]),

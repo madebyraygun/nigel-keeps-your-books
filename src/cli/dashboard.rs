@@ -37,7 +37,6 @@ const GREETINGS: &[&str] = &[
     "Everything's in order. Well, mostly.",
     "No surprises today. Well... let's not get ahead of ourselves.",
     "Fancy a quick look at the numbers?",
-    "You're looking well. The books, less so.",
     "Ah, there you are.",
     "The spreadsheets send their regards.",
     "Right then, where were we?",
@@ -369,7 +368,7 @@ impl Dashboard {
 
             // Monthly Cash Flow bar chart with y-axis labels
             if !data.cashflow_labels.is_empty() {
-                let income_style = Style::default().fg(Color::Rgb(80, 220, 100));
+                let income_style = Style::default().fg(crate::tui::GREEN);
                 let expense_style = Style::default().fg(Color::Red);
 
                 // Pick round y-axis tick values based on max data value

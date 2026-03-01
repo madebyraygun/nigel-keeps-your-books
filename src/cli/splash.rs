@@ -11,6 +11,8 @@ use crate::error::Result;
 
 const SPLASH_DURATION: Duration = Duration::from_millis(1500);
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
+const REVEAL_MS: f64 = 500.0;
+const DISSOLVE_MS: f64 = 400.0;
 
 struct Splash {
     phase: f64,
@@ -18,6 +20,7 @@ struct Splash {
     width: u16,
     height: u16,
     start: Instant,
+    reveal_order: Vec<(usize, usize)>,
 }
 
 impl Splash {
@@ -29,6 +32,7 @@ impl Splash {
             width,
             height,
             start: Instant::now(),
+            reveal_order: effects::logo_reveal_order(),
         }
     }
 
@@ -46,6 +50,10 @@ impl Splash {
         self.width = area.width;
         self.height = area.height;
 
+        let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = SPLASH_DURATION.as_secs_f64() * 1000.0;
+        let remaining_ms = total_ms - elapsed_ms;
+
         effects::render_particles(&self.particles, frame, area);
 
         let logo_height = LOGO.len() as u16;
@@ -56,7 +64,23 @@ impl Splash {
         ])
         .areas(area);
 
-        effects::render_logo(self.phase, frame, logo_area);
+        let total_chars = self.reveal_order.len();
+        let chars_visible = if elapsed_ms < REVEAL_MS {
+            let progress = elapsed_ms / REVEAL_MS;
+            (progress * total_chars as f64) as usize
+        } else if remaining_ms < DISSOLVE_MS {
+            let progress = (remaining_ms / DISSOLVE_MS).max(0.0);
+            (progress * total_chars as f64) as usize
+        } else {
+            total_chars
+        };
+
+        effects::render_logo_reveal(
+            self.phase,
+            frame,
+            logo_area,
+            Some((&self.reveal_order, chars_visible)),
+        );
     }
 }
 
@@ -106,7 +130,8 @@ mod tests {
     #[test]
     fn splash_has_pre_seeded_particles() {
         let splash = Splash::new();
-        assert_eq!(splash.particles.len(), effects::MAX_PARTICLES);
+        // Visible + queued below viewport
+        assert_eq!(splash.particles.len(), effects::MAX_PARTICLES * 2);
     }
 
     #[test]
@@ -120,5 +145,21 @@ mod tests {
     #[test]
     fn splash_duration_is_1500ms() {
         assert_eq!(SPLASH_DURATION, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn reveal_order_contains_all_logo_chars() {
+        let splash = Splash::new();
+        let width = effects::max_logo_width();
+        let expected: usize = LOGO
+            .iter()
+            .map(|line| {
+                format!("{:<width$}", line, width = width)
+                    .chars()
+                    .filter(|c| *c != ' ')
+                    .count()
+            })
+            .sum();
+        assert_eq!(splash.reveal_order.len(), expected);
     }
 }
