@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Table},
     Frame,
 };
 
@@ -97,22 +97,32 @@ impl TableReportView {
 impl ReportView for TableReportView {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
+        let border_style = Style::default().fg(Color::DarkGray);
 
-        let [content_area, footer_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        let [header_area, sep_area, content_area, footer_area] =
+            Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .areas(area);
 
-        let block = Block::default()
-            .title(format!("  {}  ", self.title))
-            .title_style(HEADER_STYLE)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+        // Header
+        frame.render_widget(
+            Paragraph::new(format!(" {}", self.title)).style(HEADER_STYLE),
+            header_area,
+        );
 
-        let inner = block.inner(content_area);
-        frame.render_widget(block, content_area);
+        // Separator
+        frame.render_widget(
+            Paragraph::new("━".repeat(area.width as usize)).style(border_style),
+            sep_area,
+        );
 
         // Compute visible rows (header takes ~2 lines: header + bottom_margin)
         let header_overhead = 2u16;
-        let visible = inner.height.saturating_sub(header_overhead) as usize;
+        let visible = content_area.height.saturating_sub(header_overhead) as usize;
         self.visible_count = visible.max(1);
 
         let visible_rows: Vec<Row> = self
@@ -127,7 +137,7 @@ impl ReportView for TableReportView {
             .header(self.header.clone())
             .column_spacing(2);
 
-        frame.render_widget(table, inner);
+        frame.render_widget(table, content_area);
 
         // Footer
         let max = self.rows.len().saturating_sub(visible);
