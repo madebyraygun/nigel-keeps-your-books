@@ -13,8 +13,8 @@ Demo data loaded!
   Account:      BofA Checking
   Transactions: 252
   Rules:        9
-  Categorized:  ...
-  Flagged:      ...
+  Categorized:  168
+  Flagged:      84
 
 Try these next:
   nigel accounts list
@@ -45,15 +45,15 @@ $ nigel rules list
 Rules
 
 Pattern                  Match     Category                    Vendor     Hits
-STRIPE TRANSFER          contains  Client Services             Stripe        6
-ADOBE                    contains  Software & Subscriptions    Adobe         3
-GITHUB                   contains  Software & Subscriptions    GitHub        3
-SLACK                    contains  Software & Subscriptions    Slack         3
-GOOGLE WORKSPACE         contains  Software & Subscriptions    Google        3
-AMAZON WEB SERVICES      contains  Hosting & Infrastructure    AWS           3
-FLYWHEEL                 contains  Hosting & Infrastructure    Flywheel      3
-UBER EATS                contains  Meals                       Uber Eats     3
-GRUBHUB                  contains  Meals                       Grubhub       3
+STRIPE TRANSFER          contains  Client Services             Stripe       36
+ADOBE                    contains  Software & Subscriptions    Adobe        18
+GITHUB                   contains  Software & Subscriptions    GitHub       18
+SLACK                    contains  Software & Subscriptions    Slack        18
+GOOGLE WORKSPACE         contains  Software & Subscriptions    Google       18
+AMAZON WEB SERVICES      contains  Hosting & Infrastructure    AWS          18
+FLYWHEEL                 contains  Hosting & Infrastructure    Flywheel     18
+UBER EATS                contains  Meals                       Uber Eats    12
+GRUBHUB                  contains  Meals                       Grubhub      12
 ```
 
 ## 3. Check what's flagged
@@ -62,24 +62,19 @@ GRUBHUB                  contains  Meals                       Grubhub       3
 $ nigel report flagged
 ```
 ```
-Flagged Transactions (14)
+Flagged Transactions (84)
 
 ID  Date         Description                  Amount       Account
-11  2025-01-15   CHECK 1042                   -$2,400.00   BofA Checking
-12  2025-01-20   VENMO PAYMENT                  -$150.00   BofA Checking
-13  2025-01-25   COMCAST BUSINESS               -$129.99   BofA Checking
-14  2025-01-28   STAPLES OFFICE SUPPLY           -$67.23   BofA Checking
-15  2025-01-31   INTEREST PAYMENT                  $2.14   BofA Checking
-26  2025-02-07   WEWORK MEMBERSHIP              -$450.00   BofA Checking
-27  2025-02-12   ZOOM VIDEO COMMUNICATIONS       -$14.99   BofA Checking
-28  2025-02-19   COSTCO WHOLESALE                -$29.33   BofA Checking
-29  2025-02-25   FEDEX SHIPPING                  -$18.75   BofA Checking
-30  2025-02-28   INTEREST PAYMENT                  $1.87   BofA Checking
-41  2025-03-14   DROPBOX BUSINESS                -$19.99   BofA Checking
-42  2025-03-18   TARGET STORE                    -$43.67   BofA Checking
-43  2025-03-26   COMCAST BUSINESS               -$129.99   BofA Checking
-44  2025-03-31   INTEREST PAYMENT                  $2.31   BofA Checking
+--  YYYY-MM-15   CHECK 1042                   -$2,400.00   BofA Checking
+--  YYYY-MM-20   VENMO PAYMENT                  -$150.00   BofA Checking
+--  YYYY-MM-25   COMCAST BUSINESS               -$129.99   BofA Checking
+--  YYYY-MM-28   STAPLES OFFICE SUPPLY           -$67.23   BofA Checking
+--  YYYY-MM-DD   INTEREST PAYMENT                  $1.50   BofA Checking
+--  YYYY-MM-22   DOORDASH DELIVERY               -$28.45   BofA Checking
+...
 ```
+
+*(Dates and IDs will vary based on when you run the demo. The 84 flagged transactions include rotating one-off expenses, interest payments, and Doordash deliveries that don't match any built-in rule.)*
 
 ## 4. Add rules for known vendors
 
@@ -99,10 +94,10 @@ $ nigel rules add "INTEREST PAYMENT" --category "Interest Income" --vendor "Bank
 Added rule: 'INTEREST PAYMENT' → Interest Income
 
 $ nigel categorize
-7 categorized, 7 still flagged
+35 categorized, 49 still flagged
 ```
 
-Four new rules knocked out 7 transactions. Now only 7 remain for manual review.
+Four new rules knocked out 35 transactions across 18 months. Now 49 remain for manual review.
 
 ## 5. Review flagged transactions
 
@@ -111,7 +106,7 @@ Step through the remaining flagged items. Nigel shows each transaction and a num
 ```
 $ nigel review
 
-7 flagged transactions to review.
+49 flagged transactions to review.
 
  #  Name                       Type
  1  Client Services            income
@@ -121,7 +116,7 @@ $ nigel review
 25  Transfer                   expense
 
 ────────────────────────────────────────
-  Date:        2025-02-07
+  Date:        YYYY-MM-07
   Description: WEWORK MEMBERSHIP
   Amount:      -$450.00
   Account:     BofA Checking
@@ -136,11 +131,13 @@ Rule pattern [WEWORK MEMBERSHIP]: WEWORK
 → Categorized as Rent / Lease
 ```
 
+*(Dates will vary based on when you run the demo.)*
+
 Continue through the rest — skip anything you're unsure about:
 
 ```
 ────────────────────────────────────────
-  Date:        2025-01-15
+  Date:        YYYY-MM-15
   Description: CHECK 1042
   Amount:      -$2,400.00
   Account:     BofA Checking
@@ -154,12 +151,14 @@ Review complete!
 
 ## 6. Reconcile
 
-Reconcile against a known balance for the demo data:
+Reconcile against a known statement balance for the most recent complete month:
 
 ```
-$ nigel reconcile "BofA Checking" --month 2025-01 --balance 17480.37
-Reconciled! Calculated: $17,480.37
+$ nigel reconcile "BofA Checking" --month YYYY-MM --balance <ending balance>
+Reconciled! Calculated: $XX,XXX.XX
 ```
+
+*(Use the month and ending balance from your most recent bank statement. Since demo data is generated dynamically, the calculated balance will vary.)*
 
 ## 7. Run reports
 
