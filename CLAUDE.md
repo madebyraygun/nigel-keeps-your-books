@@ -14,6 +14,8 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait, `run_report_view()`) for interactive screens; `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
 - **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum (includes `Snake(SnakeGame)` variant); Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse, Review, and Snake screens; merged View/Export picker screen for reports; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command. The dashboard menu includes a Snake game easter egg.
 - **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout
+- **Effects:** `effects.rs` — shared pastel rainbow gradient palette, `gradient_color()` interpolation, `Particle` struct with `new()`/`seeded()`/`tick()`/`is_dead()`, `pre_seed_particles()`, and `tick_particles()` helpers; used by splash, onboarding, and snake screens
+- **Splash:** `cli/splash.rs` — 1.5-second splash screen shown on app launch (skipped during first-run onboarding); displays Nigel ASCII logo with rainbow gradient text and pre-seeded floating particle background; dismissable by any keypress
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
@@ -111,6 +113,7 @@ src/
       view.rs           # Ratatui interactive report views (scrollable, colored)
     browse.rs           # nigel browse (interactive browsers)
     snake.rs            # Snake game easter egg (ratatui, accessible from dashboard)
+    splash.rs           # Splash screen (1.5s animated logo + particles, shown on launch)
     export.rs           # PDF export helpers (per-function feature-gated behind "pdf")
     reconcile.rs        # nigel reconcile
     load.rs             # nigel load (switch data directory)
@@ -123,6 +126,7 @@ src/
   reviewer.rs           # Interactive review flow
   reports.rs            # Report data functions (pnl, expenses, tax, cashflow, balance, flagged, k1_prep)
   browser.rs            # Interactive register browser (ratatui, row selection, inline editing, flag toggle, scroll navigation)
+  effects.rs            # Shared gradient/particle effects (used by splash, onboarding, snake)
   tui.rs                # Shared ratatui helpers (styles, money_span, wrap_text, ReportView trait, run_report_view)
   pdf.rs                # PDF rendering engine (feature-gated behind "pdf")
   reconciler.rs         # Monthly reconciliation
