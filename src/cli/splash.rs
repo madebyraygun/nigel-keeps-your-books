@@ -1,21 +1,22 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyEventKind};
+use rand::seq::SliceRandom;
 use ratatui::{
-    layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Alignment, Constraint, Layout},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
 
-use crate::effects::{self, gradient_color, Particle, GRADIENT, LOGO, PARTICLE_CHARS};
+use crate::effects::{self, gradient_color, Particle, LOGO};
 use crate::error::Result;
 
 const SPLASH_DURATION: Duration = Duration::from_millis(1500);
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
-const FADE_IN_MS: f64 = 400.0;
-const FADE_OUT_MS: f64 = 400.0;
+const REVEAL_MS: f64 = 500.0;
+const DISSOLVE_MS: f64 = 400.0;
 
 struct Splash {
     phase: f64,
@@ -23,35 +24,40 @@ struct Splash {
     width: u16,
     height: u16,
     start: Instant,
+    /// Logo character positions in randomized reveal order
+    reveal_order: Vec<(usize, usize)>,
 }
 
 impl Splash {
     fn new() -> Self {
         let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
+
+        // Build a list of all non-space character positions, then shuffle
+        let mut positions: Vec<(usize, usize)> = Vec::new();
+        for (row, line) in LOGO.iter().enumerate() {
+            let padded = format!("{:<width$}", line, width = max_logo_width);
+            for (col, ch) in padded.chars().enumerate() {
+                if ch != ' ' {
+                    positions.push((row, col));
+                }
+            }
+        }
+        let mut rng = rand::thread_rng();
+        positions.shuffle(&mut rng);
+
         Self {
             phase: 0.0,
             particles: effects::pre_seed_particles(width, height),
             width,
             height,
             start: Instant::now(),
+            reveal_order: positions,
         }
     }
 
     fn is_expired(&self) -> bool {
         self.start.elapsed() >= SPLASH_DURATION
-    }
-
-    fn opacity(&self) -> f64 {
-        let elapsed = self.start.elapsed().as_secs_f64() * 1000.0;
-        let total = SPLASH_DURATION.as_secs_f64() * 1000.0;
-        let remaining = total - elapsed;
-        if elapsed < FADE_IN_MS {
-            elapsed / FADE_IN_MS
-        } else if remaining < FADE_OUT_MS {
-            (remaining / FADE_OUT_MS).max(0.0)
-        } else {
-            1.0
-        }
     }
 
     fn tick(&mut self) {
@@ -63,31 +69,13 @@ impl Splash {
         let area = frame.area();
         self.width = area.width;
         self.height = area.height;
-        let opacity = self.opacity();
 
-        // Render particles with fade
-        for p in &self.particles {
-            let px = p.x.round() as u16;
-            let py = p.y.round() as u16;
-            if px < area.width && py < area.height {
-                let (r, g, b) = GRADIENT[p.color_idx];
-                let a = p.brightness * opacity;
-                let particle_area = Rect::new(area.x + px, area.y + py, 1, 1);
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        PARTICLE_CHARS[p.char_idx].to_string(),
-                        Style::default().fg(Color::Rgb(
-                            (r * a) as u8,
-                            (g * a) as u8,
-                            (b * a) as u8,
-                        )),
-                    )),
-                    particle_area,
-                );
-            }
-        }
+        let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = SPLASH_DURATION.as_secs_f64() * 1000.0;
+        let remaining_ms = total_ms - elapsed_ms;
 
-        // Render logo with fade
+        effects::render_particles(&self.particles, frame, area);
+
         let logo_height = LOGO.len() as u16;
         let [_top, logo_area, _bottom] = Layout::vertical([
             Constraint::Fill(1),
@@ -95,6 +83,27 @@ impl Splash {
             Constraint::Fill(1),
         ])
         .areas(area);
+
+        // Determine which characters are visible based on reveal/dissolve progress
+        let total_chars = self.reveal_order.len();
+        let chars_visible = if elapsed_ms < REVEAL_MS {
+            // Reveal phase: progressively show characters
+            let progress = elapsed_ms / REVEAL_MS;
+            (progress * total_chars as f64) as usize
+        } else if remaining_ms < DISSOLVE_MS {
+            // Dissolve phase: progressively hide characters (reverse order)
+            let progress = (remaining_ms / DISSOLVE_MS).max(0.0);
+            (progress * total_chars as f64) as usize
+        } else {
+            total_chars
+        };
+
+        // Build set of visible positions
+        let visible: std::collections::HashSet<(usize, usize)> =
+            self.reveal_order[..chars_visible.min(total_chars)]
+                .iter()
+                .copied()
+                .collect();
 
         let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
         let gradient_width = 40.0;
@@ -107,25 +116,16 @@ impl Splash {
                     .chars()
                     .enumerate()
                     .map(|(col, ch)| {
-                        if ch == ' ' {
+                        if ch == ' ' || !visible.contains(&(row, col)) {
                             Span::raw(" ")
                         } else {
                             let t = (col as f64 / gradient_width)
                                 + (row as f64 * 0.04)
                                 - self.phase;
-                            let color = gradient_color(t);
-                            let (r, g, b) = match color {
-                                Color::Rgb(r, g, b) => (r, g, b),
-                                _ => (255, 255, 255),
-                            };
                             Span::styled(
                                 ch.to_string(),
                                 Style::default()
-                                    .fg(Color::Rgb(
-                                        (r as f64 * opacity) as u8,
-                                        (g as f64 * opacity) as u8,
-                                        (b as f64 * opacity) as u8,
-                                    ))
+                                    .fg(gradient_color(t))
                                     .add_modifier(Modifier::BOLD),
                             )
                         }
@@ -202,5 +202,21 @@ mod tests {
     #[test]
     fn splash_duration_is_1500ms() {
         assert_eq!(SPLASH_DURATION, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn reveal_order_contains_all_logo_chars() {
+        let splash = Splash::new();
+        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
+        let expected: usize = LOGO
+            .iter()
+            .map(|line| {
+                format!("{:<width$}", line, width = max_logo_width)
+                    .chars()
+                    .filter(|c| *c != ' ')
+                    .count()
+            })
+            .sum();
+        assert_eq!(splash.reveal_order.len(), expected);
     }
 }
