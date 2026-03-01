@@ -53,8 +53,8 @@ impl SnakeGame {
         let cy = board_height / 2;
         let mut body = VecDeque::new();
         body.push_back((cx, cy));
-        body.push_back((cx - 1, cy));
-        body.push_back((cx - 2, cy));
+        body.push_back((cx.saturating_sub(1), cy));
+        body.push_back((cx.saturating_sub(2), cy));
 
         let food = Self::random_food_pos(&body, board_width, board_height, &mut rng);
         let food_value = Self::random_food_value(&mut rng);
@@ -109,37 +109,17 @@ impl SnakeGame {
 
         let (hx, hy) = self.body[0];
         let new_head = match self.direction {
-            Direction::Up => {
-                if hy == 0 {
-                    self.game_over = true;
-                    return;
-                }
-                (hx, hy - 1)
-            }
-            Direction::Down => {
-                let ny = hy + 1;
-                if ny >= self.board_height {
-                    self.game_over = true;
-                    return;
-                }
-                (hx, ny)
-            }
-            Direction::Left => {
-                if hx == 0 {
-                    self.game_over = true;
-                    return;
-                }
-                (hx - 1, hy)
-            }
-            Direction::Right => {
-                let nx = hx + 1;
-                if nx >= self.board_width {
-                    self.game_over = true;
-                    return;
-                }
-                (nx, hy)
-            }
+            Direction::Up => (hx, hy.wrapping_sub(1)),
+            Direction::Down => (hx, hy + 1),
+            Direction::Left => (hx.wrapping_sub(1), hy),
+            Direction::Right => (hx + 1, hy),
         };
+
+        // Wall collision (wrapping underflow gives u16::MAX which is >= board size)
+        if new_head.0 >= self.board_width || new_head.1 >= self.board_height {
+            self.game_over = true;
+            return;
+        }
 
         // Self collision
         if self.body.contains(&new_head) {
