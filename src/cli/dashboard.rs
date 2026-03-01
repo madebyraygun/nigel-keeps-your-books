@@ -13,6 +13,7 @@ use ratatui::{
 
 use crate::browser::{BrowseAction, RegisterBrowser};
 use crate::cli::review::{HandleResult, TransactionReviewer};
+use crate::cli::snake::{SnakeAction, SnakeGame};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::number;
@@ -48,10 +49,11 @@ const MENU_ITEMS: &[&str] = &[
     "View a report",
     "Export a report",
     "Load a different data file",
+    "Snake",
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
-const MENU_LEFT_COUNT: usize = 4;
+const MENU_LEFT_COUNT: usize = 5;
 
 const REPORT_TYPES: &[&str] = &[
     "Profit & Loss",
@@ -88,6 +90,7 @@ enum DashboardScreen {
     Review(TransactionReviewer),
     ReportPicker { selection: usize, mode: ReportPickerMode },
     ReportView(Box<dyn ReportView>),
+    Snake(SnakeGame),
 }
 
 enum TerminalCommand {
@@ -248,6 +251,10 @@ impl Dashboard {
                 ReportPickerMode::Export => ("Select a report to export", EXPORT_TYPES as &[&str]),
             };
             self.draw_picker(frame, title, items, selection);
+            return;
+        }
+        if let DashboardScreen::Snake(ref mut game) = self.screen {
+            game.draw(frame);
             return;
         }
         self.draw_home(frame);
@@ -574,6 +581,7 @@ impl Dashboard {
                 5 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
                 6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
                 7 => self.terminal_action = Some(TerminalCommand::Load),
+                8 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
                 _ => {}
             },
             _ => {}
@@ -930,6 +938,21 @@ pub fn run() -> Result<()> {
                 break Err(e.into());
             }
 
+            if let DashboardScreen::Snake(ref mut game) = dashboard.screen {
+                let timeout = game.tick_rate();
+                match crossterm::event::poll(timeout) {
+                    Ok(true) => {
+                        // Key is available, fall through to event::read() below
+                    }
+                    Ok(false) => {
+                        // No input within timeout — advance game tick
+                        game.do_tick();
+                        continue;
+                    }
+                    Err(e) => break Err(e.into()),
+                }
+            }
+
             match event::read() {
                 Err(e) => break Err(e.into()),
                 Ok(Event::Key(key)) => {
@@ -1026,6 +1049,15 @@ pub fn run() -> Result<()> {
                                 _ => {}
                             }
                             key.code == KeyCode::Char('q')
+                        }
+                        DashboardScreen::Snake(ref mut game) => {
+                            match game.handle_key(key.code) {
+                                SnakeAction::Quit => {
+                                    return_home = true;
+                                }
+                                SnakeAction::Continue => {}
+                            }
+                            false
                         }
                     };
 

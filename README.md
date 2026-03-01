@@ -20,6 +20,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
+- **Snake game** — because even your bookkeeper needs a break sometimes (find it in the dashboard menu)
 
 Importers currently include Bank of America and Gusto, but adding new importers is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
 
