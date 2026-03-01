@@ -10,8 +10,8 @@ use ratatui::{
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::reviewer::{
-    apply_review, get_categories, get_flagged_transactions, undo_review, CategoryChoice,
-    FlaggedTxn,
+    apply_review, get_categories, get_flagged_transactions, get_transaction_by_id, undo_review,
+    CategoryChoice, FlaggedTxn,
 };
 use crate::settings::get_data_dir;
 use crate::tui::money_span;
@@ -449,14 +449,18 @@ impl HandleResult {
     }
 }
 
-pub fn run() -> Result<()> {
+pub fn run(id: Option<i64>) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let flagged = get_flagged_transactions(&conn)?;
-
-    if flagged.is_empty() {
-        println!("No flagged transactions to review.");
-        return Ok(());
-    }
+    let flagged = if let Some(txn_id) = id {
+        vec![get_transaction_by_id(&conn, txn_id)?]
+    } else {
+        let txns = get_flagged_transactions(&conn)?;
+        if txns.is_empty() {
+            println!("No flagged transactions to review.");
+            return Ok(());
+        }
+        txns
+    };
 
     let categories = get_categories(&conn)?;
     let total = flagged.len();
@@ -513,8 +517,11 @@ pub fn run() -> Result<()> {
                 // Match standard SIGINT exit behavior
                 std::process::exit(130);
             }
-            println!("{total} transactions to review");
-            println!("Review complete!");
+            if total == 1 {
+                println!("Transaction reviewed.");
+            } else {
+                println!("{total} transactions reviewed.");
+            }
         }
         Err(e) => eprintln!("Review error: {e}"),
     }

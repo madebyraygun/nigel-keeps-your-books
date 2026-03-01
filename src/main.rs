@@ -70,7 +70,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             } => cli::rules::update(id, pattern, category, vendor, match_type, priority),
             RulesCommands::Delete { id } => cli::rules::delete(id),
         },
-        Commands::Review => cli::review::run(),
+        Commands::Review { id } => cli::review::run(id),
         Commands::Report { command } => cli::report::dispatch(command),
         Commands::Browse { command } => match command {
             BrowseCommands::Register {
