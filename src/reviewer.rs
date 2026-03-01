@@ -1,7 +1,8 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 
+#[derive(Debug)]
 pub struct FlaggedTxn {
     pub id: i64,
     pub date: String,
@@ -34,6 +35,30 @@ pub fn get_flagged_transactions(conn: &Connection) -> Result<Vec<FlaggedTxn>> {
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+pub fn get_transaction_by_id(conn: &Connection, id: i64) -> Result<FlaggedTxn> {
+    conn.query_row(
+        "SELECT t.id, t.date, t.description, t.amount, a.name as account_name \
+         FROM transactions t JOIN accounts a ON t.account_id = a.id \
+         WHERE t.id = ?1",
+        rusqlite::params![id],
+        |row| {
+            Ok(FlaggedTxn {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                description: row.get(2)?,
+                amount: row.get(3)?,
+                account_name: row.get(4)?,
+            })
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::Other(format!("No transaction found with ID {id}"))
+        }
+        other => other.into(),
+    })
 }
 
 pub fn get_categories(conn: &Connection) -> Result<Vec<CategoryChoice>> {
@@ -159,6 +184,25 @@ mod tests {
             rusqlite::params![acct],
         ).unwrap();
         conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn test_get_transaction_by_id() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn);
+        let txn = get_transaction_by_id(&conn, txn_id).unwrap();
+        assert_eq!(txn.id, txn_id);
+        assert_eq!(txn.description, "ADOBE CREATIVE");
+        assert_eq!(txn.account_name, "Test");
+    }
+
+    #[test]
+    fn test_get_transaction_by_id_not_found() {
+        let (_dir, conn) = test_db();
+        let result = get_transaction_by_id(&conn, 99999);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No transaction found with ID 99999"));
     }
 
     #[test]
