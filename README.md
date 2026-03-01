@@ -8,7 +8,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 
 ## Features
 
-- **Interactive dashboard** — run `nigel` with no arguments to see YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, view rules, view/export reports, and switch data files — all from the dashboard
+- **Interactive dashboard** — run `nigel` with no arguments to see a splash screen, then YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, view rules, view/export reports, and switch data files — all from the dashboard
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports

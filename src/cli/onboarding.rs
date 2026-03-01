@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use rand::Rng;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -10,92 +9,9 @@ use ratatui::{
     Frame,
 };
 
+use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
-
-const LOGO: &[&str] = &[
-    r"  /$$   /$$ /$$                     /$$",
-    r" | $$$ | $$|__/                    | $$",
-    r" | $$$$| $$ /$$  /$$$$$$   /$$$$$$ | $$",
-    r" | $$ $$ $$| $$ /$$__  $$ /$$__  $$| $$",
-    r" | $$  $$$$| $$| $$  \ $$| $$$$$$$$| $$",
-    r" | $$\  $$$| $$| $$  | $$| $$_____/| $$",
-    r" | $$ \  $$| $$|  $$$$$$$|  $$$$$$$| $$",
-    r" |__/  \__/|__/ \____  $$ \_______/|__/",
-    r"                /$$  \ $$",
-    r"               |  $$$$$$/",
-    r"                \______/",
-];
-
-// Gradient stops matching the HTML: pink → peach → yellow → mint → cyan → lavender → magenta → pink
-const GRADIENT: &[(f64, f64, f64)] = &[
-    (255.0, 179.0, 186.0), // #ffb3ba soft pink
-    (255.0, 200.0, 162.0), // #ffc8a2 peach
-    (255.0, 224.0, 163.0), // #ffe0a3 pastel yellow
-    (201.0, 255.0, 203.0), // #c9ffcb mint
-    (186.0, 225.0, 255.0), // #bae1ff pastel cyan
-    (196.0, 183.0, 255.0), // #c4b7ff lavender
-    (255.0, 179.0, 222.0), // #ffb3de soft magenta
-    (255.0, 179.0, 186.0), // #ffb3ba wrap back to pink
-];
-
-/// Interpolate along the gradient for a position in 0.0..1.0
-fn gradient_color(t: f64) -> Color {
-    let t = t.rem_euclid(1.0);
-    let segments = (GRADIENT.len() - 1) as f64;
-    let scaled = t * segments;
-    let idx = (scaled as usize).min(GRADIENT.len() - 2);
-    let frac = scaled - idx as f64;
-
-    let (r1, g1, b1) = GRADIENT[idx];
-    let (r2, g2, b2) = GRADIENT[idx + 1];
-
-    let r = (r1 + (r2 - r1) * frac) as u8;
-    let g = (g1 + (g2 - g1) * frac) as u8;
-    let b = (b1 + (b2 - b1) * frac) as u8;
-
-    Color::Rgb(r, g, b)
-}
-
-const MAX_PARTICLES: usize = 20;
-const PARTICLE_CHARS: &[char] = &['·', '∘', '•', '◦'];
-
-struct Particle {
-    x: f64,
-    y: f64,
-    speed: f64,
-    drift: f64,
-    brightness: f64,
-    char_idx: usize,
-    color_idx: usize,
-}
-
-impl Particle {
-    fn new(width: u16, height: u16) -> Self {
-        let mut rng = rand::thread_rng();
-        Self {
-            x: rng.gen_range(0.0..width as f64),
-            y: height as f64 + rng.gen_range(0.0..5.0),
-            speed: rng.gen_range(0.15..0.45),
-            drift: rng.gen_range(-0.1..0.1),
-            brightness: 0.0,
-            char_idx: rng.gen_range(0..PARTICLE_CHARS.len()),
-            color_idx: rng.gen_range(0..GRADIENT.len() - 1),
-        }
-    }
-
-    fn tick(&mut self) {
-        self.y -= self.speed;
-        self.x += self.drift;
-        if self.y > 0.0 {
-            self.brightness = (self.brightness + 0.08).min(0.6);
-        }
-    }
-
-    fn is_dead(&self) -> bool {
-        self.y < -1.0
-    }
-}
 
 /// What the user chose to do after onboarding.
 #[derive(Clone, Copy)]
@@ -144,6 +60,7 @@ struct Onboarding {
 
 impl Onboarding {
     fn new() -> Self {
+        let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
         Self {
             user_name: String::new(),
             company_name: String::new(),
@@ -152,9 +69,9 @@ impl Onboarding {
             action_selection: 0,
             screen: Screen::NameInput,
             phase: 0.0,
-            particles: Vec::new(),
-            width: 80,
-            height: 24,
+            particles: effects::pre_seed_particles(width, height),
+            width,
+            height,
         }
     }
 
@@ -174,16 +91,7 @@ impl Onboarding {
 
     fn tick(&mut self) {
         self.phase += 1.0 / 70.0;
-
-        for p in &mut self.particles {
-            p.tick();
-        }
-        self.particles.retain(|p| !p.is_dead());
-
-        let mut rng = rand::thread_rng();
-        if self.particles.len() < MAX_PARTICLES && rng.gen_range(0..3) == 0 {
-            self.particles.push(Particle::new(self.width, self.height));
-        }
+        effects::tick_particles(&mut self.particles, self.width, self.height);
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -192,48 +100,12 @@ impl Onboarding {
         self.height = area.height;
 
         // Draw particles as background
-        self.draw_particles(frame, area);
+        effects::render_particles(&self.particles, frame, area);
 
         match self.screen {
             Screen::NameInput => self.draw_name_input(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
         }
-    }
-
-    fn draw_logo(&self, frame: &mut Frame, logo_area: Rect) {
-        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
-        let gradient_width = 40.0;
-        let logo_lines: Vec<Line> = LOGO
-            .iter()
-            .enumerate()
-            .map(|(row, line)| {
-                let padded = format!("{:<width$}", line, width = max_logo_width);
-                let spans: Vec<Span> = padded
-                    .chars()
-                    .enumerate()
-                    .map(|(col, ch)| {
-                        if ch == ' ' {
-                            Span::raw(" ")
-                        } else {
-                            let t = (col as f64 / gradient_width)
-                                + (row as f64 * 0.04)
-                                - self.phase;
-                            Span::styled(
-                                ch.to_string(),
-                                Style::default()
-                                    .fg(gradient_color(t))
-                                    .add_modifier(Modifier::BOLD),
-                            )
-                        }
-                    })
-                    .collect();
-                Line::from(spans)
-            })
-            .collect();
-        frame.render_widget(
-            Paragraph::new(logo_lines).alignment(ratatui::layout::Alignment::Center),
-            logo_area,
-        );
     }
 
     fn draw_name_input(&self, frame: &mut Frame, area: Rect) {
@@ -254,7 +126,7 @@ impl Onboarding {
             ])
             .areas(area);
 
-        self.draw_logo(frame, logo_area);
+        effects::render_logo(self.phase, frame, logo_area);
 
         frame.render_widget(
             Paragraph::new(Span::styled("Welcome! Let's get you set up.", HEADER_STYLE))
@@ -309,7 +181,7 @@ impl Onboarding {
             ])
             .areas(area);
 
-        self.draw_logo(frame, logo_area);
+        effects::render_logo(self.phase, frame, logo_area);
 
         frame.render_widget(
             Paragraph::new(Span::styled("How would you like to start?", HEADER_STYLE))
@@ -342,29 +214,6 @@ impl Onboarding {
                 .alignment(ratatui::layout::Alignment::Center),
             hints_area,
         );
-    }
-
-    fn draw_particles(&self, frame: &mut Frame, area: Rect) {
-        for p in &self.particles {
-            let px = p.x.round() as u16;
-            let py = p.y.round() as u16;
-            if px < area.width && py < area.height {
-                let (r, g, b) = GRADIENT[p.color_idx];
-                let alpha = p.brightness;
-                let r = (r * alpha) as u8;
-                let g = (g * alpha) as u8;
-                let b = (b * alpha) as u8;
-                let ch = PARTICLE_CHARS[p.char_idx];
-                let particle_area = Rect::new(area.x + px, area.y + py, 1, 1);
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        ch.to_string(),
-                        Style::default().fg(Color::Rgb(r, g, b)),
-                    )),
-                    particle_area,
-                );
-            }
-        }
     }
 
     /// Convert a char-index cursor position to a byte offset in the string.
@@ -507,12 +356,6 @@ impl Onboarding {
 
 /// Run the onboarding TUI. Returns Some(OnboardingResult) if completed, None if skipped.
 pub fn run() -> Result<Option<OnboardingResult>> {
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        ratatui::restore();
-        hook(info);
-    }));
-
     let mut onboarding = Onboarding::new();
     let mut terminal = ratatui::init();
 

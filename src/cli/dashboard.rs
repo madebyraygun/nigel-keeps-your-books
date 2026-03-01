@@ -851,10 +851,16 @@ fn do_export(idx: usize) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 pub fn run() -> Result<()> {
+    // Returning users: show splash screen before dashboard
+    let is_first_run = !settings_file_exists();
+    if !is_first_run {
+        super::splash::run()?;
+    }
+
     // First-run: show onboarding, then ensure data dir + DB exist
     let mut post_setup_action = None;
     let mut onboarding_company = None;
-    if !settings_file_exists() {
+    if is_first_run {
         if let Some(result) = super::onboarding::run()? {
             let mut settings = load_settings();
             if !result.user_name.is_empty() {
@@ -919,12 +925,6 @@ pub fn run() -> Result<()> {
     } else {
         Some(settings.user_name.clone())
     };
-
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        ratatui::restore();
-        hook(info);
-    }));
 
     loop {
         let conn = get_connection(&get_data_dir().join("nigel.db"))?;
