@@ -11,6 +11,7 @@ use ratatui::{
 
 use crate::browser::{BrowseAction, RegisterBrowser};
 use crate::cli::account_manager::{AccountAction, AccountManager};
+use crate::cli::category_manager::{CategoryAction, CategoryManager};
 use crate::cli::import_manager::{ImportAction, ImportScreen};
 use crate::cli::load_manager::{LoadAction, LoadScreen};
 use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
@@ -48,6 +49,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[r] Review flagged transactions", 'r'),
     ("[c] Reconcile an account", 'c'),
     ("[a] Add or modify accounts", 'a'),
+    ("[t] Edit chart of accounts", 't'),
     ("[u] View or edit categorization rules", 'u'),
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
@@ -56,7 +58,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
-const MENU_LEFT_COUNT: usize = 5;
+const MENU_LEFT_COUNT: usize = 6;
 
 const REPORT_TYPES: &[&str] = &[
     "Profit & Loss",
@@ -93,6 +95,7 @@ enum DashboardScreen {
     Import(ImportScreen),
     Review(TransactionReviewer),
     Accounts(AccountManager),
+    Categories(CategoryManager),
     Rules(RulesManager),
     Reconcile(ReconcileScreen),
     Load(LoadScreen),
@@ -250,6 +253,10 @@ impl Dashboard {
             return;
         }
         if let DashboardScreen::Accounts(ref manager) = self.screen {
+            manager.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Categories(ref mut manager) = self.screen {
             manager.draw(frame);
             return;
         }
@@ -593,11 +600,12 @@ impl Dashboard {
             2 => self.screen = self.enter_review(conn),
             3 => self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting)),
             4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
-            5 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
-            6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
-            7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
-            8 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            9 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            5 => self.screen = DashboardScreen::Categories(CategoryManager::new(conn, &self.greeting)),
+            6 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
+            7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
+            8 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
+            9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            10 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -961,6 +969,15 @@ pub fn run() -> Result<()> {
                                     return_home = true;
                                 }
                                 AccountAction::Continue => {}
+                            }
+                            false
+                        }
+                        DashboardScreen::Categories(ref mut manager) => {
+                            match manager.handle_key(key.code, &conn) {
+                                CategoryAction::Close => {
+                                    return_home = true;
+                                }
+                                CategoryAction::Continue => {}
                             }
                             false
                         }

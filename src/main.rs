@@ -17,7 +17,7 @@ mod settings;
 
 use clap::Parser;
 
-use cli::{AccountsCommands, BrowseCommands, Cli, Commands, RulesCommands};
+use cli::{AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, RulesCommands};
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -51,6 +51,24 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 last_four,
             } => cli::accounts::add(&name, &account_type, institution.as_deref(), last_four.as_deref()),
             AccountsCommands::List => cli::accounts::list(),
+        },
+        Commands::Categories { command } => match command {
+            CategoriesCommands::List => cli::categories::list(),
+            CategoriesCommands::Add {
+                name,
+                category_type,
+                tax_line,
+                form_line,
+            } => cli::categories::add(&name, &category_type, tax_line.as_deref(), form_line.as_deref()),
+            CategoriesCommands::Rename { id, name } => cli::categories::rename(id, &name),
+            CategoriesCommands::Update {
+                id,
+                name,
+                category_type,
+                tax_line,
+                form_line,
+            } => cli::categories::update(id, &name, &category_type, tax_line.as_deref(), form_line.as_deref()),
+            CategoriesCommands::Delete { id } => cli::categories::delete(id),
         },
         Commands::Import {
             file,
