@@ -12,6 +12,75 @@ use std::time::{Duration, Instant};
 
 const TICK_RATE: Duration = Duration::from_millis(150);
 
+// Pastel rainbow gradient: pink → peach → yellow → mint → cyan → lavender → magenta → pink
+const GRADIENT: &[(f64, f64, f64)] = &[
+    (255.0, 179.0, 186.0),
+    (255.0, 200.0, 162.0),
+    (255.0, 224.0, 163.0),
+    (201.0, 255.0, 203.0),
+    (186.0, 225.0, 255.0),
+    (196.0, 183.0, 255.0),
+    (255.0, 179.0, 222.0),
+    (255.0, 179.0, 186.0),
+];
+
+fn gradient_color(t: f64) -> Color {
+    let t = t.rem_euclid(1.0);
+    let segments = (GRADIENT.len() - 1) as f64;
+    let scaled = t * segments;
+    let idx = (scaled as usize).min(GRADIENT.len() - 2);
+    let frac = scaled - idx as f64;
+
+    let (r1, g1, b1) = GRADIENT[idx];
+    let (r2, g2, b2) = GRADIENT[idx + 1];
+
+    let r = (r1 + (r2 - r1) * frac) as u8;
+    let g = (g1 + (g2 - g1) * frac) as u8;
+    let b = (b1 + (b2 - b1) * frac) as u8;
+
+    Color::Rgb(r, g, b)
+}
+
+const MAX_PARTICLES: usize = 20;
+const PARTICLE_CHARS: &[char] = &['·', '∘', '•', '◦'];
+
+struct Particle {
+    x: f64,
+    y: f64,
+    speed: f64,
+    drift: f64,
+    brightness: f64,
+    char_idx: usize,
+    color_idx: usize,
+}
+
+impl Particle {
+    fn new(width: u16, height: u16) -> Self {
+        let mut rng = rand::thread_rng();
+        Self {
+            x: rng.gen_range(0.0..width as f64),
+            y: height as f64 + rng.gen_range(0.0..5.0),
+            speed: rng.gen_range(0.15..0.45),
+            drift: rng.gen_range(-0.1..0.1),
+            brightness: 0.0,
+            char_idx: rng.gen_range(0..PARTICLE_CHARS.len()),
+            color_idx: rng.gen_range(0..GRADIENT.len() - 1),
+        }
+    }
+
+    fn tick(&mut self) {
+        self.y -= self.speed;
+        self.x += self.drift;
+        if self.y > 0.0 {
+            self.brightness = (self.brightness + 0.08).min(0.6);
+        }
+    }
+
+    fn is_dead(&self) -> bool {
+        self.y < -1.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction {
     Up,
@@ -48,6 +117,8 @@ pub struct SnakeGame {
     pub board_width: u16,
     pub board_height: u16,
     rng: rand::rngs::ThreadRng,
+    particles: Vec<Particle>,
+    phase: f64,
 }
 
 impl SnakeGame {
@@ -78,6 +149,8 @@ impl SnakeGame {
             board_width,
             board_height,
             rng,
+            particles: Vec::new(),
+            phase: 0.0,
         }
     }
 
@@ -179,6 +252,18 @@ impl SnakeGame {
     pub fn do_tick(&mut self) {
         self.tick();
         self.last_tick = Instant::now();
+
+        // Advance gradient phase and particles
+        self.phase += 1.0 / 70.0;
+        for p in &mut self.particles {
+            p.tick();
+        }
+        self.particles.retain(|p| !p.is_dead());
+        let mut rng = rand::thread_rng();
+        if self.particles.len() < MAX_PARTICLES && rng.gen_range(0..3) == 0 {
+            self.particles
+                .push(Particle::new(self.board_width, self.board_height));
+        }
     }
 
     pub fn tick_rate(&self) -> Duration {
@@ -186,11 +271,21 @@ impl SnakeGame {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
-        let area = frame.area();
+        let full = frame.area();
 
-        // Board sizing: leave room for border (2 cols) and title/footer (4 rows)
-        let board_width = (area.width.saturating_sub(2)).min(80);
-        let board_height = (area.height.saturating_sub(4)).min(40);
+        // Board sizing: subtract 2 for border on each side
+        let board_width = (full.width.saturating_sub(2)).min(80);
+        let board_height = (full.height.saturating_sub(2)).min(40);
+
+        // Center the play area when terminal is larger than needed
+        let render_w = board_width + 2;
+        let render_h = board_height + 2;
+        let area = Rect::new(
+            full.x + full.width.saturating_sub(render_w) / 2,
+            full.y + full.height.saturating_sub(render_h) / 2,
+            render_w.min(full.width),
+            render_h.min(full.height),
+        );
 
         // If board size changed, clamp snake and food to new bounds
         if board_width != self.board_width || board_height != self.board_height {
@@ -216,7 +311,7 @@ impl SnakeGame {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(gradient_color(self.phase)))
             .title(
                 Line::from(Span::styled(
                     score_str,
@@ -234,25 +329,26 @@ impl SnakeGame {
                 .alignment(Alignment::Center),
             );
 
-        // Build game field
+        // Build game field with rainbow body and background particles
         let mut lines: Vec<Line> = Vec::with_capacity(board_height as usize);
         for y in 0..board_height {
             let mut spans: Vec<Span> = Vec::with_capacity(board_width as usize);
             for x in 0..board_width {
                 let pos = (x, y);
                 if pos == self.body[0] {
-                    // Snake head
+                    // Snake head — bright white to stand out
                     spans.push(Span::styled(
                         "\u{2588}",
                         Style::default()
-                            .fg(Color::LightGreen)
+                            .fg(Color::White)
                             .add_modifier(Modifier::BOLD),
                     ));
-                } else if self.body.contains(&pos) {
-                    // Snake body
+                } else if let Some(idx) = self.body.iter().position(|&p| p == pos) {
+                    // Snake body — rainbow gradient trail
+                    let color = gradient_color(self.phase + idx as f64 * 0.05);
                     spans.push(Span::styled(
                         "\u{2588}",
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(color),
                     ));
                 } else if pos == self.food {
                     // Food
@@ -261,6 +357,21 @@ impl SnakeGame {
                         Style::default()
                             .fg(Color::Green)
                             .add_modifier(Modifier::BOLD),
+                    ));
+                } else if let Some(p) = self.particles.iter().find(|p| {
+                    p.x.round() as u16 == x && p.y.round() as u16 == y
+                }) {
+                    // Background particle
+                    let (r, g, b) = GRADIENT[p.color_idx];
+                    let a = p.brightness;
+                    let ch = PARTICLE_CHARS[p.char_idx];
+                    spans.push(Span::styled(
+                        ch.to_string(),
+                        Style::default().fg(Color::Rgb(
+                            (r * a) as u8,
+                            (g * a) as u8,
+                            (b * a) as u8,
+                        )),
                     ));
                 } else {
                     spans.push(Span::raw(" "));
