@@ -125,6 +125,16 @@ pub fn transaction_count(conn: &Connection, account_id: i64) -> Result<i64> {
     Ok(count)
 }
 
+pub fn account_names(conn: &Connection) -> Vec<String> {
+    let mut stmt = match conn.prepare("SELECT name FROM accounts ORDER BY name") {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    stmt.query_map([], |row| row.get(0))
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+}
+
 pub fn delete_account(conn: &Connection, id: i64) -> Result<()> {
     let count = transaction_count(conn, id)?;
     if count > 0 {

@@ -11,8 +11,9 @@ use ratatui::{
 use rusqlite::Connection;
 
 use crate::categorizer::categorize_transactions;
+use crate::cli::accounts;
 use crate::importer::import_file;
-use crate::settings::get_data_dir;
+use crate::settings::{get_data_dir, shellexpand_path};
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
 
 pub enum ImportAction {
@@ -45,7 +46,7 @@ pub struct ImportScreen {
 
 impl ImportScreen {
     pub fn new(conn: &Connection, greeting: &str) -> Self {
-        let accounts = load_account_names(conn);
+        let accounts = accounts::account_names(conn);
         Self {
             accounts,
             account_idx: 0,
@@ -205,7 +206,7 @@ impl ImportScreen {
         match &self.screen {
             Screen::Form => self.handle_form_key(code, conn),
             Screen::Result(_) => match code {
-                KeyCode::Esc | KeyCode::Char('q') => ImportAction::Close,
+                KeyCode::Esc => ImportAction::Close,
                 _ => ImportAction::Continue,
             },
         }
@@ -260,7 +261,7 @@ impl ImportScreen {
                     return ImportAction::Continue;
                 }
 
-                let file_path = PathBuf::from(shellexpand(&path_str));
+                let file_path = PathBuf::from(shellexpand_path(&path_str));
                 if !file_path.exists() {
                     self.status_message = Some(format!("File not found: {}", file_path.display()));
                     return ImportAction::Continue;
@@ -325,22 +326,3 @@ fn run_import(conn: &Connection, file_path: &PathBuf, account_name: &str) -> Imp
     }
 }
 
-fn load_account_names(conn: &Connection) -> Vec<String> {
-    let mut stmt = match conn.prepare("SELECT name FROM accounts ORDER BY name") {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-    stmt.query_map([], |row| row.get(0))
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
-}
-
-/// Expand `~` to home directory.
-fn shellexpand(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest).to_string_lossy().to_string();
-        }
-    }
-    path.to_string()
-}

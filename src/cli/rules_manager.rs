@@ -34,6 +34,7 @@ pub struct RulesManager {
     rules: Vec<RuleRow>,
     selection: usize,
     scroll_offset: usize,
+    last_visible_rows: usize,
     screen: Screen,
     status_message: Option<String>,
     status_ttl: u8,
@@ -47,6 +48,7 @@ impl RulesManager {
             rules,
             selection: 0,
             scroll_offset: 0,
+            last_visible_rows: 20,
             screen: Screen::List,
             status_message: None,
             status_ttl: 0,
@@ -63,7 +65,7 @@ impl RulesManager {
         }
     }
 
-    pub fn draw(&self, frame: &mut Frame) {
+    pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let border_style = Style::default().fg(Color::DarkGray);
 
@@ -87,6 +89,7 @@ impl RulesManager {
         let visible_height = content_area.height as usize;
         // 3 lines for title area + 1 for column header = 4 lines overhead
         let data_rows = visible_height.saturating_sub(4);
+        self.last_visible_rows = data_rows;
 
         let mut lines = vec![
             Line::from(""),
@@ -203,18 +206,16 @@ impl RulesManager {
         }
     }
 
-    fn handle_list_key(&mut self, code: KeyCode, conn: &Connection) -> RulesAction {
-        let _ = conn;
+    fn handle_list_key(&mut self, code: KeyCode, _conn: &Connection) -> RulesAction {
         match code {
             KeyCode::Up => {
                 self.selection = self.selection.saturating_sub(1);
-                // Assume ~20 visible rows as a reasonable default
-                self.ensure_visible(20);
+                self.ensure_visible(self.last_visible_rows);
             }
             KeyCode::Down => {
                 if !self.rules.is_empty() {
                     self.selection = (self.selection + 1).min(self.rules.len() - 1);
-                    self.ensure_visible(20);
+                    self.ensure_visible(self.last_visible_rows);
                 }
             }
             KeyCode::Char('d') => {
@@ -282,9 +283,10 @@ fn load_rules(conn: &Connection) -> Vec<RuleRow> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}\u{2026}", &s[..max - 1])
+        let truncated: String = s.chars().take(max - 1).collect();
+        format!("{truncated}\u{2026}")
     }
 }

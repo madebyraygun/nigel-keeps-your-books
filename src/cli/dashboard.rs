@@ -251,7 +251,7 @@ impl Dashboard {
             manager.draw(frame);
             return;
         }
-        if let DashboardScreen::Rules(ref rules) = self.screen {
+        if let DashboardScreen::Rules(ref mut rules) = self.screen {
             rules.draw(frame);
             return;
         }

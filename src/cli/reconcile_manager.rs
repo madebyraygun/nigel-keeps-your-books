@@ -8,6 +8,7 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
+use crate::cli::accounts;
 use crate::fmt::money;
 use crate::reconciler;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
@@ -46,7 +47,7 @@ pub struct ReconcileScreen {
 
 impl ReconcileScreen {
     pub fn new(conn: &Connection, greeting: &str) -> Self {
-        let accounts = load_account_names(conn);
+        let accounts = accounts::account_names(conn);
         Self {
             accounts,
             account_idx: 0,
@@ -218,7 +219,7 @@ impl ReconcileScreen {
             Screen::Form => self.handle_form_key(code, conn),
             Screen::Result(_) => {
                 match code {
-                    KeyCode::Esc | KeyCode::Char('q') => ReconcileAction::Close,
+                    KeyCode::Esc => ReconcileAction::Close,
                     _ => ReconcileAction::Continue,
                 }
             }
@@ -314,14 +315,4 @@ impl ReconcileScreen {
         }
         ReconcileAction::Continue
     }
-}
-
-fn load_account_names(conn: &Connection) -> Vec<String> {
-    let mut stmt = match conn.prepare("SELECT name FROM accounts ORDER BY name") {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-    stmt.query_map([], |row| row.get(0))
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
 }

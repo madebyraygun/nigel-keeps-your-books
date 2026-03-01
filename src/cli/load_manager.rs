@@ -104,7 +104,7 @@ impl LoadScreen {
     pub fn handle_key(&mut self, code: KeyCode) -> LoadAction {
         if self.done {
             return match code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => LoadAction::Reload,
+                KeyCode::Esc | KeyCode::Enter => LoadAction::Reload,
                 _ => LoadAction::Continue,
             };
         }
