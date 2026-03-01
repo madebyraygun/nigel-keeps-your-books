@@ -4,7 +4,6 @@ pub mod browse;
 pub mod categorize;
 pub mod dashboard;
 pub mod demo;
-#[cfg(feature = "pdf")]
 pub mod export;
 pub mod import;
 pub mod init;
@@ -15,7 +14,7 @@ pub mod review;
 pub mod rules;
 pub mod status;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
     if let Some(m) = month {
@@ -73,16 +72,10 @@ pub enum Commands {
         #[arg(long)]
         id: Option<i64>,
     },
-    /// Generate reports.
+    /// Generate, view, or export reports.
     Report {
         #[command(subcommand)]
         command: ReportCommands,
-    },
-    /// Export reports to PDF.
-    #[cfg(feature = "pdf")]
-    Export {
-        #[command(subcommand)]
-        command: ExportCommands,
     },
     /// Load sample data (account, transactions, rules) to explore Nigel.
     Demo,
@@ -185,88 +178,18 @@ pub enum RulesCommands {
     },
 }
 
-#[cfg(feature = "pdf")]
-#[derive(Subcommand)]
-pub enum ExportCommands {
-    /// Export Profit & Loss to PDF.
-    Pnl {
-        #[arg(long)]
-        month: Option<String>,
-        #[arg(long)]
-        year: Option<i32>,
-        #[arg(long = "from")]
-        from_date: Option<String>,
-        #[arg(long = "to")]
-        to_date: Option<String>,
-        /// Output file path
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export expense breakdown to PDF.
-    Expenses {
-        #[arg(long)]
-        month: Option<String>,
-        #[arg(long)]
-        year: Option<i32>,
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export tax summary to PDF.
-    Tax {
-        #[arg(long)]
-        year: Option<i32>,
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export cash flow to PDF.
-    Cashflow {
-        #[arg(long)]
-        month: Option<String>,
-        #[arg(long)]
-        year: Option<i32>,
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export transaction register to PDF.
-    Register {
-        #[arg(long)]
-        month: Option<String>,
-        #[arg(long)]
-        year: Option<i32>,
-        #[arg(long = "from")]
-        from_date: Option<String>,
-        #[arg(long = "to")]
-        to_date: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export flagged transactions to PDF.
-    Flagged {
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export cash position to PDF.
-    Balance {
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export K-1 preparation worksheet to PDF.
-    K1 {
-        #[arg(long)]
-        year: Option<i32>,
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Export all reports to PDF.
-    All {
-        #[arg(long)]
-        year: Option<i32>,
-        /// Output directory
-        #[arg(long = "output-dir")]
-        output_dir: Option<String>,
-    },
+/// Shared output arguments for report subcommands.
+#[derive(Args, Clone, Default)]
+pub struct ReportOutputArgs {
+    /// Mode: view (default, interactive) or export (write to file)
+    #[arg(long)]
+    pub mode: Option<String>,
+    /// Export format: pdf (default) or text
+    #[arg(long)]
+    pub format: Option<String>,
+    /// Output file path (implies --mode export)
+    #[arg(long)]
+    pub output: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -285,6 +208,8 @@ pub enum ReportCommands {
         /// End date: YYYY-MM-DD
         #[arg(long = "to")]
         to_date: Option<String>,
+        #[command(flatten)]
+        output: ReportOutputArgs,
     },
     /// Expense breakdown report.
     Expenses {
@@ -292,11 +217,15 @@ pub enum ReportCommands {
         month: Option<String>,
         #[arg(long)]
         year: Option<i32>,
+        #[command(flatten)]
+        output: ReportOutputArgs,
     },
     /// Tax summary organized by IRS line items.
     Tax {
         #[arg(long)]
         year: Option<i32>,
+        #[command(flatten)]
+        output: ReportOutputArgs,
     },
     /// Cash flow report with monthly inflows/outflows.
     Cashflow {
@@ -304,6 +233,8 @@ pub enum ReportCommands {
         month: Option<String>,
         #[arg(long)]
         year: Option<i32>,
+        #[command(flatten)]
+        output: ReportOutputArgs,
     },
     /// Transaction register — all transactions for a date period.
     Register {
@@ -318,16 +249,73 @@ pub enum ReportCommands {
         /// Filter by account name
         #[arg(long)]
         account: Option<String>,
+        #[command(flatten)]
+        output: ReportOutputArgs,
     },
     /// Show all flagged/uncategorized transactions.
-    Flagged,
+    Flagged {
+        #[command(flatten)]
+        output: ReportOutputArgs,
+    },
     /// Cash position snapshot.
-    Balance,
+    Balance {
+        #[command(flatten)]
+        output: ReportOutputArgs,
+    },
     /// K-1 preparation worksheet (Form 1120-S).
     K1 {
         #[arg(long)]
         year: Option<i32>,
+        #[command(flatten)]
+        output: ReportOutputArgs,
     },
+    /// Export all reports (export-only).
+    /// Note: All uses top-level fields instead of ReportOutputArgs because it has
+    /// output_dir (not output) and is always export mode (no --mode flag needed).
+    All {
+        #[arg(long)]
+        year: Option<i32>,
+        /// Output directory
+        #[arg(long = "output-dir")]
+        output_dir: Option<String>,
+        /// Export format: pdf (default) or text
+        #[arg(long)]
+        format: Option<String>,
+    },
+}
+
+impl ReportCommands {
+    pub fn output_args(&self) -> ReportOutputArgs {
+        match self {
+            Self::Pnl { output, .. } => output.clone(),
+            Self::Expenses { output, .. } => output.clone(),
+            Self::Tax { output, .. } => output.clone(),
+            Self::Cashflow { output, .. } => output.clone(),
+            Self::Register { output, .. } => output.clone(),
+            Self::Flagged { output, .. } => output.clone(),
+            Self::Balance { output, .. } => output.clone(),
+            Self::K1 { output, .. } => output.clone(),
+            Self::All { format, .. } => ReportOutputArgs {
+                mode: Some("export".to_string()),
+                format: format.clone(),
+                output: None,
+            },
+        }
+    }
+
+    pub fn report_name(&self) -> &'static str {
+        match self {
+            Self::Pnl { .. } => "pnl",
+            Self::Expenses { .. } => "expenses",
+            Self::Tax { .. } => "tax",
+            Self::Cashflow { .. } => "cashflow",
+            Self::Register { .. } => "register",
+            Self::Flagged { .. } => "flagged",
+            Self::Balance { .. } => "balance",
+            Self::K1 { .. } => "k1-prep",
+            Self::All { .. } => "all",
+        }
+    }
 }
 
 #[derive(Subcommand)]
