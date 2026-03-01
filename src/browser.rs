@@ -130,6 +130,7 @@ impl RegisterBrowser {
 
         let areas = Layout::vertical([
             Constraint::Length(1),      // title
+            Constraint::Length(1),      // separator
             Constraint::Fill(1),        // table
             Constraint::Length(edit_height), // edit panel
             Constraint::Length(1),      // status
@@ -137,15 +138,22 @@ impl RegisterBrowser {
         ])
         .split(area);
         let title_area = areas[0];
-        let table_area = areas[1];
-        let edit_area = areas[2];
-        let status_area = areas[3];
-        let keys_area = areas[4];
+        let sep_area = areas[1];
+        let table_area = areas[2];
+        let edit_area = areas[3];
+        let status_area = areas[4];
+        let keys_area = areas[5];
 
         // Title
         frame.render_widget(
-            Paragraph::new("Transaction Register").style(HEADER_STYLE),
+            Paragraph::new(" Transaction Register").style(HEADER_STYLE),
             title_area,
+        );
+
+        // Separator
+        frame.render_widget(
+            Paragraph::new("━".repeat(area.width as usize)).style(FOOTER_STYLE),
+            sep_area,
         );
 
         // Compute description column width from fixed columns + spacing

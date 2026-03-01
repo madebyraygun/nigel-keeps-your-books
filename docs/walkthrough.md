@@ -18,8 +18,8 @@ Demo data loaded!
   Account:      BofA Checking
   Transactions: 252
   Rules:        9
-  Categorized:  ...
-  Flagged:      ...
+  Categorized:  168
+  Flagged:      84
 
 Try these next:
   nigel accounts list
@@ -56,15 +56,15 @@ $ nigel rules list
 Rules
 
 ID  Pattern               Type      Vendor       Category                    Priority  Hits
-1   STRIPE TRANSFER       contains  Stripe       Client Services             0         ...
-2   ADOBE                 contains  Adobe        Software & Subscriptions    0         ...
-3   GITHUB                contains  GitHub       Software & Subscriptions    0         ...
-4   SLACK                 contains  Slack        Software & Subscriptions    0         ...
-5   GOOGLE WORKSPACE      contains  Google       Software & Subscriptions    0         ...
-6   AMAZON WEB SERVICES   contains  AWS          Hosting & Infrastructure    0         ...
-7   FLYWHEEL              contains  Flywheel     Hosting & Infrastructure    0         ...
-8   UBER EATS             contains  Uber Eats    Meals                       0         ...
-9   GRUBHUB               contains  Grubhub      Meals                       0         ...
+1   STRIPE TRANSFER       contains  Stripe       Client Services             0         36
+2   ADOBE                 contains  Adobe        Software & Subscriptions    0         18
+3   GITHUB                contains  GitHub       Software & Subscriptions    0         18
+4   SLACK                 contains  Slack        Software & Subscriptions    0         18
+5   GOOGLE WORKSPACE      contains  Google       Software & Subscriptions    0         18
+6   AMAZON WEB SERVICES   contains  AWS          Hosting & Infrastructure    0         18
+7   FLYWHEEL              contains  Flywheel     Hosting & Infrastructure    0         18
+8   UBER EATS             contains  Uber Eats    Meals                       0         12
+9   GRUBHUB               contains  Grubhub      Meals                       0         12
 ```
 
 ## 3. Check what's flagged
@@ -72,8 +72,20 @@ ID  Pattern               Type      Vendor       Category                    Pri
 ```
 $ nigel report flagged
 ```
+```
+Flagged Transactions (84)
 
-This shows all transactions that didn't match any rule — they need to be categorized manually or covered by new rules.
+ID  Date         Description                  Amount       Account
+--  YYYY-MM-15   CHECK 1042                   $2,400.00    BofA Checking
+--  YYYY-MM-20   VENMO PAYMENT                $150.00      BofA Checking
+--  YYYY-MM-25   COMCAST BUSINESS             $129.99      BofA Checking
+--  YYYY-MM-28   STAPLES OFFICE SUPPLY        $67.23       BofA Checking
+--  YYYY-MM-DD   INTEREST PAYMENT             $1.50        BofA Checking
+--  YYYY-MM-22   DOORDASH DELIVERY            $28.45       BofA Checking
+...
+```
+
+*(Dates and IDs will vary based on when you run the demo. The 84 flagged transactions include rotating one-off expenses, interest payments, and Doordash deliveries that don't match any built-in rule.)*
 
 ## 4. Add rules for known vendors
 
@@ -93,10 +105,10 @@ $ nigel rules add "INTEREST PAYMENT" --category "Interest Income" --vendor "Bank
 Added rule: 'INTEREST PAYMENT' → Interest Income
 
 $ nigel categorize
-... categorized, ... still flagged
+35 categorized, 49 still flagged
 ```
 
-New rules knock out a chunk of flagged transactions. The rest go through manual review.
+Four new rules knocked out 35 transactions across 18 months. Now 49 remain for manual review.
 
 ## 5. Review flagged transactions
 
@@ -112,12 +124,14 @@ Type to filter categories — as you type, matching categories appear below the 
 
 ## 6. Reconcile
 
-Reconcile against a known balance:
+Reconcile against a known statement balance for the most recent complete month:
 
 ```
-$ nigel reconcile "BofA Checking" --month 2025-01 --balance 17480.37
-Reconciled! Calculated: $17,480.37
+$ nigel reconcile "BofA Checking" --month YYYY-MM --balance <ending balance>
+Reconciled! Calculated: $XX,XXX.XX
 ```
+
+*(Use the month and ending balance from your most recent bank statement. Since demo data is generated dynamically, the calculated balance will vary.)*
 
 ## 7. Run reports
 
