@@ -385,8 +385,8 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec
         let adj_date = idx_date + offset;
         let adj_desc = idx_desc + offset;
         let adj_amount = idx_amount + offset;
+        let adj_type = idx_type + offset;
         let min_cols = if has_type_column {
-            let adj_type = idx_type + offset;
             [adj_date, adj_desc, adj_amount, adj_type].into_iter().max().unwrap_or(0) + 1
         } else {
             [adj_date, adj_desc, adj_amount].into_iter().max().unwrap_or(0) + 1
@@ -408,7 +408,6 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec
             continue;
         }
         let amount = if has_type_column {
-            let adj_type = idx_type + offset;
             let txn_type = record[adj_type].trim();
             if txn_type == "D" {
                 -parse_amount(amount_str).abs()
