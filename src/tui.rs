@@ -47,6 +47,10 @@ pub fn wrap_text(text: &str, width: usize) -> (String, u16) {
 pub enum ReportViewAction {
     Continue,
     Close,
+    /// Request data reload (e.g. after date navigation). The dashboard intercepts
+    /// this to rebuild the view with new date params. In standalone CLI mode
+    /// (`run_report_view`), Reload is treated as Continue — the title updates
+    /// but data is not rebuilt since there is no outer controller to do so.
     Reload,
 }
 

@@ -177,11 +177,11 @@ impl TableReportView {
         match self.granularity {
             DateGranularity::None => {}
             DateGranularity::YearOnly => {
-                self.year += delta;
+                self.year = (self.year + delta).max(2000);
             }
             DateGranularity::MonthAndYear => match self.period_mode {
                 PeriodMode::Year => {
-                    self.year += delta;
+                    self.year = (self.year + delta).max(2000);
                 }
                 PeriodMode::Month => {
                     let mut m = self.month as i32 + delta;
@@ -195,7 +195,7 @@ impl TableReportView {
                         y += 1;
                     }
                     self.month = m as u32;
-                    self.year = y;
+                    self.year = y.max(2000);
                 }
             },
         }
