@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE TABLE IF NOT EXISTS imports (
     id INTEGER PRIMARY KEY,
     filename TEXT NOT NULL,
-    account_id INTEGER NOT NULL,
+    account_id INTEGER,
     import_date TEXT DEFAULT (datetime('now')),
     record_count INTEGER,
     date_range_start TEXT,
