@@ -109,7 +109,7 @@ fn generate_transactions() -> Vec<DemoTxn> {
 
         // — Income: two Stripe transfers per month —
         let (base1, base2) = INCOME_BASES[idx % INCOME_BASES.len()];
-        // Small deterministic variation: +/- up to ~5% based on month index
+        // Small deterministic variation: +/- up to ~3% based on month index
         let vary = 1.0 + ((idx % 7) as f64 - 3.0) * 0.01;
         txns.push(DemoTxn {
             date: make_date(year, month, 3),
@@ -165,10 +165,9 @@ fn generate_transactions() -> Vec<DemoTxn> {
         }
 
         // — Interest payment on last day of month —
-        let last_day = clamp_day(year, month, 31);
         let interest = 1.50 + (idx % 5) as f64 * 0.25;
         txns.push(DemoTxn {
-            date: format!("{year:04}-{month:02}-{last_day:02}"),
+            date: make_date(year, month, 31),
             description: "INTEREST PAYMENT",
             amount: (interest * 100.0).round() / 100.0,
         });
