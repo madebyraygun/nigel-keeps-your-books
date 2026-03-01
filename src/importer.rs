@@ -203,8 +203,8 @@ pub fn import_file(
 
     let checksum = compute_checksum(file_path)?;
     {
-        let mut stmt = conn.prepare("SELECT 1 FROM imports WHERE checksum = ?1 AND account_id = ?2")?;
-        if stmt.exists(rusqlite::params![checksum, account_id])? {
+        let mut stmt = conn.prepare("SELECT 1 FROM imports WHERE checksum = ?1")?;
+        if stmt.exists(rusqlite::params![checksum])? {
             return Ok(ImportResult {
                 imported: 0,
                 skipped: 0,

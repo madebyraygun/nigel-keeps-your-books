@@ -128,16 +128,17 @@ pub fn transaction_count(conn: &Connection, account_id: i64) -> Result<i64> {
 pub fn delete_account(conn: &Connection, id: i64) -> Result<()> {
     let count = transaction_count(conn, id)?;
     if count > 0 {
+        let noun = if count == 1 { "transaction" } else { "transactions" };
         return Err(NigelError::Other(format!(
-            "Cannot delete: account has {count} transactions"
+            "Cannot delete: account has {count} {noun}"
         )));
     }
-    // Clean up related records with no transactions
+    // Clean up reconciliations; null out imports to preserve checksums for duplicate detection
     conn.execute(
         "DELETE FROM reconciliations WHERE account_id = ?1",
         [id],
     )?;
-    conn.execute("DELETE FROM imports WHERE account_id = ?1", [id])?;
+    conn.execute("UPDATE imports SET account_id = NULL WHERE account_id = ?1", [id])?;
     let deleted = conn.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
     if deleted == 0 {
         return Err(NigelError::Other(format!("Account not found: id {id}")));
@@ -244,7 +245,7 @@ mod tests {
 
         let err = delete_account(&conn, id).unwrap_err();
         assert!(err.to_string().contains("Cannot delete"));
-        assert!(err.to_string().contains("1 transactions"));
+        assert!(err.to_string().contains("1 transaction"));
     }
 
     #[test]

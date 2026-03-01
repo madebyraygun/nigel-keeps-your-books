@@ -372,8 +372,9 @@ impl AccountManager {
                     if let Some(account) = self.accounts.get(self.selection) {
                         match accounts::transaction_count(conn, account.id) {
                             Ok(count) if count > 0 => {
+                                let noun = if count == 1 { "transaction" } else { "transactions" };
                                 self.set_status(format!(
-                                    "Cannot delete: account has {count} transactions"
+                                    "Cannot delete: account has {count} {noun}"
                                 ));
                             }
                             Ok(_) => {
