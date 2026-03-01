@@ -20,7 +20,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table.
 - **Onboarding:** `cli/onboarding.rs` — full-screen TUI shown on first launch (when settings.json doesn't exist); collects user name and business name, then offers demo/fresh/load options
 - **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`; switch with `nigel load <path>`. Contains `backups/` (manual backups) and `snapshots/` (automatic pre-import snapshots)
-- **Demo:** `nigel demo` inserts 44 sample transactions + 9 rules directly into the DB (no CSV files), then runs categorization
+- **Demo:** `nigel demo` dynamically generates 18 months of sample transactions (counting backwards from the current date) + 9 rules directly into the DB (no CSV files), then runs categorization; dates are computed at runtime so reports always show current-year data
 
 ## Commands
 
@@ -84,7 +84,7 @@ Do not merge or mark work complete if docs are stale.
 - Gusto imports extract only aggregate totals, never individual employee data
 - Bank CSV formats vary by account type (checking, credit_card, line_of_credit) — each has its own variant in `ImporterKind`
 - `ImporterKind::detect()` inspects file headers for format auto-detection; `--format` CLI flag overrides auto-detect
-- Demo data is inserted directly into the DB (no CSV files); idempotency guard checks for existing account
+- Demo data is generated dynamically (18 months of transactions counting back from today) and inserted directly into the DB (no CSV files); idempotency guard checks for existing account
 - Cash amounts are plain `f64` — negative = expense, positive = income
 - Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
 - Database row deserialization errors are propagated, never silently discarded
