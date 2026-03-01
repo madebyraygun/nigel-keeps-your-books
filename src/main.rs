@@ -2,6 +2,7 @@ mod browser;
 mod categorizer;
 mod cli;
 mod db;
+mod effects;
 mod error;
 mod fmt;
 mod importer;
