@@ -926,12 +926,6 @@ pub fn run() -> Result<()> {
         Some(settings.user_name.clone())
     };
 
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        ratatui::restore();
-        hook(info);
-    }));
-
     loop {
         let conn = get_connection(&get_data_dir().join("nigel.db"))?;
         let mut dashboard = Dashboard::new(user_name.clone());

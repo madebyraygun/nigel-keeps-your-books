@@ -1,5 +1,11 @@
 use rand::Rng;
-use ratatui::style::Color;
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
+};
 
 /// Pastel rainbow gradient: pink -> peach -> yellow -> mint -> cyan -> lavender -> magenta -> pink
 pub const GRADIENT: &[(f64, f64, f64)] = &[
@@ -14,7 +20,7 @@ pub const GRADIENT: &[(f64, f64, f64)] = &[
 ];
 
 pub const MAX_PARTICLES: usize = 20;
-pub const PARTICLE_CHARS: &[char] = &['\u{00b7}', '\u{2218}', '\u{2022}', '\u{25e6}'];
+pub const PARTICLE_CHARS: &[char] = &['·', '∘', '•', '◦'];
 
 /// Interpolate along the gradient for a position in 0.0..1.0
 pub fn gradient_color(t: f64) -> Color {
@@ -103,6 +109,80 @@ pub fn tick_particles(particles: &mut Vec<Particle>, width: u16, height: u16) {
     if particles.len() < MAX_PARTICLES && rng.gen_range(0..3) == 0 {
         particles.push(Particle::new(width, height));
     }
+}
+
+/// Render particles onto a frame region.
+pub fn render_particles(particles: &[Particle], frame: &mut Frame, area: Rect) {
+    for p in particles {
+        let px = p.x.round() as u16;
+        let py = p.y.round() as u16;
+        if px < area.width && py < area.height {
+            let (r, g, b) = GRADIENT[p.color_idx];
+            let alpha = p.brightness;
+            let particle_area = Rect::new(area.x + px, area.y + py, 1, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    PARTICLE_CHARS[p.char_idx].to_string(),
+                    Style::default().fg(Color::Rgb(
+                        (r * alpha) as u8,
+                        (g * alpha) as u8,
+                        (b * alpha) as u8,
+                    )),
+                )),
+                particle_area,
+            );
+        }
+    }
+}
+
+pub const LOGO: &[&str] = &[
+    r"  /$$   /$$ /$$                     /$$",
+    r" | $$$ | $$|__/                    | $$",
+    r" | $$$$| $$ /$$  /$$$$$$   /$$$$$$ | $$",
+    r" | $$ $$ $$| $$ /$$__  $$ /$$__  $$| $$",
+    r" | $$  $$$$| $$| $$  \ $$| $$$$$$$$| $$",
+    r" | $$\  $$$| $$| $$  | $$| $$_____/| $$",
+    r" | $$ \  $$| $$|  $$$$$$$|  $$$$$$$| $$",
+    r" |__/  \__/|__/ \____  $$ \_______/|__/",
+    r"                /$$  \ $$",
+    r"               |  $$$$$$/",
+    r"                \______/",
+];
+
+/// Render the Nigel ASCII logo with animated rainbow gradient.
+pub fn render_logo(phase: f64, frame: &mut Frame, logo_area: Rect) {
+    let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
+    let gradient_width = 40.0;
+    let logo_lines: Vec<Line> = LOGO
+        .iter()
+        .enumerate()
+        .map(|(row, line)| {
+            let padded = format!("{:<width$}", line, width = max_logo_width);
+            let spans: Vec<Span> = padded
+                .chars()
+                .enumerate()
+                .map(|(col, ch)| {
+                    if ch == ' ' {
+                        Span::raw(" ")
+                    } else {
+                        let t =
+                            (col as f64 / gradient_width) + (row as f64 * 0.04) - phase;
+                        Span::styled(
+                            ch.to_string(),
+                            Style::default()
+                                .fg(gradient_color(t))
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    }
+                })
+                .collect();
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(logo_lines).alignment(Alignment::Center),
+        logo_area,
+    );
 }
 
 #[cfg(test)]

@@ -9,23 +9,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::effects::{self, gradient_color, Particle, GRADIENT, PARTICLE_CHARS};
+use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
-
-pub const LOGO: &[&str] = &[
-    r"  /$$   /$$ /$$                     /$$",
-    r" | $$$ | $$|__/                    | $$",
-    r" | $$$$| $$ /$$  /$$$$$$   /$$$$$$ | $$",
-    r" | $$ $$ $$| $$ /$$__  $$ /$$__  $$| $$",
-    r" | $$  $$$$| $$| $$  \ $$| $$$$$$$$| $$",
-    r" | $$\  $$$| $$| $$  | $$| $$_____/| $$",
-    r" | $$ \  $$| $$|  $$$$$$$|  $$$$$$$| $$",
-    r" |__/  \__/|__/ \____  $$ \_______/|__/",
-    r"                /$$  \ $$",
-    r"               |  $$$$$$/",
-    r"                \______/",
-];
 
 /// What the user chose to do after onboarding.
 #[derive(Clone, Copy)]
@@ -74,8 +60,7 @@ struct Onboarding {
 
 impl Onboarding {
     fn new() -> Self {
-        let width = 80;
-        let height = 24;
+        let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
         Self {
             user_name: String::new(),
             company_name: String::new(),
@@ -115,48 +100,12 @@ impl Onboarding {
         self.height = area.height;
 
         // Draw particles as background
-        self.draw_particles(frame, area);
+        effects::render_particles(&self.particles, frame, area);
 
         match self.screen {
             Screen::NameInput => self.draw_name_input(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
         }
-    }
-
-    fn draw_logo(&self, frame: &mut Frame, logo_area: Rect) {
-        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
-        let gradient_width = 40.0;
-        let logo_lines: Vec<Line> = LOGO
-            .iter()
-            .enumerate()
-            .map(|(row, line)| {
-                let padded = format!("{:<width$}", line, width = max_logo_width);
-                let spans: Vec<Span> = padded
-                    .chars()
-                    .enumerate()
-                    .map(|(col, ch)| {
-                        if ch == ' ' {
-                            Span::raw(" ")
-                        } else {
-                            let t = (col as f64 / gradient_width)
-                                + (row as f64 * 0.04)
-                                - self.phase;
-                            Span::styled(
-                                ch.to_string(),
-                                Style::default()
-                                    .fg(gradient_color(t))
-                                    .add_modifier(Modifier::BOLD),
-                            )
-                        }
-                    })
-                    .collect();
-                Line::from(spans)
-            })
-            .collect();
-        frame.render_widget(
-            Paragraph::new(logo_lines).alignment(ratatui::layout::Alignment::Center),
-            logo_area,
-        );
     }
 
     fn draw_name_input(&self, frame: &mut Frame, area: Rect) {
@@ -177,7 +126,7 @@ impl Onboarding {
             ])
             .areas(area);
 
-        self.draw_logo(frame, logo_area);
+        effects::render_logo(self.phase, frame, logo_area);
 
         frame.render_widget(
             Paragraph::new(Span::styled("Welcome! Let's get you set up.", HEADER_STYLE))
@@ -232,7 +181,7 @@ impl Onboarding {
             ])
             .areas(area);
 
-        self.draw_logo(frame, logo_area);
+        effects::render_logo(self.phase, frame, logo_area);
 
         frame.render_widget(
             Paragraph::new(Span::styled("How would you like to start?", HEADER_STYLE))
@@ -265,29 +214,6 @@ impl Onboarding {
                 .alignment(ratatui::layout::Alignment::Center),
             hints_area,
         );
-    }
-
-    fn draw_particles(&self, frame: &mut Frame, area: Rect) {
-        for p in &self.particles {
-            let px = p.x.round() as u16;
-            let py = p.y.round() as u16;
-            if px < area.width && py < area.height {
-                let (r, g, b) = GRADIENT[p.color_idx];
-                let alpha = p.brightness;
-                let r = (r * alpha) as u8;
-                let g = (g * alpha) as u8;
-                let b = (b * alpha) as u8;
-                let ch = PARTICLE_CHARS[p.char_idx];
-                let particle_area = Rect::new(area.x + px, area.y + py, 1, 1);
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        ch.to_string(),
-                        Style::default().fg(Color::Rgb(r, g, b)),
-                    )),
-                    particle_area,
-                );
-            }
-        }
     }
 
     /// Convert a char-index cursor position to a byte offset in the string.
@@ -430,12 +356,6 @@ impl Onboarding {
 
 /// Run the onboarding TUI. Returns Some(OnboardingResult) if completed, None if skipped.
 pub fn run() -> Result<Option<OnboardingResult>> {
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        ratatui::restore();
-        hook(info);
-    }));
-
     let mut onboarding = Onboarding::new();
     let mut terminal = ratatui::init();
 

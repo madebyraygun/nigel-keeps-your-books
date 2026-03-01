@@ -20,6 +20,13 @@ use clap::Parser;
 use cli::{AccountsCommands, BrowseCommands, Cli, Commands, RulesCommands};
 
 fn main() {
+    // Install ratatui panic hook once — restores terminal on panic for all TUI screens
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        hook(info);
+    }));
+
     let cli = Cli::parse();
 
     let result = match cli.command {
