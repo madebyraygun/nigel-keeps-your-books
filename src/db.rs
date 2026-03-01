@@ -80,6 +80,11 @@ CREATE TABLE IF NOT EXISTS reconciliations (
     notes TEXT,
     FOREIGN KEY (account_id) REFERENCES accounts(id)
 );
+
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 ";
 
 // (name, parent_id, category_type, tax_line, form_line, description)
@@ -138,6 +143,23 @@ pub fn init_db(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub fn get_metadata(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM metadata WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+pub fn set_metadata(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO metadata (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+        rusqlite::params![key, value],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,7 +181,7 @@ mod tests {
             .unwrap()
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
-        for expected in &["accounts", "categories", "transactions", "rules", "imports", "reconciliations"] {
+        for expected in &["accounts", "categories", "transactions", "rules", "imports", "reconciliations", "metadata"] {
             assert!(tables.contains(&expected.to_string()), "missing table: {expected}");
         }
     }

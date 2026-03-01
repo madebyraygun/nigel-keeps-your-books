@@ -160,6 +160,39 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Create a demo data directory with its own nigel.db and switch settings
+/// to point at it. Used by the onboarding flow so the user's real books
+/// stay clean.
+pub fn setup_demo() -> Result<()> {
+    use crate::settings::save_settings;
+
+    let mut settings = load_settings();
+    let base_dir = PathBuf::from(&settings.data_dir);
+    let demo_dir = base_dir.join("demo");
+    std::fs::create_dir_all(&demo_dir)?;
+    std::fs::create_dir_all(demo_dir.join("exports"))?;
+
+    let db_path = demo_dir.join("nigel.db");
+    let conn = get_connection(&db_path)?;
+    init_db(&conn)?;
+
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE name = ?1)",
+        [ACCOUNT_NAME],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        insert_demo_data(&conn)?;
+        categorize_transactions(&conn)?;
+    }
+
+    // Point settings at the demo directory
+    settings.data_dir = demo_dir.to_string_lossy().to_string();
+    save_settings(&settings)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

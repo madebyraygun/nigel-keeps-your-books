@@ -8,7 +8,7 @@ use crate::error::{NigelError, Result};
 pub struct Settings {
     pub data_dir: String,
     #[serde(default)]
-    pub company_name: String,
+    pub user_name: String,
     #[serde(default = "default_fiscal_year_start")]
     pub fiscal_year_start: String,
 }
@@ -21,7 +21,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             data_dir: default_data_dir().to_string_lossy().to_string(),
-            company_name: String::new(),
+            user_name: String::new(),
             fiscal_year_start: default_fiscal_year_start(),
         }
     }
@@ -64,6 +64,10 @@ pub fn save_settings(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+pub fn settings_file_exists() -> bool {
+    settings_path().exists()
+}
+
 pub fn get_data_dir() -> PathBuf {
     PathBuf::from(&load_settings().data_dir)
 }
@@ -90,14 +94,14 @@ mod tests {
         let path = dir.path().join("settings.json");
         let settings = Settings {
             data_dir: "/tmp/test".to_string(),
-            company_name: "Acme Corp".to_string(),
+            user_name: "Alice".to_string(),
             fiscal_year_start: "07".to_string(),
         };
         let json = serde_json::to_string_pretty(&settings).unwrap();
         std::fs::write(&path, &json).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         let loaded: Settings = serde_json::from_str(&content).unwrap();
-        assert_eq!(loaded.company_name, "Acme Corp");
+        assert_eq!(loaded.user_name, "Alice");
         assert_eq!(loaded.data_dir, "/tmp/test");
         assert_eq!(loaded.fiscal_year_start, "07");
     }
@@ -105,17 +109,17 @@ mod tests {
     #[test]
     fn test_load_returns_defaults_when_missing() {
         let s = Settings::default();
-        assert!(s.company_name.is_empty());
+        assert!(s.user_name.is_empty());
         assert_eq!(s.fiscal_year_start, "01");
         assert!(!s.data_dir.is_empty());
     }
 
     #[test]
     fn test_load_merges_with_defaults() {
-        let json = r#"{"data_dir": "/tmp/test", "company_name": "Test"}"#;
+        let json = r#"{"data_dir": "/tmp/test", "user_name": "Bob"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.fiscal_year_start, "01");
-        assert_eq!(s.company_name, "Test");
+        assert_eq!(s.user_name, "Bob");
     }
 
     #[test]

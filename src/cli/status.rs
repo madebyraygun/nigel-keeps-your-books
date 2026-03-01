@@ -1,4 +1,4 @@
-use crate::db::get_connection;
+use crate::db::{get_connection, get_metadata};
 use crate::error::Result;
 use crate::fmt::format_bytes;
 use crate::settings::load_settings;
@@ -8,7 +8,7 @@ pub fn run() -> Result<()> {
     let data_dir = std::path::PathBuf::from(&settings.data_dir);
     let db_path = data_dir.join("nigel.db");
 
-    println!("Company:    {}", if settings.company_name.is_empty() { "(not set)" } else { &settings.company_name });
+    println!("User:       {}", if settings.user_name.is_empty() { "(not set)" } else { &settings.user_name });
     println!("Data dir:   {}", data_dir.display());
     println!("Database:   {}", db_path.display());
 
@@ -17,6 +17,10 @@ pub fn run() -> Result<()> {
         println!("DB size:    {}", format_bytes(size));
 
         let conn = get_connection(&db_path)?;
+
+        let company = get_metadata(&conn, "company_name");
+        println!("Company:    {}", company.as_deref().unwrap_or("(not set)"));
+
         let accounts: i64 = conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
         let transactions: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))?;
         let flagged: i64 = conn.query_row(
