@@ -47,11 +47,21 @@ pub fn wrap_text(text: &str, width: usize) -> (String, u16) {
 pub enum ReportViewAction {
     Continue,
     Close,
+    /// Request data reload (e.g. after date navigation). The dashboard intercepts
+    /// this to rebuild the view with new date params. In standalone CLI mode
+    /// (`run_report_view`), Reload is treated as Continue — the title updates
+    /// but data is not rebuilt since there is no outer controller to do so.
+    Reload,
 }
 
 pub trait ReportView {
     fn draw(&mut self, frame: &mut Frame);
     fn handle_key(&mut self, code: KeyCode) -> ReportViewAction;
+    /// Returns the current date parameters for this view: (year, optional month string).
+    /// Used by the dashboard to pass the selected period to exports and rebuilds.
+    fn date_params(&self) -> (Option<i32>, Option<String>) {
+        (None, None)
+    }
 }
 
 /// Run an interactive ratatui report view. Sets up the terminal, event loop,
@@ -83,7 +93,7 @@ pub fn run_report_view(view: &mut dyn ReportView) -> Result<()> {
                 }
                 match view.handle_key(key.code) {
                     ReportViewAction::Close => break Ok(()),
-                    ReportViewAction::Continue => {}
+                    ReportViewAction::Continue | ReportViewAction::Reload => {}
                 }
             }
             _ => {}

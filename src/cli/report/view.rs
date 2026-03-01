@@ -20,6 +20,33 @@ use crate::tui::{
 };
 
 // ---------------------------------------------------------------------------
+// Date granularity support for report navigation
+// ---------------------------------------------------------------------------
+
+/// What date navigation granularities a report supports.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum DateGranularity {
+    /// Supports both month and year navigation (P&L, Expenses, Cash Flow)
+    MonthAndYear,
+    /// Supports only year navigation (Tax, K-1)
+    YearOnly,
+    /// No date navigation (Flagged, Balance)
+    None,
+}
+
+/// Whether the view is currently showing a month or a full year.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum PeriodMode {
+    Year,
+    Month,
+}
+
+const MONTH_NAMES: &[&str] = &[
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -74,6 +101,11 @@ pub(crate) struct TableReportView {
     widths: Vec<Constraint>,
     offset: usize,
     visible_count: usize,
+    // Date navigation state
+    granularity: DateGranularity,
+    period_mode: PeriodMode,
+    year: i32,
+    month: u32, // 1-12
 }
 
 impl TableReportView {
@@ -83,6 +115,7 @@ impl TableReportView {
         rows: Vec<Row<'static>>,
         widths: Vec<Constraint>,
     ) -> Self {
+        let now = chrono::Local::now();
         Self {
             title: title.into(),
             header,
@@ -90,6 +123,90 @@ impl TableReportView {
             widths,
             offset: 0,
             visible_count: 20,
+            granularity: DateGranularity::None,
+            period_mode: PeriodMode::Year,
+            year: chrono::Datelike::year(&now),
+            month: chrono::Datelike::month(&now),
+        }
+    }
+
+    fn with_date(mut self, granularity: DateGranularity, year: i32, month: Option<u32>) -> Self {
+        self.granularity = granularity;
+        self.year = year;
+        if let Some(m) = month {
+            self.month = m;
+            self.period_mode = PeriodMode::Month;
+        } else {
+            self.period_mode = PeriodMode::Year;
+        }
+        self
+    }
+
+    /// Returns the current date parameters: (year, optional month string like "2026-03").
+    pub(crate) fn date_params(&self) -> (Option<i32>, Option<String>) {
+        match self.granularity {
+            DateGranularity::None => (None, None),
+            DateGranularity::YearOnly => (Some(self.year), None),
+            DateGranularity::MonthAndYear => match self.period_mode {
+                PeriodMode::Year => (Some(self.year), None),
+                PeriodMode::Month => (
+                    Some(self.year),
+                    Some(format!("{}-{:02}", self.year, self.month)),
+                ),
+            },
+        }
+    }
+
+    fn period_label(&self) -> String {
+        match self.granularity {
+            DateGranularity::None => String::new(),
+            DateGranularity::YearOnly => format!(" \u{2014} FY {}", self.year),
+            DateGranularity::MonthAndYear => match self.period_mode {
+                PeriodMode::Year => format!(" \u{2014} FY {}", self.year),
+                PeriodMode::Month => {
+                    let name = MONTH_NAMES
+                        .get((self.month - 1) as usize)
+                        .unwrap_or(&"???");
+                    format!(" \u{2014} {} {}", name, self.year)
+                }
+            },
+        }
+    }
+
+    fn navigate_period(&mut self, delta: i32) {
+        match self.granularity {
+            DateGranularity::None => {}
+            DateGranularity::YearOnly => {
+                self.year = (self.year + delta).max(2000);
+            }
+            DateGranularity::MonthAndYear => match self.period_mode {
+                PeriodMode::Year => {
+                    self.year = (self.year + delta).max(2000);
+                }
+                PeriodMode::Month => {
+                    let mut m = self.month as i32 + delta;
+                    let mut y = self.year;
+                    while m < 1 {
+                        m += 12;
+                        y -= 1;
+                    }
+                    while m > 12 {
+                        m -= 12;
+                        y += 1;
+                    }
+                    self.month = m as u32;
+                    self.year = y.max(2000);
+                }
+            },
+        }
+    }
+
+    fn toggle_period_mode(&mut self) {
+        if self.granularity == DateGranularity::MonthAndYear {
+            self.period_mode = match self.period_mode {
+                PeriodMode::Year => PeriodMode::Month,
+                PeriodMode::Month => PeriodMode::Year,
+            };
         }
     }
 }
@@ -106,9 +223,9 @@ impl ReportView for TableReportView {
             ])
             .areas(area);
 
-        // Header
+        // Header (with period label for date-navigable reports)
         frame.render_widget(
-            Paragraph::new(format!(" {}", self.title)).style(HEADER_STYLE),
+            Paragraph::new(format!(" {}{}", self.title, self.period_label())).style(HEADER_STYLE),
             header_area,
         );
 
@@ -148,9 +265,14 @@ impl ReportView for TableReportView {
         } else {
             String::new()
         };
+        let nav_hint = match self.granularity {
+            DateGranularity::MonthAndYear => "\u{2190}/\u{2192}=period  m=month/year  ",
+            DateGranularity::YearOnly => "\u{2190}/\u{2192}=year  ",
+            DateGranularity::None => "",
+        };
         frame.render_widget(
             Paragraph::new(format!(
-                " Up/Down/PgUp/PgDn=scroll  q/Esc=close{pos_info}"
+                " {nav_hint}\u{2191}/\u{2193}=scroll  q/Esc=close{pos_info}"
             ))
             .style(FOOTER_STYLE),
             footer_area,
@@ -186,8 +308,27 @@ impl ReportView for TableReportView {
                 self.offset = max;
                 ReportViewAction::Continue
             }
+            KeyCode::Left if self.granularity != DateGranularity::None => {
+                self.navigate_period(-1);
+                self.offset = 0;
+                ReportViewAction::Reload
+            }
+            KeyCode::Right if self.granularity != DateGranularity::None => {
+                self.navigate_period(1);
+                self.offset = 0;
+                ReportViewAction::Reload
+            }
+            KeyCode::Char('m') if self.granularity == DateGranularity::MonthAndYear => {
+                self.toggle_period_mode();
+                self.offset = 0;
+                ReportViewAction::Reload
+            }
             _ => ReportViewAction::Continue,
         }
+    }
+
+    fn date_params(&self) -> (Option<i32>, Option<String>) {
+        self.date_params()
     }
 }
 
@@ -284,12 +425,13 @@ pub(crate) fn build_pnl(
         money_cell(data.net),
     ]));
 
+    let effective_year = year.or(my).unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(TableReportView::new(
         "Profit & Loss",
         header,
         rows,
         widths,
-    )))
+    ).with_date(DateGranularity::MonthAndYear, effective_year, mm.map(|m| m as u32))))
 }
 
 pub(crate) fn build_expenses(
@@ -352,12 +494,13 @@ pub(crate) fn build_expenses(
         }
     }
 
+    let effective_year = year.or(my).unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(TableReportView::new(
         "Expense Breakdown",
         header,
         rows,
         widths,
-    )))
+    ).with_date(DateGranularity::MonthAndYear, effective_year, mm.map(|m| m as u32))))
 }
 
 pub(crate) fn build_tax(year: Option<i32>) -> Result<Box<dyn ReportView>> {
@@ -390,12 +533,13 @@ pub(crate) fn build_tax(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         ]));
     }
 
+    let effective_year = year.unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(TableReportView::new(
         "Tax Summary",
         header,
         rows,
         widths,
-    )))
+    ).with_date(DateGranularity::YearOnly, effective_year, None)))
 }
 
 pub(crate) fn build_cashflow(
@@ -429,12 +573,13 @@ pub(crate) fn build_cashflow(
         ]));
     }
 
+    let effective_year = year.or(my).unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(TableReportView::new(
         "Cash Flow",
         header,
         rows,
         widths,
-    )))
+    ).with_date(DateGranularity::MonthAndYear, effective_year, mm.map(|m| m as u32))))
 }
 
 pub(crate) fn build_flagged() -> Result<Box<dyn ReportView>> {
@@ -676,12 +821,13 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         }
     }
 
+    let effective_year = year.unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(TableReportView::new(
         "K-1 Preparation Worksheet (Form 1120-S)",
         header,
         rows,
         widths,
-    )))
+    ).with_date(DateGranularity::YearOnly, effective_year, None)))
 }
 
 // ---------------------------------------------------------------------------
