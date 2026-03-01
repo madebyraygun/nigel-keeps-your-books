@@ -9,16 +9,17 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 ## Architecture
 
 - **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, browse, load, backup, status
-- **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations
+- **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name)
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_loc, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait, `run_report_view()`) for interactive screens; `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
-- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse, Review, and Accounts screens; merged View/Export picker screen for reports; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command
+- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse, Review, Accounts, and Snake screens; merged View/Export picker screen for reports; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command. The dashboard menu includes a Snake game easter egg.
 - **Account Manager:** `cli/account_manager.rs` — inline TUI screen for managing accounts (list, add, rename, delete); uses form sub-screens for add/rename with text input and type selector; delete blocks if account has transactions
 - **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
-- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `company_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing
+- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table.
+- **Onboarding:** `cli/onboarding.rs` — full-screen TUI shown on first launch (when settings.json doesn't exist); collects user name and business name, then offers demo/fresh/load options
 - **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`; switch with `nigel load <path>`. Contains `backups/` (manual backups) and `snapshots/` (automatic pre-import snapshots)
 - **Demo:** `nigel demo` inserts 44 sample transactions + 9 rules directly into the DB (no CSV files), then runs categorization
 
@@ -98,7 +99,8 @@ src/
     mod.rs              # Clap structs (Cli, Commands, subcommands), shared helpers
     dashboard.rs        # nigel (no args) — interactive dashboard with inline screen transitions
     init.rs             # nigel init
-    demo.rs             # nigel demo (sample data)
+    demo.rs             # nigel demo (sample data + setup_demo for isolated demo DB)
+    onboarding.rs       # First-run onboarding TUI (animated logo, name collection, action picker)
     account_manager.rs  # TUI account management screen (list, add, rename, delete)
     accounts.rs         # nigel accounts add/list + data-layer functions for TUI
     import.rs           # nigel import
@@ -110,6 +112,7 @@ src/
       text.rs           # comfy_table text formatters (used for stdout + text file export)
       view.rs           # Ratatui interactive report views (scrollable, colored)
     browse.rs           # nigel browse (interactive browsers)
+    snake.rs            # Snake game easter egg (ratatui, accessible from dashboard)
     export.rs           # PDF export helpers (per-function feature-gated behind "pdf")
     reconcile.rs        # nigel reconcile
     load.rs             # nigel load (switch data directory)

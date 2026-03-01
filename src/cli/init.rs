@@ -10,7 +10,7 @@ pub fn run(data_dir: Option<String>) -> Result<()> {
 
     if let Some(dir) = data_dir {
         settings.data_dir = shellexpand_path(&dir);
-    } else if settings.data_dir == defaults.data_dir && settings.company_name == defaults.company_name {
+    } else if settings.data_dir == defaults.data_dir && settings.user_name == defaults.user_name {
         // First run — prompt for data dir
         let default = &settings.data_dir;
         println!("Data directory [{}]: ", default);

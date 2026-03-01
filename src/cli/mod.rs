@@ -9,10 +9,12 @@ pub mod export;
 pub mod import;
 pub mod init;
 pub mod load;
+pub mod onboarding;
 pub mod reconcile;
 pub mod report;
 pub mod review;
 pub mod rules;
+pub mod snake;
 pub mod status;
 
 use clap::{Args, Parser, Subcommand};

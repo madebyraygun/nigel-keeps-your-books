@@ -14,12 +14,13 @@ use ratatui::{
 use crate::browser::{BrowseAction, RegisterBrowser};
 use crate::cli::account_manager::{AccountAction, AccountManager};
 use crate::cli::review::{HandleResult, TransactionReviewer};
+use crate::cli::snake::{SnakeAction, SnakeGame};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::number;
 use crate::reports;
 use crate::reviewer::{get_categories, get_flagged_transactions};
-use crate::settings::get_data_dir;
+use crate::settings::{get_data_dir, load_settings, save_settings, settings_file_exists};
 use crate::tui::{money_span, ReportView, ReportViewAction, FOOTER_STYLE, HEADER_STYLE};
 
 const GREETINGS: &[&str] = &[
@@ -50,6 +51,7 @@ const MENU_ITEMS: &[&str] = &[
     "View a report",
     "Export a report",
     "Load a different data file",
+    "Snake",
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
@@ -91,6 +93,7 @@ enum DashboardScreen {
     Accounts(AccountManager),
     ReportPicker { selection: usize, mode: ReportPickerMode },
     ReportView(Box<dyn ReportView>),
+    Snake(SnakeGame),
 }
 
 enum TerminalCommand {
@@ -125,12 +128,21 @@ struct Dashboard {
 }
 
 impl Dashboard {
-    fn new() -> Self {
+    fn new(user_name: Option<String>) -> Self {
         let mut rng = rand::thread_rng();
-        let greeting = GREETINGS
+        let random_greeting = GREETINGS
             .choose(&mut rng)
             .unwrap_or(&"Hello.")
             .to_string();
+        let first_name = user_name
+            .as_deref()
+            .and_then(|n| n.split_whitespace().next())
+            .unwrap_or("");
+        let greeting = if first_name.is_empty() {
+            format!("Nigel: {random_greeting}")
+        } else {
+            format!("Hello, {first_name}. {random_greeting}")
+        };
         Self {
             screen: DashboardScreen::Home,
             greeting,
@@ -248,6 +260,10 @@ impl Dashboard {
             self.draw_picker(frame, title, items, selection);
             return;
         }
+        if let DashboardScreen::Snake(ref mut game) = self.screen {
+            game.draw(frame);
+            return;
+        }
         self.draw_home(frame);
     }
 
@@ -272,7 +288,7 @@ impl Dashboard {
 
         // Header
         frame.render_widget(
-            Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
+            Paragraph::new(format!(" {}", self.greeting)).style(HEADER_STYLE),
             header_area,
         );
 
@@ -502,7 +518,7 @@ impl Dashboard {
         .areas(area);
 
         frame.render_widget(
-            Paragraph::new(format!(" Nigel: {}", self.greeting)).style(HEADER_STYLE),
+            Paragraph::new(format!(" {}", self.greeting)).style(HEADER_STYLE),
             header_area,
         );
 
@@ -573,6 +589,7 @@ impl Dashboard {
                 6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
                 7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
                 8 => self.terminal_action = Some(TerminalCommand::Load),
+                9 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
                 _ => {}
             },
             _ => {}
@@ -842,6 +859,75 @@ fn do_export(idx: usize) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 pub fn run() -> Result<()> {
+    // First-run: show onboarding, then ensure data dir + DB exist
+    let mut post_setup_action = None;
+    let mut onboarding_company = None;
+    if !settings_file_exists() {
+        if let Some(result) = super::onboarding::run()? {
+            let mut settings = load_settings();
+            if !result.user_name.is_empty() {
+                settings.user_name = result.user_name;
+            }
+            save_settings(&settings)?;
+
+            if !result.company_name.is_empty() {
+                onboarding_company = Some(result.company_name);
+            }
+            post_setup_action = Some(result.action);
+        }
+    }
+
+    // Ensure data dir and database exist (like `nigel init`)
+    let settings = load_settings();
+    let data_dir = std::path::PathBuf::from(&settings.data_dir);
+    std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(data_dir.join("exports"))?;
+    std::fs::create_dir_all(data_dir.join("snapshots"))?;
+    std::fs::create_dir_all(data_dir.join("backups"))?;
+    let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
+    crate::db::init_db(&conn)?;
+
+    // Save company_name from onboarding to DB metadata
+    if let Some(company) = onboarding_company {
+        crate::db::set_metadata(&conn, "company_name", &company)?;
+    }
+
+    // Migrate legacy company_name from settings.json → DB metadata
+    if crate::db::get_metadata(&conn, "company_name").is_none() {
+        if let Some(company) = crate::settings::migrate_company_name() {
+            crate::db::set_metadata(&conn, "company_name", &company)?;
+        }
+    }
+
+    drop(conn);
+
+    // Handle post-setup action from onboarding
+    if let Some(action) = post_setup_action {
+        match action {
+            super::onboarding::PostSetupAction::Demo => {
+                super::demo::setup_demo()?;
+            }
+            super::onboarding::PostSetupAction::Import => {
+                // Drop into terminal mode for the load command
+                let current = get_data_dir();
+                println!("Current data directory: {}", current.display());
+                let path = prompt("Path to data directory: ");
+                if !path.is_empty() {
+                    super::load::run(&path)?;
+                }
+            }
+            super::onboarding::PostSetupAction::StartFresh => {
+                // Nothing extra — DB is already initialized above
+            }
+        }
+    }
+
+    let user_name = if settings.user_name.is_empty() {
+        None
+    } else {
+        Some(settings.user_name.clone())
+    };
+
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         ratatui::restore();
@@ -850,7 +936,7 @@ pub fn run() -> Result<()> {
 
     loop {
         let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-        let mut dashboard = Dashboard::new();
+        let mut dashboard = Dashboard::new(user_name.clone());
         dashboard.load_data(&conn)?;
 
         let mut terminal = ratatui::init();
@@ -858,6 +944,21 @@ pub fn run() -> Result<()> {
         let exit: std::result::Result<Option<TerminalCommand>, crate::error::NigelError> = loop {
             if let Err(e) = terminal.draw(|frame| dashboard.draw(frame)) {
                 break Err(e.into());
+            }
+
+            if let DashboardScreen::Snake(ref mut game) = dashboard.screen {
+                let timeout = game.tick_rate();
+                match crossterm::event::poll(timeout) {
+                    Ok(true) => {
+                        // Key is available, fall through to event::read() below
+                    }
+                    Ok(false) => {
+                        // No input within timeout — advance game tick
+                        game.do_tick();
+                        continue;
+                    }
+                    Err(e) => break Err(e.into()),
+                }
             }
 
             match event::read() {
@@ -965,6 +1066,15 @@ pub fn run() -> Result<()> {
                                 _ => {}
                             }
                             key.code == KeyCode::Char('q')
+                        }
+                        DashboardScreen::Snake(ref mut game) => {
+                            match game.handle_key(key.code) {
+                                SnakeAction::Quit => {
+                                    return_home = true;
+                                }
+                                SnakeAction::Continue => {}
+                            }
+                            false
                         }
                     };
 

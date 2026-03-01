@@ -6,9 +6,11 @@ use crate::cli::parse_month_opt;
 #[cfg(feature = "pdf")]
 use crate::cli::ReportCommands;
 #[cfg(feature = "pdf")]
+use crate::db::get_metadata;
+#[cfg(feature = "pdf")]
 use crate::error::Result;
 #[cfg(feature = "pdf")]
-use crate::settings::{get_data_dir, load_settings};
+use crate::settings::get_data_dir;
 
 #[cfg(feature = "pdf")]
 fn date_range_label(month: &Option<String>, year: &Option<i32>) -> String {
@@ -71,7 +73,7 @@ pub fn pnl(
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
     let report = crate::reports::get_pnl(&conn, y, mm, from_date.as_deref(), to_date.as_deref())?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&month, &year.or(my));
     let bytes = crate::pdf::render_pnl(&report, &company, &range)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("pnl"));
@@ -83,7 +85,7 @@ pub fn expenses(month: Option<String>, year: Option<i32>, output: Option<String>
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let report = crate::reports::get_expense_breakdown(&conn, year.or(my), mm)?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&month, &year.or(my));
     let bytes = crate::pdf::render_expenses(&report, &company, &range)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("expenses"));
@@ -94,7 +96,7 @@ pub fn expenses(month: Option<String>, year: Option<i32>, output: Option<String>
 pub fn tax(year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_tax_summary(&conn, year)?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&None, &year);
     let bytes = crate::pdf::render_tax(&report, &company, &range)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("tax"));
@@ -106,7 +108,7 @@ pub fn cashflow(month: Option<String>, year: Option<i32>, output: Option<String>
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let report = crate::reports::get_cashflow(&conn, year.or(my), mm)?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&month, &year.or(my));
     let bytes = crate::pdf::render_cashflow(&report, &company, &range)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("cashflow"));
@@ -129,7 +131,7 @@ pub fn register(
         &conn, y, mm,
         from_date.as_deref(), to_date.as_deref(), account.as_deref(),
     )?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&month, &year.or(my));
     let bytes = crate::pdf::render_register(&report, &company, &range)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("register"));
@@ -140,7 +142,7 @@ pub fn register(
 pub fn flagged(output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let rows = crate::reports::get_flagged(&conn)?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let bytes = crate::pdf::render_flagged(&rows, &company)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("flagged"));
     write_pdf(&bytes, &path)
@@ -150,7 +152,7 @@ pub fn flagged(output: Option<String>) -> Result<String> {
 pub fn balance(output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_balance(&conn)?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let bytes = crate::pdf::render_balance(&report, &company)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("balance"));
     write_pdf(&bytes, &path)
@@ -160,7 +162,7 @@ pub fn balance(output: Option<String>) -> Result<String> {
 pub fn k1(year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_k1_prep(&conn, year)?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&None, &year);
     let bytes = crate::pdf::render_k1(&report, &company, &range)?;
     let path = output.map(PathBuf::from).unwrap_or_else(|| default_path("k1-prep"));
@@ -171,7 +173,7 @@ pub fn k1(year: Option<i32>, output: Option<String>) -> Result<String> {
 pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<String> {
     let data_dir = get_data_dir();
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
-    let company = load_settings().company_name;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let range = date_range_label(&None, &year);
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
 
