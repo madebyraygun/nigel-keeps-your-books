@@ -10,76 +10,9 @@ use ratatui::{
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::effects::{self, gradient_color, Particle, GRADIENT, PARTICLE_CHARS};
+
 const TICK_RATE: Duration = Duration::from_millis(150);
-
-// Pastel rainbow gradient: pink → peach → yellow → mint → cyan → lavender → magenta → pink
-const GRADIENT: &[(f64, f64, f64)] = &[
-    (255.0, 179.0, 186.0),
-    (255.0, 200.0, 162.0),
-    (255.0, 224.0, 163.0),
-    (201.0, 255.0, 203.0),
-    (186.0, 225.0, 255.0),
-    (196.0, 183.0, 255.0),
-    (255.0, 179.0, 222.0),
-    (255.0, 179.0, 186.0),
-];
-
-fn gradient_color(t: f64) -> Color {
-    let t = t.rem_euclid(1.0);
-    let segments = (GRADIENT.len() - 1) as f64;
-    let scaled = t * segments;
-    let idx = (scaled as usize).min(GRADIENT.len() - 2);
-    let frac = scaled - idx as f64;
-
-    let (r1, g1, b1) = GRADIENT[idx];
-    let (r2, g2, b2) = GRADIENT[idx + 1];
-
-    let r = (r1 + (r2 - r1) * frac) as u8;
-    let g = (g1 + (g2 - g1) * frac) as u8;
-    let b = (b1 + (b2 - b1) * frac) as u8;
-
-    Color::Rgb(r, g, b)
-}
-
-const MAX_PARTICLES: usize = 20;
-const PARTICLE_CHARS: &[char] = &['·', '∘', '•', '◦'];
-
-struct Particle {
-    x: f64,
-    y: f64,
-    speed: f64,
-    drift: f64,
-    brightness: f64,
-    char_idx: usize,
-    color_idx: usize,
-}
-
-impl Particle {
-    fn new(width: u16, height: u16) -> Self {
-        let mut rng = rand::thread_rng();
-        Self {
-            x: rng.gen_range(0.0..width as f64),
-            y: height as f64 + rng.gen_range(0.0..5.0),
-            speed: rng.gen_range(0.15..0.45),
-            drift: rng.gen_range(-0.1..0.1),
-            brightness: 0.0,
-            char_idx: rng.gen_range(0..PARTICLE_CHARS.len()),
-            color_idx: rng.gen_range(0..GRADIENT.len() - 1),
-        }
-    }
-
-    fn tick(&mut self) {
-        self.y -= self.speed;
-        self.x += self.drift;
-        if self.y > 0.0 {
-            self.brightness = (self.brightness + 0.08).min(0.6);
-        }
-    }
-
-    fn is_dead(&self) -> bool {
-        self.y < -1.0
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direction {
@@ -149,7 +82,7 @@ impl SnakeGame {
             board_width,
             board_height,
             rng,
-            particles: Vec::new(),
+            particles: effects::pre_seed_particles(board_width, board_height),
             phase: 0.0,
         }
     }
@@ -257,15 +190,7 @@ impl SnakeGame {
 
         // Advance gradient phase and particles
         self.phase += 1.0 / 70.0;
-        for p in &mut self.particles {
-            p.tick();
-        }
-        self.particles.retain(|p| !p.is_dead());
-        let mut rng = rand::thread_rng();
-        if self.particles.len() < MAX_PARTICLES && rng.gen_range(0..3) == 0 {
-            self.particles
-                .push(Particle::new(self.board_width, self.board_height));
-        }
+        effects::tick_particles(&mut self.particles, self.board_width, self.board_height);
     }
 
     pub fn tick_rate(&self) -> Duration {
