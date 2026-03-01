@@ -46,7 +46,7 @@ const ROTATING: &[RotatingTxn] = &[
     RotatingTxn { day: 28, description: "STAPLES OFFICE SUPPLY", amount: -67.23 },
     RotatingTxn { day: 7, description: "WEWORK MEMBERSHIP", amount: -450.00 },
     RotatingTxn { day: 12, description: "ZOOM VIDEO COMMUNICATIONS", amount: -14.99 },
-    RotatingTxn { day: 19, description: "DOORDASH DELIVERY", amount: -29.33 },
+    RotatingTxn { day: 19, description: "COSTCO WHOLESALE", amount: -29.33 },
     RotatingTxn { day: 25, description: "FEDEX SHIPPING", amount: -18.75 },
     RotatingTxn { day: 14, description: "DROPBOX BUSINESS", amount: -19.99 },
     RotatingTxn { day: 18, description: "TARGET STORE", amount: -43.67 },
@@ -168,7 +168,7 @@ fn generate_transactions() -> Vec<DemoTxn> {
         let last_day = clamp_day(year, month, 31);
         let interest = 1.50 + (idx % 5) as f64 * 0.25;
         txns.push(DemoTxn {
-            date: make_date(year, month, last_day),
+            date: format!("{year:04}-{month:02}-{last_day:02}"),
             description: "INTEREST PAYMENT",
             amount: (interest * 100.0).round() / 100.0,
         });

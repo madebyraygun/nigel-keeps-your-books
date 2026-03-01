@@ -72,7 +72,7 @@ ID  Date         Description                  Amount       Account
 15  2025-01-31   INTEREST PAYMENT                  $2.14   BofA Checking
 26  2025-02-07   WEWORK MEMBERSHIP              -$450.00   BofA Checking
 27  2025-02-12   ZOOM VIDEO COMMUNICATIONS       -$14.99   BofA Checking
-28  2025-02-19   DOORDASH DELIVERY               -$29.33   BofA Checking
+28  2025-02-19   COSTCO WHOLESALE                -$29.33   BofA Checking
 29  2025-02-25   FEDEX SHIPPING                  -$18.75   BofA Checking
 30  2025-02-28   INTEREST PAYMENT                  $1.87   BofA Checking
 41  2025-03-14   DROPBOX BUSINESS                -$19.99   BofA Checking
