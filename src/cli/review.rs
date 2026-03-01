@@ -14,7 +14,7 @@ use crate::reviewer::{
     CategoryChoice, FlaggedTxn,
 };
 use crate::settings::get_data_dir;
-use crate::tui::money_span;
+use crate::tui::{money_span, FOOTER_STYLE, HEADER_STYLE};
 
 enum ReviewState {
     PickCategory,
@@ -102,8 +102,10 @@ impl TransactionReviewer {
         let cols = (area.width as usize / col_width).max(1);
         let chart_rows = ((self.labels.len() + cols - 1) / cols) as u16 + 1; // +1 for "Categories" header
 
-        let [chart_area, progress_area, detail_area, interaction_area, hints_area] =
+        let [header_area, sep_area, chart_area, progress_area, detail_area, interaction_area, hints_area] =
             Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
                 Constraint::Length(chart_rows),
                 Constraint::Length(1),
                 Constraint::Length(6),
@@ -111,6 +113,18 @@ impl TransactionReviewer {
                 Constraint::Length(1),
             ])
             .areas(area);
+
+        // Header
+        frame.render_widget(
+            Paragraph::new(" Review Transactions").style(HEADER_STYLE),
+            header_area,
+        );
+
+        // Separator
+        frame.render_widget(
+            Paragraph::new("━".repeat(area.width as usize)).style(FOOTER_STYLE),
+            sep_area,
+        );
 
         // Category chart
         let mut chart_lines: Vec<Line> = vec![Line::from(Span::styled(
