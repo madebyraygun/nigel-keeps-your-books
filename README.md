@@ -1,14 +1,18 @@
 # Nigel
 
-*A reliable bloke who does his job well.*
+![Onboarding](docs/screenshots/onboarding.png)
 
 Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBooks with a simple, local-first workflow: import bank CSVs and payroll reports, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal.
 
 Nigel is designed for humans but works extremely well with AI agents. The repo includes [Claude skills](docs/skills.md) to add new importers and intelligently create new rules from your statements before importing into Nigel. With a tool like Claude Cowork, point it at your CSV statement and say "Import my latest statements into Nigel and generate my monthly P&L" or "Generate a Schedule K-1 prep report for 2026."
 
+![Dashboard](docs/screenshots/dashboard.png)
+
+Nigel also includes a **demo mode** — `nigel demo` which generates more than a year's worth of sample transactions so you can get a feel for things without entering any real data. Take the full [walkthrough tour](docs/walkthrough.md) and explore the dashboard, register, accounts and rules, review flagged transactions, and run every report.
+
 ## Features
 
-- **Interactive dashboard** — run `nigel` with no arguments to see a splash screen, then YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, view rules, view/export reports, and switch data files — all from the dashboard
+- **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, view rules, view/export reports, and switch data files. 
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
@@ -20,11 +24,9 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
-- **Snake game** — because even your bookkeeper needs a break sometimes (find it in the dashboard menu)
+- **Snake** - 🍎 🐍
 
-Importers currently include Bank of America and Gusto, but adding new importers is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
-
-Nigel also includes a **demo mode** — `nigel demo` which generates 18 months of sample transactions (counting backwards from today) so reports always show current-year data. Explore the demo by taking a guided tour with the [docs/walkthrough.md](docs/walkthrough.md): explore accounts and rules, review flagged transactions, add new rules, and run every report.
+Importers currently include Bank of America and Gusto, but adding a new importer is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
 
 ## Install
 
