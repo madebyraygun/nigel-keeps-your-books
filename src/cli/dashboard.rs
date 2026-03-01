@@ -43,21 +43,18 @@ const GREETINGS: &[&str] = &[
     "Right then, where were we?",
 ];
 
-const MENU_ITEMS: &[&str] = &[
-    "[B] Browse the register",
-    "[I] Import a statement",
-    "[R] Review flagged transactions",
-    "[C] Reconcile an account",
-    "[A] Add or modify accounts",
-    "[U] View or edit categorization rules",
-    "[V] View a report",
-    "[E] Export a report",
-    "[L] Load a different data file",
-    "[S] Snake",
+const MENU_ITEMS: &[(&str, char)] = &[
+    ("[b] Browse the register", 'b'),
+    ("[i] Import a statement", 'i'),
+    ("[r] Review flagged transactions", 'r'),
+    ("[c] Reconcile an account", 'c'),
+    ("[a] Add or modify accounts", 'a'),
+    ("[u] View or edit categorization rules", 'u'),
+    ("[v] View a report", 'v'),
+    ("[e] Export a report", 'e'),
+    ("[l] Load a different data file", 'l'),
+    ("[s] Snake", 's'),
 ];
-
-/// Single-key shortcuts corresponding to each MENU_ITEMS entry.
-const MENU_SHORTCUTS: &[char] = &['b', 'i', 'r', 'c', 'a', 'u', 'v', 'e', 'l', 's'];
 
 /// Number of menu items in the left column; remainder goes in the right column.
 const MENU_LEFT_COUNT: usize = 5;
@@ -576,7 +573,7 @@ impl Dashboard {
 
     fn menu_item_line(&self, i: usize, flagged_count: usize) -> Line<'static> {
         let marker = if i == self.menu_selection { ">" } else { " " };
-        let item = MENU_ITEMS[i];
+        let (item, _) = MENU_ITEMS[i];
         let label = if i == 2 {
             format!(" {marker} {item} ({flagged_count})")
         } else {
@@ -618,7 +615,7 @@ impl Dashboard {
             KeyCode::Char('q') => return true,
             KeyCode::Enter => self.activate_menu_item(self.menu_selection, conn),
             KeyCode::Char(ch) => {
-                if let Some(idx) = MENU_SHORTCUTS.iter().position(|&s| s == ch) {
+                if let Some(idx) = MENU_ITEMS.iter().position(|(_, key)| *key == ch) {
                     self.activate_menu_item(idx, conn);
                 }
             }
