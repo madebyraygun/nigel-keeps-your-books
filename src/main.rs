@@ -61,6 +61,13 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 form_line,
             } => cli::categories::add(&name, &category_type, tax_line.as_deref(), form_line.as_deref()),
             CategoriesCommands::Rename { id, name } => cli::categories::rename(id, &name),
+            CategoriesCommands::Update {
+                id,
+                name,
+                category_type,
+                tax_line,
+                form_line,
+            } => cli::categories::update(id, &name, &category_type, tax_line.as_deref(), form_line.as_deref()),
             CategoriesCommands::Delete { id } => cli::categories::delete(id),
         },
         Commands::Import {

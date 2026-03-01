@@ -52,6 +52,19 @@ pub fn rename(id: i64, new_name: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn update(
+    id: i64,
+    name: &str,
+    category_type: &str,
+    tax_line: Option<&str>,
+    form_line: Option<&str>,
+) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    update_category(&conn, id, name, category_type, tax_line, form_line)?;
+    println!("Updated category {id}: {name}");
+    Ok(())
+}
+
 pub fn delete(id: i64) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     delete_category(&conn, id)?;
@@ -67,7 +80,7 @@ pub fn list_categories(conn: &Connection) -> Result<Vec<CategoryRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, category_type, tax_line, form_line \
          FROM categories WHERE is_active = 1 \
-         ORDER BY category_type DESC, name ASC",
+         ORDER BY CASE category_type WHEN 'income' THEN 0 ELSE 1 END, name ASC",
     )?;
     let categories = stmt
         .query_map([], |row| {
@@ -123,7 +136,12 @@ pub fn rename_category(conn: &Connection, id: i64, new_name: &str) -> Result<()>
             [id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .map_err(|_| NigelError::Other(format!("Category not found: id {id}")))?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                NigelError::Other(format!("Category not found: id {id}"))
+            }
+            other => NigelError::Db(other),
+        })?;
     update_category(
         conn,
         id,
@@ -170,23 +188,24 @@ pub fn update_category(
     Ok(())
 }
 
-pub fn delete_category(conn: &Connection, id: i64) -> Result<()> {
+/// Returns a human-readable reason why a category cannot be deleted, or None if
+/// deletion is safe. Used by both the TUI (pre-check) and `delete_category` (guard).
+pub fn blocking_reason(conn: &Connection, id: i64) -> Result<Option<String>> {
     let (txn_count, rule_count) = usage_count(conn, id)?;
     if txn_count > 0 {
-        let noun = if txn_count == 1 {
-            "transaction"
-        } else {
-            "transactions"
-        };
-        return Err(NigelError::Other(format!(
-            "Cannot delete: category has {txn_count} {noun}"
-        )));
+        let noun = if txn_count == 1 { "transaction" } else { "transactions" };
+        return Ok(Some(format!("Cannot delete: category has {txn_count} {noun}")));
     }
     if rule_count > 0 {
         let noun = if rule_count == 1 { "rule" } else { "rules" };
-        return Err(NigelError::Other(format!(
-            "Cannot delete: category has {rule_count} active {noun}"
-        )));
+        return Ok(Some(format!("Cannot delete: category has {rule_count} active {noun}")));
+    }
+    Ok(None)
+}
+
+pub fn delete_category(conn: &Connection, id: i64) -> Result<()> {
+    if let Some(reason) = blocking_reason(conn, id)? {
+        return Err(NigelError::Other(reason));
     }
     let updated = conn.execute(
         "UPDATE categories SET is_active = 0 WHERE id = ?1 AND is_active = 1",
@@ -228,12 +247,11 @@ mod tests {
     fn test_list_categories_returns_seeded() {
         let (_dir, conn) = test_conn();
         let categories = list_categories(&conn).unwrap();
-        assert!(
-            categories.len() >= 29,
-            "expected at least 29 seeded categories, got {}",
-            categories.len()
-        );
-        // Income categories come first (category_type DESC: income > expense)
+        assert!(!categories.is_empty(), "should have seeded categories");
+        // Spot-check known seeded categories
+        assert!(categories.iter().any(|c| c.name == "Client Services" && c.category_type == "income"));
+        assert!(categories.iter().any(|c| c.name == "Office Expense" && c.category_type == "expense"));
+        // Income categories come first (explicit CASE ordering)
         let first_expense_idx = categories.iter().position(|c| c.category_type == "expense");
         let last_income_idx = categories.iter().rposition(|c| c.category_type == "income");
         if let (Some(last_inc), Some(first_exp)) = (last_income_idx, first_expense_idx) {
@@ -348,6 +366,23 @@ mod tests {
 
         // Updating to the same name should succeed
         update_category(&conn, id, "Self Update", "income", None, None).unwrap();
+    }
+
+    #[test]
+    fn test_update_duplicate_name_rejected() {
+        let (_dir, conn) = test_conn();
+        add_category(&conn, "Cat A", "expense", None, None).unwrap();
+        add_category(&conn, "Cat B", "expense", None, None).unwrap();
+        let id_b = list_categories(&conn)
+            .unwrap()
+            .iter()
+            .find(|c| c.name == "Cat B")
+            .unwrap()
+            .id;
+
+        // Updating Cat B to Cat A's name should fail
+        let err = update_category(&conn, id_b, "Cat A", "expense", None, None).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
     }
 
     #[test]

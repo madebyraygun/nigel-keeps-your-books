@@ -47,6 +47,7 @@ nigel import <file> --account <name> --format bofa_checking  # Import with expli
 nigel categories list                             # List all categories
 nigel categories add "Consulting" --type income   # Add a category
 nigel categories rename 5 "Professional Fees"     # Rename a category
+nigel categories update 5 "Fees" --type income --tax-line "Gross receipts"  # Update all fields
 nigel categories delete 30                        # Soft-delete a category
 nigel rules update 1 --priority 10                # Update a rule field
 nigel rules update 5 --category "Rent / Lease"    # Reassign rule category

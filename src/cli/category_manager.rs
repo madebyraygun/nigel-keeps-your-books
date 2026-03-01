@@ -198,7 +198,8 @@ impl CategoryManager {
         if self.categories.is_empty() {
             lines.push(Line::from("   No categories. Press 'a' to add one."));
         } else {
-            // Table header
+            // Table header — column widths are 28, 10, 20; truncation is width-2
+            // to leave room for the ellipsis character and padding.
             lines.push(Line::from(vec![
                 Span::styled("   ", Style::default()),
                 Span::styled(
@@ -369,6 +370,8 @@ impl CategoryManager {
     }
 
     pub fn handle_key(&mut self, code: KeyCode, conn: &Connection) -> CategoryAction {
+        // TTL counts remaining keypresses after the one that set the status.
+        // A set_status(ttl=3) means the message survives 3 more keypresses.
         if self.status_ttl > 0 {
             self.status_ttl -= 1;
             if self.status_ttl == 0 {
@@ -405,33 +408,11 @@ impl CategoryManager {
                 }
             }
             KeyCode::Char('d') => {
-                if !self.categories.is_empty() {
-                    if let Some(cat) = self.categories.get(self.selection) {
-                        match categories::usage_count(conn, cat.id) {
-                            Ok((txn_count, rule_count)) => {
-                                if txn_count > 0 {
-                                    let noun = if txn_count == 1 {
-                                        "transaction"
-                                    } else {
-                                        "transactions"
-                                    };
-                                    self.set_status(format!(
-                                        "Cannot delete: category has {txn_count} {noun}"
-                                    ));
-                                } else if rule_count > 0 {
-                                    let noun =
-                                        if rule_count == 1 { "rule" } else { "rules" };
-                                    self.set_status(format!(
-                                        "Cannot delete: category has {rule_count} active {noun}"
-                                    ));
-                                } else {
-                                    self.screen = Screen::ConfirmDelete;
-                                }
-                            }
-                            Err(e) => {
-                                self.set_status(format!("Error: {e}"));
-                            }
-                        }
+                if let Some(cat) = self.categories.get(self.selection) {
+                    match categories::blocking_reason(conn, cat.id) {
+                        Ok(Some(reason)) => self.set_status(reason),
+                        Ok(None) => self.screen = Screen::ConfirmDelete,
+                        Err(e) => self.set_status(format!("Error: {e}")),
                     }
                 }
             }

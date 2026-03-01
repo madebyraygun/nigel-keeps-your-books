@@ -170,6 +170,22 @@ pub enum CategoriesCommands {
         /// New name
         name: String,
     },
+    /// Update a category's fields by ID.
+    Update {
+        /// Category ID
+        id: i64,
+        /// Category name
+        name: String,
+        /// Category type: income or expense
+        #[arg(long = "type")]
+        category_type: String,
+        /// IRS tax line mapping
+        #[arg(long)]
+        tax_line: Option<String>,
+        /// Form 1120-S line mapping
+        #[arg(long = "form-line")]
+        form_line: Option<String>,
+    },
     /// Delete (deactivate) a category by ID.
     Delete {
         /// Category ID
