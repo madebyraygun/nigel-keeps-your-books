@@ -65,12 +65,12 @@ $ nigel report flagged
 Flagged Transactions (84)
 
 ID  Date         Description                  Amount       Account
- 7  YYYY-MM-15   CHECK 1042                   -$2,400.00   BofA Checking
- 8  YYYY-MM-20   VENMO PAYMENT                  -$150.00   BofA Checking
- 9  YYYY-MM-25   COMCAST BUSINESS               -$129.99   BofA Checking
-10  YYYY-MM-28   STAPLES OFFICE SUPPLY           -$67.23   BofA Checking
-11  YYYY-MM-31   INTEREST PAYMENT                  $1.50   BofA Checking
-12  YYYY-MM-22   DOORDASH DELIVERY               -$28.45   BofA Checking
+--  YYYY-MM-15   CHECK 1042                   -$2,400.00   BofA Checking
+--  YYYY-MM-20   VENMO PAYMENT                  -$150.00   BofA Checking
+--  YYYY-MM-25   COMCAST BUSINESS               -$129.99   BofA Checking
+--  YYYY-MM-28   STAPLES OFFICE SUPPLY           -$67.23   BofA Checking
+--  YYYY-MM-DD   INTEREST PAYMENT                  $1.50   BofA Checking
+--  YYYY-MM-22   DOORDASH DELIVERY               -$28.45   BofA Checking
 ...
 ```
 
