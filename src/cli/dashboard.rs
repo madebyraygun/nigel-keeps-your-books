@@ -37,7 +37,6 @@ const GREETINGS: &[&str] = &[
     "Everything's in order. Well, mostly.",
     "No surprises today. Well... let's not get ahead of ourselves.",
     "Fancy a quick look at the numbers?",
-    "You're looking well. The books, less so.",
     "Ah, there you are.",
     "The spreadsheets send their regards.",
     "Right then, where were we?",

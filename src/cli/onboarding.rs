@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -26,6 +26,12 @@ const ACTION_ITEMS: &[&str] = &[
     "Start from scratch",
     "Load existing data directory",
 ];
+
+/// Intro animation timing (milliseconds)
+const INTRO_PARTICLES_MS: f64 = 500.0;
+const INTRO_REVEAL_MS: f64 = 500.0;
+const INTRO_UI_DELAY_MS: f64 = 200.0;
+const INTRO_TOTAL_MS: f64 = INTRO_PARTICLES_MS + INTRO_REVEAL_MS + INTRO_UI_DELAY_MS;
 
 enum Screen {
     NameInput,
@@ -56,6 +62,9 @@ struct Onboarding {
     particles: Vec<Particle>,
     width: u16,
     height: u16,
+    start: Instant,
+    reveal_order: Vec<(usize, usize)>,
+    intro_done: bool,
 }
 
 impl Onboarding {
@@ -72,6 +81,9 @@ impl Onboarding {
             particles: effects::pre_seed_particles(width, height),
             width,
             height,
+            start: Instant::now(),
+            reveal_order: effects::logo_reveal_order(),
+            intro_done: false,
         }
     }
 
@@ -102,6 +114,14 @@ impl Onboarding {
         // Draw particles as background
         effects::render_particles(&self.particles, frame, area);
 
+        // Auto-complete intro when animation finishes
+        if !self.intro_done {
+            let elapsed = self.start.elapsed().as_secs_f64() * 1000.0;
+            if elapsed >= INTRO_TOTAL_MS {
+                self.intro_done = true;
+            }
+        }
+
         match self.screen {
             Screen::NameInput => self.draw_name_input(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
@@ -126,7 +146,33 @@ impl Onboarding {
             ])
             .areas(area);
 
-        effects::render_logo(self.phase, frame, logo_area);
+        if self.intro_done {
+            effects::render_logo(self.phase, frame, logo_area);
+        } else {
+            let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms < INTRO_PARTICLES_MS {
+                // Particles only — no logo or UI yet
+                return;
+            }
+            // Logo reveal phase
+            let logo_elapsed = elapsed_ms - INTRO_PARTICLES_MS;
+            if logo_elapsed < INTRO_REVEAL_MS {
+                let progress = logo_elapsed / INTRO_REVEAL_MS;
+                let total = self.reveal_order.len();
+                let chars_visible = (progress * total as f64) as usize;
+                effects::render_logo_reveal(
+                    self.phase,
+                    frame,
+                    logo_area,
+                    Some((&self.reveal_order, chars_visible)),
+                );
+            } else {
+                // Logo fully revealed, waiting for UI delay
+                effects::render_logo(self.phase, frame, logo_area);
+            }
+            // UI not shown yet during intro
+            return;
+        }
 
         frame.render_widget(
             Paragraph::new(Span::styled("Welcome! Let's get you set up.", HEADER_STYLE))
@@ -375,6 +421,12 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                         && key.code == KeyCode::Char('c')
                     {
                         break Ok(None);
+                    }
+
+                    // Skip intro animation on any keypress
+                    if !onboarding.intro_done {
+                        onboarding.intro_done = true;
+                        continue;
                     }
 
                     let step = match onboarding.screen {

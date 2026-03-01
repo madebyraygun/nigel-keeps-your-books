@@ -1,16 +1,12 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyEventKind};
-use rand::seq::SliceRandom;
 use ratatui::{
-    layout::{Alignment, Constraint, Layout},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
+    layout::{Constraint, Layout},
     Frame,
 };
 
-use crate::effects::{self, gradient_color, Particle, LOGO};
+use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
 
 const SPLASH_DURATION: Duration = Duration::from_millis(1500);
@@ -24,35 +20,19 @@ struct Splash {
     width: u16,
     height: u16,
     start: Instant,
-    /// Logo character positions in randomized reveal order
     reveal_order: Vec<(usize, usize)>,
 }
 
 impl Splash {
     fn new() -> Self {
         let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
-        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
-
-        // Build a list of all non-space character positions, then shuffle
-        let mut positions: Vec<(usize, usize)> = Vec::new();
-        for (row, line) in LOGO.iter().enumerate() {
-            let padded = format!("{:<width$}", line, width = max_logo_width);
-            for (col, ch) in padded.chars().enumerate() {
-                if ch != ' ' {
-                    positions.push((row, col));
-                }
-            }
-        }
-        let mut rng = rand::thread_rng();
-        positions.shuffle(&mut rng);
-
         Self {
             phase: 0.0,
             particles: effects::pre_seed_particles(width, height),
             width,
             height,
             start: Instant::now(),
-            reveal_order: positions,
+            reveal_order: effects::logo_reveal_order(),
         }
     }
 
@@ -84,59 +64,22 @@ impl Splash {
         ])
         .areas(area);
 
-        // Determine which characters are visible based on reveal/dissolve progress
         let total_chars = self.reveal_order.len();
         let chars_visible = if elapsed_ms < REVEAL_MS {
-            // Reveal phase: progressively show characters
             let progress = elapsed_ms / REVEAL_MS;
             (progress * total_chars as f64) as usize
         } else if remaining_ms < DISSOLVE_MS {
-            // Dissolve phase: progressively hide characters (reverse order)
             let progress = (remaining_ms / DISSOLVE_MS).max(0.0);
             (progress * total_chars as f64) as usize
         } else {
             total_chars
         };
 
-        // Build set of visible positions
-        let visible: std::collections::HashSet<(usize, usize)> =
-            self.reveal_order[..chars_visible.min(total_chars)]
-                .iter()
-                .copied()
-                .collect();
-
-        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
-        let gradient_width = 40.0;
-        let logo_lines: Vec<Line> = LOGO
-            .iter()
-            .enumerate()
-            .map(|(row, line)| {
-                let padded = format!("{:<width$}", line, width = max_logo_width);
-                let spans: Vec<Span> = padded
-                    .chars()
-                    .enumerate()
-                    .map(|(col, ch)| {
-                        if ch == ' ' || !visible.contains(&(row, col)) {
-                            Span::raw(" ")
-                        } else {
-                            let t = (col as f64 / gradient_width)
-                                + (row as f64 * 0.04)
-                                - self.phase;
-                            Span::styled(
-                                ch.to_string(),
-                                Style::default()
-                                    .fg(gradient_color(t))
-                                    .add_modifier(Modifier::BOLD),
-                            )
-                        }
-                    })
-                    .collect();
-                Line::from(spans)
-            })
-            .collect();
-        frame.render_widget(
-            Paragraph::new(logo_lines).alignment(Alignment::Center),
+        effects::render_logo_reveal(
+            self.phase,
+            frame,
             logo_area,
+            Some((&self.reveal_order, chars_visible)),
         );
     }
 }
@@ -207,11 +150,11 @@ mod tests {
     #[test]
     fn reveal_order_contains_all_logo_chars() {
         let splash = Splash::new();
-        let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
+        let width = effects::max_logo_width();
         let expected: usize = LOGO
             .iter()
             .map(|line| {
-                format!("{:<width$}", line, width = max_logo_width)
+                format!("{:<width$}", line, width = width)
                     .chars()
                     .filter(|c| *c != ' ')
                     .count()

@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+
+use rand::seq::SliceRandom;
 use rand::Rng;
 use ratatui::{
     layout::{Alignment, Rect},
@@ -51,12 +54,12 @@ pub struct Particle {
 }
 
 impl Particle {
-    /// Spawn a new particle at a random viewport position, fading in from invisible.
+    /// Spawn a new particle just below the visible area so it floats upward.
     pub fn new(width: u16, height: u16) -> Self {
         let mut rng = rand::thread_rng();
         Self {
             x: rng.gen_range(0.0..width as f64),
-            y: rng.gen_range(0.0..height as f64),
+            y: height as f64 + rng.gen_range(0.0..5.0),
             speed: rng.gen_range(0.15..0.45),
             drift: rng.gen_range(-0.1..0.1),
             brightness: 0.0,
@@ -79,6 +82,20 @@ impl Particle {
         }
     }
 
+    /// Spawn a particle well below the viewport for the pre-seed buffer zone.
+    pub fn queued(width: u16, height: u16) -> Self {
+        let mut rng = rand::thread_rng();
+        Self {
+            x: rng.gen_range(0.0..width as f64),
+            y: height as f64 + rng.gen_range(0.0..height as f64),
+            speed: rng.gen_range(0.15..0.45),
+            drift: rng.gen_range(-0.1..0.1),
+            brightness: 0.0,
+            char_idx: rng.gen_range(0..PARTICLE_CHARS.len()),
+            color_idx: rng.gen_range(0..GRADIENT.len() - 1),
+        }
+    }
+
     pub fn tick(&mut self) {
         self.y -= self.speed;
         self.x += self.drift;
@@ -95,21 +112,12 @@ impl Particle {
 /// Pre-seed particles across the viewport plus a buffer zone below to prevent
 /// a visible gap when the initial batch drifts off the top.
 pub fn pre_seed_particles(width: u16, height: u16) -> Vec<Particle> {
-    let mut rng = rand::thread_rng();
     let mut particles: Vec<Particle> = (0..MAX_PARTICLES)
         .map(|_| Particle::seeded(width, height))
         .collect();
     // Queue up another batch below the viewport — they'll arrive as the visible ones exit
     for _ in 0..MAX_PARTICLES {
-        particles.push(Particle {
-            x: rng.gen_range(0.0..width as f64),
-            y: height as f64 + rng.gen_range(0.0..height as f64),
-            speed: rng.gen_range(0.15..0.45),
-            drift: rng.gen_range(-0.1..0.1),
-            brightness: 0.0,
-            char_idx: rng.gen_range(0..PARTICLE_CHARS.len()),
-            color_idx: rng.gen_range(0..GRADIENT.len() - 1),
-        });
+        particles.push(Particle::queued(width, height));
     }
     particles
 }
@@ -166,20 +174,62 @@ pub const LOGO: &[&str] = &[
     r"                \______/",
 ];
 
-/// Render the Nigel ASCII logo with animated rainbow gradient.
+pub fn max_logo_width() -> usize {
+    LOGO.iter().map(|l| l.len()).max().unwrap_or(0)
+}
+
+/// Build a shuffled list of all non-space character positions in the logo.
+pub fn logo_reveal_order() -> Vec<(usize, usize)> {
+    let width = max_logo_width();
+    let mut positions: Vec<(usize, usize)> = Vec::new();
+    for (row, line) in LOGO.iter().enumerate() {
+        let padded = format!("{:<width$}", line, width = width);
+        for (col, ch) in padded.chars().enumerate() {
+            if ch != ' ' {
+                positions.push((row, col));
+            }
+        }
+    }
+    let mut rng = rand::thread_rng();
+    positions.shuffle(&mut rng);
+    positions
+}
+
+/// Render the Nigel ASCII logo with animated rainbow gradient (all characters visible).
 pub fn render_logo(phase: f64, frame: &mut Frame, logo_area: Rect) {
-    let max_logo_width = LOGO.iter().map(|l| l.len()).max().unwrap_or(0);
+    render_logo_reveal(phase, frame, logo_area, None);
+}
+
+/// Render the logo with an optional character reveal effect.
+/// When `reveal` is None, all characters are shown.
+/// When Some((order, count)), only the first `count` positions from `order` are rendered.
+pub fn render_logo_reveal(
+    phase: f64,
+    frame: &mut Frame,
+    logo_area: Rect,
+    reveal: Option<(&[(usize, usize)], usize)>,
+) {
+    let logo_width = max_logo_width();
     let gradient_width = 40.0;
+
+    let visible_set: Option<HashSet<(usize, usize)>> = reveal.map(|(order, count)| {
+        order[..count.min(order.len())].iter().copied().collect()
+    });
+
     let logo_lines: Vec<Line> = LOGO
         .iter()
         .enumerate()
         .map(|(row, line)| {
-            let padded = format!("{:<width$}", line, width = max_logo_width);
+            let padded = format!("{:<width$}", line, width = logo_width);
             let spans: Vec<Span> = padded
                 .chars()
                 .enumerate()
                 .map(|(col, ch)| {
-                    if ch == ' ' {
+                    let hidden = ch == ' '
+                        || visible_set
+                            .as_ref()
+                            .is_some_and(|set| !set.contains(&(row, col)));
+                    if hidden {
                         Span::raw(" ")
                     } else {
                         let t =
@@ -232,10 +282,9 @@ mod tests {
     }
 
     #[test]
-    fn particle_new_starts_within_viewport() {
+    fn particle_new_starts_below_screen() {
         let p = Particle::new(80, 24);
-        assert!(p.x >= 0.0 && p.x < 80.0);
-        assert!(p.y >= 0.0 && p.y < 24.0);
+        assert!(p.y >= 24.0);
         assert_eq!(p.brightness, 0.0);
     }
 
@@ -245,6 +294,13 @@ mod tests {
         assert!(p.x >= 0.0 && p.x < 80.0);
         assert!(p.y >= 0.0 && p.y < 24.0);
         assert!(p.brightness >= 0.2);
+    }
+
+    #[test]
+    fn particle_queued_below_viewport() {
+        let p = Particle::queued(80, 24);
+        assert!(p.y >= 24.0);
+        assert_eq!(p.brightness, 0.0);
     }
 
     #[test]
@@ -279,10 +335,26 @@ mod tests {
         let mut particles = vec![Particle::new(80, 24)];
         particles[0].y = -2.0; // force dead
         tick_particles(&mut particles, 80, 24);
-        // Dead particle removed, replacements spawned (up to 2 per tick)
+        // Dead particle removed, up to 2 replacements spawned
+        assert!(particles.len() <= 2);
         for p in &particles {
             assert!(!p.is_dead());
         }
-        assert!(particles.len() <= MAX_PARTICLES);
+    }
+
+    #[test]
+    fn logo_reveal_order_contains_all_chars() {
+        let order = logo_reveal_order();
+        let width = max_logo_width();
+        let expected: usize = LOGO
+            .iter()
+            .map(|line| {
+                format!("{:<width$}", line, width = width)
+                    .chars()
+                    .filter(|c| *c != ' ')
+                    .count()
+            })
+            .sum();
+        assert_eq!(order.len(), expected);
     }
 }

@@ -199,6 +199,7 @@ impl SnakeGame {
     }
 
     pub fn tick_rate(&self) -> Duration {
+        // -2ms per segment beyond the initial length of 3, floored at MIN_TICK_MS
         let speed_ms = BASE_TICK_MS.saturating_sub((self.body.len() as u64).saturating_sub(3) * 2);
         let tick = Duration::from_millis(speed_ms.max(MIN_TICK_MS));
         tick.saturating_sub(self.last_tick.elapsed())
