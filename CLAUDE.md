@@ -57,7 +57,8 @@ nigel report pnl --year 2025 --output ~/report.pdf  # --output implies export
 nigel report all --year 2025                      # Bulk export all reports (PDF)
 nigel report all --year 2025 --format text        # Bulk export as text files
 nigel report all --year 2025 --output-dir ~/exports/  # Custom output directory
-nigel browse register --year 2025                 # Interactive register browser
+nigel browse register                            # All transactions, starts at today
+nigel browse register --year 2025                 # Filter to a specific year
 nigel browse register --account "BofA Checking"   # Browse filtered by account
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 nigel status                                      # Show active DB and summary stats
@@ -87,6 +88,7 @@ Do not merge or mark work complete if docs are stale.
 - Demo data is inserted directly into the DB (no CSV files); idempotency guard checks for existing account
 - Cash amounts are plain `f64` — negative = expense, positive = income
 - Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
+- Browse register and reports with no date flags show all transactions (no implicit year filter); the browse view scrolls to today on load
 - Database row deserialization errors are propagated, never silently discarded
 
 ## Project Structure

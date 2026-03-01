@@ -1,5 +1,6 @@
 use std::io;
 
+use chrono::Local;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout},
@@ -76,6 +77,22 @@ impl RegisterBrowser {
             pending_category_idx: None,
             pending_vendor: None,
             table_state: TableState::default(),
+        }
+    }
+
+    /// Scroll so that the last transaction on or before today is visible.
+    /// Relies on rows being sorted by date ASC (as returned by get_register).
+    pub fn scroll_to_today(&mut self) {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let idx = self.rows.iter().rposition(|r| r.date <= today);
+        if let Some(i) = idx {
+            // Position that row on screen (offset so it's visible, near middle)
+            self.offset = i.saturating_sub(PAGE_SIZE / 2);
+            self.selected = i - self.offset;
+        } else if !self.rows.is_empty() {
+            // All transactions are in the future — start at the beginning
+            self.offset = 0;
+            self.selected = 0;
         }
     }
 

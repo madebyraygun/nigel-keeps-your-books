@@ -36,9 +36,8 @@ fn date_filter(
     if let Some(y) = year {
         return Ok(("t.date LIKE ?1".to_string(), vec![format!("{y}%")]));
     }
-    // Default: current year
-    let current_year = chrono::Local::now().year();
-    Ok(("t.date LIKE ?1".to_string(), vec![format!("{current_year}%")]))
+    // Default: all transactions (no date filter)
+    Ok(("1=1".to_string(), vec![]))
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +651,28 @@ mod tests {
         assert_eq!(report.rows.len(), 3);
         // First two are categorized, all should appear
         assert!(report.rows.iter().all(|r| r.category.is_some()));
+    }
+
+    #[test]
+    fn test_register_default_returns_all_years() {
+        let (_dir, conn) = test_db();
+        seed_transactions(&conn); // 2025 transactions
+        // Add a transaction in a different year
+        let acct: i64 = conn.query_row(
+            "SELECT id FROM accounts WHERE name = 'Test'", [], |r| r.get(0),
+        ).unwrap();
+        let cat: i64 = conn.query_row(
+            "SELECT id FROM categories WHERE name = 'Client Services'", [], |r| r.get(0),
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, '2024-06-15', 'Old payment', 500.0, ?2)",
+            rusqlite::params![acct, cat],
+        ).unwrap();
+        // No date filters — should return all 4 transactions across both years
+        let report = get_register(&conn, None, None, None, None, None).unwrap();
+        assert_eq!(report.rows.len(), 4);
+        assert_eq!(report.rows[0].date, "2024-06-15"); // oldest first
     }
 
     #[test]

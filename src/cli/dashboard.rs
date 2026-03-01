@@ -590,20 +590,20 @@ impl Dashboard {
     }
 
     fn enter_browse(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
-        let year = chrono::Local::now().year();
-        match reports::get_register(conn, Some(year), None, None, None, None) {
+        match reports::get_register(conn, None, None, None, None, None) {
             Ok(data) => {
                 let categories = match get_categories(conn) {
                     Ok(c) => c,
                     Err(_) => vec![],
                 };
                 self.status_message = None;
-                let browser = RegisterBrowser::new(
+                let mut browser = RegisterBrowser::new(
                     data.rows,
                     data.total,
-                    format!("year: {year}"),
+                    "all transactions".to_string(),
                     categories,
                 );
+                browser.scroll_to_today();
                 DashboardScreen::Browse(browser)
             }
             Err(e) => {
