@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rand::seq::SliceRandom;
@@ -13,7 +11,11 @@ use ratatui::{
 
 use crate::browser::{BrowseAction, RegisterBrowser};
 use crate::cli::account_manager::{AccountAction, AccountManager};
+use crate::cli::import_manager::{ImportAction, ImportScreen};
+use crate::cli::load_manager::{LoadAction, LoadScreen};
+use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
 use crate::cli::review::{HandleResult, TransactionReviewer};
+use crate::cli::rules_manager::{RulesAction, RulesManager};
 use crate::cli::snake::{SnakeAction, SnakeGame};
 use crate::db::get_connection;
 use crate::error::Result;
@@ -89,18 +91,15 @@ enum ReportPickerMode {
 enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
+    Import(ImportScreen),
     Review(TransactionReviewer),
     Accounts(AccountManager),
+    Rules(RulesManager),
+    Reconcile(ReconcileScreen),
+    Load(LoadScreen),
     ReportPicker { selection: usize, mode: ReportPickerMode },
     ReportView(Box<dyn ReportView>),
     Snake(SnakeGame),
-}
-
-enum TerminalCommand {
-    RulesList,
-    Import,
-    Load,
-    Reconcile,
 }
 
 struct HomeData {
@@ -121,10 +120,10 @@ struct Dashboard {
     greeting: String,
     menu_selection: usize,
     home_data: Option<HomeData>,
-    terminal_action: Option<TerminalCommand>,
     pending_report_view: Option<usize>,
     pending_export: Option<usize>,
     status_message: Option<String>,
+    needs_reload: bool,
 }
 
 impl Dashboard {
@@ -148,10 +147,10 @@ impl Dashboard {
             greeting,
             menu_selection: 0,
             home_data: None,
-            terminal_action: None,
             pending_report_view: None,
             pending_export: None,
             status_message: None,
+            needs_reload: false,
         }
     }
 
@@ -240,12 +239,28 @@ impl Dashboard {
             browser.draw_frame(frame);
             return;
         }
+        if let DashboardScreen::Import(ref import) = self.screen {
+            import.draw(frame);
+            return;
+        }
         if let DashboardScreen::Review(ref reviewer) = self.screen {
             reviewer.draw(frame);
             return;
         }
         if let DashboardScreen::Accounts(ref manager) = self.screen {
             manager.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Rules(ref rules) = self.screen {
+            rules.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Reconcile(ref reconcile) = self.screen {
+            reconcile.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Load(ref load) = self.screen {
+            load.draw(frame);
             return;
         }
         if let DashboardScreen::ReportView(ref mut view) = self.screen {
@@ -581,14 +596,14 @@ impl Dashboard {
             KeyCode::Char('q') => return true,
             KeyCode::Enter => match self.menu_selection {
                 0 => self.screen = self.enter_browse(conn),
-                1 => self.terminal_action = Some(TerminalCommand::Import),
+                1 => self.screen = DashboardScreen::Import(ImportScreen::new(conn, &self.greeting)),
                 2 => self.screen = self.enter_review(conn),
-                3 => self.terminal_action = Some(TerminalCommand::Reconcile),
+                3 => self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting)),
                 4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
-                5 => self.terminal_action = Some(TerminalCommand::RulesList),
+                5 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
                 6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
                 7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
-                8 => self.terminal_action = Some(TerminalCommand::Load),
+                8 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
                 9 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
                 _ => {}
             },
@@ -710,123 +725,6 @@ fn format_k(val: f64) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Terminal-mode helpers
-// ---------------------------------------------------------------------------
-
-fn prompt(label: &str) -> String {
-    print!("{label}");
-    std::io::stdout().flush().unwrap();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
-}
-
-fn wait_for_enter() {
-    println!("\nPress Enter to return to the dashboard...");
-    let _ = std::io::stdin().read_line(&mut String::new());
-}
-
-fn run_terminal_command(cmd: TerminalCommand) {
-    let result = match cmd {
-        TerminalCommand::RulesList => super::rules::list(),
-        TerminalCommand::Import => run_import(),
-        TerminalCommand::Load => run_load(),
-        TerminalCommand::Reconcile => run_reconcile(),
-    };
-    if let Err(e) = result {
-        eprintln!("\nError: {e}");
-    }
-    wait_for_enter();
-}
-
-fn run_import() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-
-    let mut stmt = conn.prepare("SELECT name FROM accounts ORDER BY name")?;
-    let accounts: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    drop(stmt);
-    drop(conn);
-
-    if accounts.is_empty() {
-        println!("No accounts found. Add one with: nigel accounts add <name> --type <type>");
-        return Ok(());
-    }
-
-    let file = prompt("File path: ");
-    if file.is_empty() {
-        return Ok(());
-    }
-
-    println!("\nAccounts:");
-    for (i, name) in accounts.iter().enumerate() {
-        println!("  {}) {name}", i + 1);
-    }
-    let choice = prompt("Select account number: ");
-    let idx: usize = choice.parse::<usize>().unwrap_or(0);
-    if idx == 0 || idx > accounts.len() {
-        println!("Invalid selection.");
-        return Ok(());
-    }
-
-    super::import::run(&file, &accounts[idx - 1], None)
-}
-
-fn run_load() -> Result<()> {
-    let current = get_data_dir();
-    println!("Current data directory: {}", current.display());
-    let path = prompt("New data directory: ");
-    if path.is_empty() {
-        return Ok(());
-    }
-    super::load::run(&path)
-}
-
-fn run_reconcile() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-
-    let mut stmt = conn.prepare("SELECT name FROM accounts ORDER BY name")?;
-    let accounts: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    drop(stmt);
-    drop(conn);
-
-    if accounts.is_empty() {
-        println!("No accounts found.");
-        return Ok(());
-    }
-
-    println!("Accounts:");
-    for (i, name) in accounts.iter().enumerate() {
-        println!("  {}) {name}", i + 1);
-    }
-    let choice = prompt("Select account number: ");
-    let idx: usize = choice.parse::<usize>().unwrap_or(0);
-    if idx == 0 || idx > accounts.len() {
-        println!("Invalid selection.");
-        return Ok(());
-    }
-
-    let month = prompt("Month (YYYY-MM): ");
-    if month.is_empty() {
-        return Ok(());
-    }
-
-    let balance_str = prompt("Statement balance: $");
-    let balance: f64 = match balance_str.replace(['$', ','], "").parse() {
-        Ok(b) => b,
-        Err(_) => {
-            println!("Invalid balance.");
-            return Ok(());
-        }
-    };
-
-    super::reconcile::run(&accounts[idx - 1], &month, balance)
-}
-
 fn do_export(idx: usize) -> Result<String> {
     #[cfg(not(feature = "pdf"))]
     {
@@ -914,12 +812,14 @@ pub fn run() -> Result<()> {
                 super::demo::setup_demo()?;
             }
             super::onboarding::PostSetupAction::Import => {
-                // Drop into terminal mode for the load command
-                let current = get_data_dir();
-                println!("Current data directory: {}", current.display());
-                let path = prompt("Path to data directory: ");
+                // User chose "Load existing" during onboarding — prompt for path
+                print!("Current data directory: {}\nPath to data directory: ", get_data_dir().display());
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
+                let path = input.trim();
                 if !path.is_empty() {
-                    super::load::run(&path)?;
+                    super::load::run(path)?;
                 }
             }
             super::onboarding::PostSetupAction::StartFresh => {
@@ -941,7 +841,7 @@ pub fn run() -> Result<()> {
 
         let mut terminal = ratatui::init();
 
-        let exit: std::result::Result<Option<TerminalCommand>, crate::error::NigelError> = loop {
+        let exit: std::result::Result<bool, crate::error::NigelError> = loop {
             if let Err(e) = terminal.draw(|frame| dashboard.draw(frame)) {
                 break Err(e.into());
             }
@@ -970,7 +870,7 @@ pub fn run() -> Result<()> {
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
                     {
-                        break Ok(None);
+                        break Ok(true);
                     }
 
                     let mut return_home = false;
@@ -982,6 +882,15 @@ pub fn run() -> Result<()> {
                             } else {
                                 dashboard.handle_home_key(key.code, &conn)
                             }
+                        }
+                        DashboardScreen::Import(ref mut import) => {
+                            match import.handle_key(key.code, &conn) {
+                                ImportAction::Close => {
+                                    return_home = true;
+                                }
+                                ImportAction::Continue => {}
+                            }
+                            false
                         }
                         DashboardScreen::Browse(browser) => {
                             match browser.handle_key_event(key.code) {
@@ -1030,6 +939,36 @@ pub fn run() -> Result<()> {
                                     return_home = true;
                                 }
                                 AccountAction::Continue => {}
+                            }
+                            false
+                        }
+                        DashboardScreen::Rules(ref mut rules) => {
+                            match rules.handle_key(key.code, &conn) {
+                                RulesAction::Close => {
+                                    return_home = true;
+                                }
+                                RulesAction::Continue => {}
+                            }
+                            false
+                        }
+                        DashboardScreen::Reconcile(ref mut reconcile) => {
+                            match reconcile.handle_key(key.code, &conn) {
+                                ReconcileAction::Close => {
+                                    return_home = true;
+                                }
+                                ReconcileAction::Continue => {}
+                            }
+                            false
+                        }
+                        DashboardScreen::Load(ref mut load) => {
+                            match load.handle_key(key.code) {
+                                LoadAction::Close => {
+                                    return_home = true;
+                                }
+                                LoadAction::Reload => {
+                                    dashboard.needs_reload = true;
+                                }
+                                LoadAction::Continue => {}
                             }
                             false
                         }
@@ -1095,12 +1034,12 @@ pub fn run() -> Result<()> {
                         dashboard.screen = DashboardScreen::Home;
                     }
 
-                    if let Some(cmd) = dashboard.terminal_action.take() {
-                        break Ok(Some(cmd));
+                    if dashboard.needs_reload {
+                        break Ok(false); // reload
                     }
 
                     if should_quit {
-                        break Ok(None);
+                        break Ok(true); // quit
                     }
                 }
                 _ => {}
@@ -1112,10 +1051,8 @@ pub fn run() -> Result<()> {
 
         match exit {
             Err(e) => return Err(e),
-            Ok(None) => return Ok(()),
-            Ok(Some(cmd)) => {
-                run_terminal_command(cmd);
-            }
+            Ok(true) => return Ok(()),  // quit
+            Ok(false) => continue,       // reload (data directory changed)
         }
     }
 }
