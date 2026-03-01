@@ -108,7 +108,7 @@ pub enum PostSetupAction {
 const ACTION_ITEMS: &[&str] = &[
     "View the demo",
     "Start from scratch",
-    "Import a data file",
+    "Load existing data directory",
 ];
 
 enum Screen {
@@ -269,8 +269,8 @@ impl Onboarding {
         let [name_row, biz_row] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(centered_form);
 
-        self.draw_field(frame, name_row, "Your name:", &self.user_name.clone(), 0);
-        self.draw_field(frame, biz_row, "Business name:", &self.company_name.clone(), 1);
+        self.draw_field(frame, name_row, "Your name:", &self.user_name, 0);
+        self.draw_field(frame, biz_row, "Business name:", &self.company_name, 1);
 
         // Continue button
         let btn_style = if self.active_field == 2 {
@@ -367,6 +367,15 @@ impl Onboarding {
         }
     }
 
+    /// Convert a char-index cursor position to a byte offset in the string.
+    fn cursor_byte_pos(&self) -> usize {
+        self.active_value()
+            .char_indices()
+            .nth(self.cursor_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(self.active_value().len())
+    }
+
     fn draw_field(&self, frame: &mut Frame, area: Rect, label: &str, value: &str, field_idx: usize) {
         let label_width = 16u16;
         let [label_area, input_area] = Layout::horizontal([
@@ -393,9 +402,11 @@ impl Onboarding {
 
         let display = if is_active {
             let mut s = value.to_string();
-            if self.cursor_pos <= s.len() {
-                s.insert(self.cursor_pos, '█');
-            }
+            let byte_pos = s.char_indices()
+                .nth(self.cursor_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            s.insert(byte_pos, '█');
             s
         } else {
             value.to_string()
@@ -415,7 +426,7 @@ impl Onboarding {
     fn move_to_field(&mut self, field: usize) {
         self.active_field = field;
         if field <= 1 {
-            self.cursor_pos = self.active_value().len();
+            self.cursor_pos = self.active_value().chars().count();
         }
     }
 
@@ -443,37 +454,36 @@ impl Onboarding {
             }
             KeyCode::Esc => return StepResult::Skip,
             KeyCode::Char(c) => {
-                let pos = self.cursor_pos;
+                let byte_pos = self.cursor_byte_pos();
                 let field = self.active_value_mut();
-                if pos <= field.len() {
-                    field.insert(pos, c);
-                    self.cursor_pos = pos + 1;
-                }
+                field.insert(byte_pos, c);
+                self.cursor_pos += 1;
             }
             KeyCode::Backspace => {
-                let pos = self.cursor_pos;
-                if pos > 0 {
+                if self.cursor_pos > 0 {
+                    self.cursor_pos -= 1;
+                    let byte_pos = self.cursor_byte_pos();
                     let field = self.active_value_mut();
-                    field.remove(pos - 1);
-                    self.cursor_pos = pos - 1;
+                    field.remove(byte_pos);
                 }
             }
             KeyCode::Delete => {
-                let pos = self.cursor_pos;
-                let field = self.active_value_mut();
-                if pos < field.len() {
-                    field.remove(pos);
+                let char_len = self.active_value().chars().count();
+                if self.cursor_pos < char_len {
+                    let byte_pos = self.cursor_byte_pos();
+                    let field = self.active_value_mut();
+                    field.remove(byte_pos);
                 }
             }
             KeyCode::Left => {
                 self.cursor_pos = self.cursor_pos.saturating_sub(1);
             }
             KeyCode::Right => {
-                let len = self.active_value().len();
-                self.cursor_pos = (self.cursor_pos + 1).min(len);
+                let char_len = self.active_value().chars().count();
+                self.cursor_pos = (self.cursor_pos + 1).min(char_len);
             }
             KeyCode::Home => self.cursor_pos = 0,
-            KeyCode::End => self.cursor_pos = self.active_value().len(),
+            KeyCode::End => self.cursor_pos = self.active_value().chars().count(),
             _ => {}
         }
         StepResult::Continue

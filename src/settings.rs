@@ -68,6 +68,24 @@ pub fn settings_file_exists() -> bool {
     settings_path().exists()
 }
 
+/// Read and remove legacy `company_name` from settings.json if present.
+/// Returns the value so it can be migrated to the DB metadata table.
+pub fn migrate_company_name() -> Option<String> {
+    let path = settings_path();
+    let content = std::fs::read_to_string(&path).ok()?;
+    let mut raw: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let company = raw.as_object_mut()?.remove("company_name")?;
+    let name = company.as_str()?.to_string();
+    if name.is_empty() {
+        return None;
+    }
+    // Rewrite settings without company_name
+    if let Ok(json) = serde_json::to_string_pretty(&raw) {
+        let _ = std::fs::write(&path, format!("{json}\n"));
+    }
+    Some(name)
+}
+
 pub fn get_data_dir() -> PathBuf {
     PathBuf::from(&load_settings().data_dir)
 }

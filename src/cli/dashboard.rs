@@ -845,6 +845,7 @@ fn do_export(idx: usize) -> Result<String> {
 pub fn run() -> Result<()> {
     // First-run: show onboarding, then ensure data dir + DB exist
     let mut post_setup_action = None;
+    let mut onboarding_company = None;
     if !settings_file_exists() {
         if let Some(result) = super::onboarding::run()? {
             let mut settings = load_settings();
@@ -853,16 +854,9 @@ pub fn run() -> Result<()> {
             }
             save_settings(&settings)?;
 
-            // Save company_name to DB after ensuring it exists
             if !result.company_name.is_empty() {
-                let data_dir = std::path::PathBuf::from(&settings.data_dir);
-                std::fs::create_dir_all(&data_dir)?;
-                std::fs::create_dir_all(data_dir.join("exports"))?;
-                let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
-                crate::db::init_db(&conn)?;
-                crate::db::set_metadata(&conn, "company_name", &result.company_name)?;
+                onboarding_company = Some(result.company_name);
             }
-
             post_setup_action = Some(result.action);
         }
     }
@@ -872,8 +866,23 @@ pub fn run() -> Result<()> {
     let data_dir = std::path::PathBuf::from(&settings.data_dir);
     std::fs::create_dir_all(&data_dir)?;
     std::fs::create_dir_all(data_dir.join("exports"))?;
+    std::fs::create_dir_all(data_dir.join("snapshots"))?;
+    std::fs::create_dir_all(data_dir.join("backups"))?;
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
     crate::db::init_db(&conn)?;
+
+    // Save company_name from onboarding to DB metadata
+    if let Some(company) = onboarding_company {
+        crate::db::set_metadata(&conn, "company_name", &company)?;
+    }
+
+    // Migrate legacy company_name from settings.json → DB metadata
+    if crate::db::get_metadata(&conn, "company_name").is_none() {
+        if let Some(company) = crate::settings::migrate_company_name() {
+            crate::db::set_metadata(&conn, "company_name", &company)?;
+        }
+    }
+
     drop(conn);
 
     // Handle post-setup action from onboarding
