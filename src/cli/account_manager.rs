@@ -13,6 +13,12 @@ use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
 
 const ACCOUNT_TYPES: &[&str] = &["checking", "credit_card", "line_of_credit", "payroll"];
 
+// Field indices for AccountForm::new_add() — keep in sync with field order
+const NAME_IDX: usize = 0;
+const TYPE_IDX: usize = 1;
+const INST_IDX: usize = 2;
+const LAST_IDX: usize = 3;
+
 pub enum AccountAction {
     Continue,
     Close,
@@ -91,6 +97,8 @@ pub struct AccountManager {
     selection: usize,
     screen: Screen,
     status_message: Option<String>,
+    /// Remaining keypresses before the status message is cleared.
+    status_ttl: u8,
     greeting: String,
 }
 
@@ -102,6 +110,7 @@ impl AccountManager {
             selection: 0,
             screen: Screen::List,
             status_message: None,
+            status_ttl: 0,
             greeting: greeting.to_string(),
         }
     }
@@ -309,12 +318,22 @@ impl AccountManager {
         );
     }
 
+    fn set_status(&mut self, msg: String) {
+        self.status_message = Some(msg);
+        self.status_ttl = 3;
+    }
+
     pub fn handle_key(
         &mut self,
         code: crossterm::event::KeyCode,
         conn: &Connection,
     ) -> AccountAction {
-        self.status_message = None;
+        if self.status_ttl > 0 {
+            self.status_ttl -= 1;
+            if self.status_ttl == 0 {
+                self.status_message = None;
+            }
+        }
 
         match &mut self.screen {
             Screen::List => self.handle_list_key(code, conn),
@@ -353,7 +372,7 @@ impl AccountManager {
                     if let Some(account) = self.accounts.get(self.selection) {
                         match accounts::transaction_count(conn, account.id) {
                             Ok(count) if count > 0 => {
-                                self.status_message = Some(format!(
+                                self.set_status(format!(
                                     "Cannot delete: account has {count} transactions"
                                 ));
                             }
@@ -361,7 +380,7 @@ impl AccountManager {
                                 self.screen = Screen::ConfirmDelete;
                             }
                             Err(e) => {
-                                self.status_message = Some(format!("Error: {e}"));
+                                self.set_status(format!("Error: {e}"));
                             }
                         }
                     }
@@ -431,19 +450,26 @@ impl AccountManager {
             Enter => {
                 match mode {
                     FormMode::Add => {
-                        let name = form.fields[0].value.trim().to_string();
+                        let name = form.fields[NAME_IDX].value.trim().to_string();
                         if name.is_empty() {
-                            self.status_message = Some("Name is required".into());
+                            self.set_status("Name is required".into());
                             return AccountAction::Continue;
                         }
-                        let acct_type = form.fields[1].value.clone();
+                        let acct_type = form.fields[TYPE_IDX].value.clone();
                         let institution = {
-                            let v = form.fields[2].value.trim().to_string();
+                            let v = form.fields[INST_IDX].value.trim().to_string();
                             if v.is_empty() { None } else { Some(v) }
                         };
                         let last_four = {
-                            let v = form.fields[3].value.trim().to_string();
-                            if v.is_empty() { None } else { Some(v) }
+                            let v = form.fields[LAST_IDX].value.trim().to_string();
+                            if v.is_empty() {
+                                None
+                            } else if !v.chars().all(|c| c.is_ascii_digit()) || v.len() != 4 {
+                                self.set_status("Last four must be exactly 4 digits".into());
+                                return AccountAction::Continue;
+                            } else {
+                                Some(v)
+                            }
                         };
                         match accounts::add_account(
                             conn,
@@ -455,26 +481,24 @@ impl AccountManager {
                             Ok(()) => {
                                 self.reload(conn);
                                 self.screen = Screen::List;
-                                self.status_message =
-                                    Some(format!("Added account: {name}"));
+                                self.set_status(format!("Added account: {name}"));
                             }
                             Err(e) => {
-                                self.status_message = Some(e.to_string());
+                                self.set_status(e.to_string());
                             }
                         }
                     }
                     FormMode::Rename => {
-                        let new_name = form.fields[0].value.trim().to_string();
+                        let new_name = form.fields[NAME_IDX].value.trim().to_string();
                         if let Some(account) = self.accounts.get(self.selection) {
                             match accounts::rename_account(conn, account.id, &new_name) {
                                 Ok(()) => {
                                     self.reload(conn);
                                     self.screen = Screen::List;
-                                    self.status_message =
-                                        Some(format!("Renamed to: {new_name}"));
+                                    self.set_status(format!("Renamed to: {new_name}"));
                                 }
                                 Err(e) => {
-                                    self.status_message = Some(e.to_string());
+                                    self.set_status(e.to_string());
                                 }
                             }
                         }
@@ -500,11 +524,11 @@ impl AccountManager {
                         Ok(()) => {
                             self.reload(conn);
                             self.screen = Screen::List;
-                            self.status_message = Some(format!("Deleted account: {name}"));
+                            self.set_status(format!("Deleted account: {name}"));
                         }
                         Err(e) => {
                             self.screen = Screen::List;
-                            self.status_message = Some(e.to_string());
+                            self.set_status(e.to_string());
                         }
                     }
                 }
