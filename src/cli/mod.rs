@@ -14,6 +14,7 @@ pub mod report;
 pub mod review;
 pub mod rules;
 pub mod snake;
+pub mod splash;
 pub mod status;
 
 use clap::{Args, Parser, Subcommand};
