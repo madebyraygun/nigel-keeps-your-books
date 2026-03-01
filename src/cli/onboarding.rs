@@ -8,6 +8,7 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use zeroize::Zeroize;
 
 use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
@@ -32,6 +33,11 @@ const INTRO_PARTICLES_MS: f64 = 500.0;
 const INTRO_REVEAL_MS: f64 = 500.0;
 const INTRO_UI_DELAY_MS: f64 = 200.0;
 const INTRO_TOTAL_MS: f64 = INTRO_PARTICLES_MS + INTRO_REVEAL_MS + INTRO_UI_DELAY_MS;
+
+const FIELD_NAME: usize = 0;
+const FIELD_COMPANY: usize = 1;
+const FIELD_PASSWORD: usize = 2;
+const FIELD_BUTTON: usize = 3;
 
 enum Screen {
     NameInput,
@@ -99,16 +105,16 @@ impl Onboarding {
 
     fn active_value(&self) -> &str {
         match self.active_field {
-            0 => &self.user_name,
-            1 => &self.company_name,
+            FIELD_NAME => &self.user_name,
+            FIELD_COMPANY => &self.company_name,
             _ => &self.password,
         }
     }
 
     fn active_value_mut(&mut self) -> &mut String {
         match self.active_field {
-            0 => &mut self.user_name,
-            1 => &mut self.company_name,
+            FIELD_NAME => &mut self.user_name,
+            FIELD_COMPANY => &mut self.company_name,
             _ => &mut self.password,
         }
     }
@@ -201,12 +207,12 @@ impl Onboarding {
             Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
                 .areas(centered_form);
 
-        self.draw_field(frame, name_row, "Your name:", &self.user_name, 0, false);
-        self.draw_field(frame, biz_row, "Business name:", &self.company_name, 1, false);
-        self.draw_field(frame, pw_row, "Password:", &self.password, 2, true);
+        self.draw_field(frame, name_row, "Your name:", &self.user_name, FIELD_NAME, false);
+        self.draw_field(frame, biz_row, "Business name:", &self.company_name, FIELD_COMPANY, false);
+        self.draw_field(frame, pw_row, "Set password (optional):", &self.password, FIELD_PASSWORD, true);
 
         // Continue button
-        let btn_style = if self.active_field == 3 {
+        let btn_style = if self.active_field == FIELD_BUTTON {
             Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(Color::DarkGray)
@@ -324,14 +330,7 @@ impl Onboarding {
         );
 
         let input_width = input_area.width as usize;
-        let masked = "●".repeat(self.confirm_password.chars().count());
-        let mut display = masked;
-        let byte_pos = display
-            .char_indices()
-            .nth(self.confirm_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(display.len());
-        display.insert(byte_pos, '█');
+        let display = insert_cursor(&self.confirm_password, self.confirm_cursor, true);
         let padded = format!("{:<width$}", display, width = input_width);
         frame.render_widget(
             Paragraph::new(Span::styled(padded, SELECTED_STYLE)),
@@ -398,23 +397,12 @@ impl Onboarding {
         let input_width = input_area.width as usize;
         let is_active = self.active_field == field_idx;
 
-        let display_value = if masked {
-            "●".repeat(value.chars().count())
+        let display = if is_active {
+            insert_cursor(value, self.cursor_pos, masked)
+        } else if masked {
+            "\u{25cf}".repeat(value.chars().count())
         } else {
             value.to_string()
-        };
-
-        let display = if is_active {
-            let mut s = display_value;
-            let byte_pos = s
-                .char_indices()
-                .nth(self.cursor_pos)
-                .map(|(i, _)| i)
-                .unwrap_or(s.len());
-            s.insert(byte_pos, '█');
-            s
-        } else {
-            display_value
         };
 
         let padded = format!("{:<width$}", display, width = input_width);
@@ -430,24 +418,24 @@ impl Onboarding {
 
     fn move_to_field(&mut self, field: usize) {
         self.active_field = field;
-        if field <= 2 {
+        if field <= FIELD_PASSWORD {
             self.cursor_pos = self.active_value().chars().count();
         }
     }
 
     fn handle_name_key(&mut self, code: KeyCode) -> StepResult {
-        // On the button (field 3), only handle navigation and submit
-        if self.active_field == 3 {
+        // On the button, only handle navigation and submit
+        if self.active_field == FIELD_BUTTON {
             match code {
                 KeyCode::Enter => return StepResult::NextScreen,
-                KeyCode::Up => self.move_to_field(2),
+                KeyCode::Up => self.move_to_field(FIELD_PASSWORD),
                 KeyCode::Esc => return StepResult::Skip,
                 _ => {}
             }
             return StepResult::Continue;
         }
 
-        // Text input fields (0, 1, and 2)
+        // Text input fields
         match code {
             KeyCode::Enter | KeyCode::Down => {
                 self.move_to_field(self.active_field + 1);
@@ -497,41 +485,41 @@ impl Onboarding {
     fn handle_confirm_key(&mut self, code: KeyCode) -> StepResult {
         match code {
             KeyCode::Enter => {
-                if self.confirm_password == self.password {
+                if self.confirm_password.trim() == self.password.trim() {
                     self.confirm_mismatch = false;
                     return StepResult::NextScreen;
                 }
                 self.confirm_mismatch = true;
-                self.confirm_password.clear();
+                self.confirm_password.zeroize();
                 self.confirm_cursor = 0;
             }
             KeyCode::Esc => {
-                self.confirm_password.clear();
+                self.confirm_password.zeroize();
                 self.confirm_cursor = 0;
                 self.confirm_mismatch = false;
                 self.screen = Screen::NameInput;
-                self.active_field = 2; // return to password field
+                self.active_field = FIELD_PASSWORD;
                 self.cursor_pos = self.password.chars().count();
             }
             KeyCode::Char(c) => {
-                let byte_pos = self
-                    .confirm_password
-                    .char_indices()
-                    .nth(self.confirm_cursor)
-                    .map(|(i, _)| i)
-                    .unwrap_or(self.confirm_password.len());
+                self.confirm_mismatch = false;
+                let byte_pos = confirm_byte_pos(&self.confirm_password, self.confirm_cursor);
                 self.confirm_password.insert(byte_pos, c);
                 self.confirm_cursor += 1;
             }
             KeyCode::Backspace => {
+                self.confirm_mismatch = false;
                 if self.confirm_cursor > 0 {
                     self.confirm_cursor -= 1;
-                    let byte_pos = self
-                        .confirm_password
-                        .char_indices()
-                        .nth(self.confirm_cursor)
-                        .map(|(i, _)| i)
-                        .unwrap_or(self.confirm_password.len());
+                    let byte_pos = confirm_byte_pos(&self.confirm_password, self.confirm_cursor);
+                    self.confirm_password.remove(byte_pos);
+                }
+            }
+            KeyCode::Delete => {
+                self.confirm_mismatch = false;
+                let char_len = self.confirm_password.chars().count();
+                if self.confirm_cursor < char_len {
+                    let byte_pos = confirm_byte_pos(&self.confirm_password, self.confirm_cursor);
                     self.confirm_password.remove(byte_pos);
                 }
             }
@@ -562,6 +550,37 @@ impl Onboarding {
             _ => {}
         }
         StepResult::Continue
+    }
+}
+
+/// Convert a char-index cursor position to a byte offset.
+fn confirm_byte_pos(s: &str, cursor: usize) -> usize {
+    s.char_indices()
+        .nth(cursor)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+/// Build a display string with a block cursor inserted at `cursor_pos`.
+fn insert_cursor(value: &str, cursor_pos: usize, masked: bool) -> String {
+    let mut display = if masked {
+        "\u{25cf}".repeat(value.chars().count())
+    } else {
+        value.to_string()
+    };
+    let byte_pos = display
+        .char_indices()
+        .nth(cursor_pos)
+        .map(|(i, _)| i)
+        .unwrap_or(display.len());
+    display.insert(byte_pos, '\u{2588}');
+    display
+}
+
+impl Drop for Onboarding {
+    fn drop(&mut self) {
+        self.password.zeroize();
+        self.confirm_password.zeroize();
     }
 }
 
@@ -607,7 +626,7 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                 if onboarding.password.trim().is_empty() {
                                     onboarding.screen = Screen::ActionPicker;
                                 } else {
-                                    onboarding.confirm_password.clear();
+                                    onboarding.confirm_password.zeroize();
                                     onboarding.confirm_cursor = 0;
                                     onboarding.confirm_mismatch = false;
                                     onboarding.screen = Screen::ConfirmPassword;
@@ -676,21 +695,21 @@ mod tests {
     #[test]
     fn field_navigation_cycles_through_all_fields() {
         let mut ob = make_onboarding();
-        assert_eq!(ob.active_field, 0); // starts at name
+        assert_eq!(ob.active_field, FIELD_NAME);
         ob.handle_name_key(KeyCode::Enter);
-        assert_eq!(ob.active_field, 1); // business
+        assert_eq!(ob.active_field, FIELD_COMPANY);
         ob.handle_name_key(KeyCode::Enter);
-        assert_eq!(ob.active_field, 2); // password
+        assert_eq!(ob.active_field, FIELD_PASSWORD);
         ob.handle_name_key(KeyCode::Enter);
-        assert_eq!(ob.active_field, 3); // continue button
+        assert_eq!(ob.active_field, FIELD_BUTTON);
     }
 
     #[test]
     fn up_from_button_goes_to_password() {
         let mut ob = make_onboarding();
-        ob.active_field = 3; // button
+        ob.active_field = FIELD_BUTTON;
         ob.handle_name_key(KeyCode::Up);
-        assert_eq!(ob.active_field, 2); // password
+        assert_eq!(ob.active_field, FIELD_PASSWORD);
     }
 
     #[test]
@@ -700,42 +719,62 @@ mod tests {
         ob.company_name = "Acme".into();
         ob.password = "secret".into();
 
-        ob.active_field = 0;
+        ob.active_field = FIELD_NAME;
         assert_eq!(ob.active_value(), "Alice");
-        ob.active_field = 1;
+        ob.active_field = FIELD_COMPANY;
         assert_eq!(ob.active_value(), "Acme");
-        ob.active_field = 2;
+        ob.active_field = FIELD_PASSWORD;
         assert_eq!(ob.active_value(), "secret");
     }
 
     #[test]
     fn typing_into_password_field() {
         let mut ob = make_onboarding();
-        ob.active_field = 2; // password
+        ob.active_field = FIELD_PASSWORD;
         ob.handle_name_key(KeyCode::Char('a'));
         ob.handle_name_key(KeyCode::Char('b'));
         ob.handle_name_key(KeyCode::Char('c'));
         assert_eq!(ob.password, "abc");
     }
 
-    #[test]
-    fn password_none_when_empty() {
-        let pw = "".trim().to_string();
-        let result = if pw.is_empty() { None } else { Some(pw) };
-        assert!(result.is_none());
+    /// Build an OnboardingResult from the struct, mirroring the run() finish path.
+    fn finish_result(ob: &Onboarding) -> OnboardingResult {
+        let action = match ob.action_selection {
+            0 => PostSetupAction::Demo,
+            1 => PostSetupAction::StartFresh,
+            _ => PostSetupAction::Import,
+        };
+        let pw = ob.password.trim().to_string();
+        OnboardingResult {
+            user_name: ob.user_name.trim().to_string(),
+            company_name: ob.company_name.trim().to_string(),
+            password: if pw.is_empty() { None } else { Some(pw) },
+            action,
+        }
     }
 
     #[test]
-    fn password_some_when_provided() {
-        let pw = "secret".trim().to_string();
-        let result = if pw.is_empty() { None } else { Some(pw) };
-        assert_eq!(result, Some("secret".to_string()));
+    fn finish_with_empty_password_yields_none() {
+        let ob = make_onboarding();
+        let result = finish_result(&ob);
+        assert!(result.password.is_none());
+    }
+
+    #[test]
+    fn finish_with_password_yields_trimmed_value() {
+        let mut ob = make_onboarding();
+        ob.active_field = FIELD_PASSWORD;
+        ob.handle_name_key(KeyCode::Char('s'));
+        ob.handle_name_key(KeyCode::Char('e'));
+        ob.handle_name_key(KeyCode::Char('c'));
+        let result = finish_result(&ob);
+        assert_eq!(result.password, Some("sec".to_string()));
     }
 
     #[test]
     fn button_enter_advances_to_next_screen() {
         let mut ob = make_onboarding();
-        ob.active_field = 3; // button
+        ob.active_field = FIELD_BUTTON;
         let result = ob.handle_name_key(KeyCode::Enter);
         assert!(matches!(result, StepResult::NextScreen));
     }
@@ -754,7 +793,7 @@ mod tests {
     #[test]
     fn up_navigation_through_all_text_fields() {
         let mut ob = make_onboarding();
-        ob.active_field = 2; // password
+        ob.active_field = FIELD_PASSWORD;
         ob.cursor_pos = 0;
         ob.handle_name_key(KeyCode::Up);
         assert_eq!(ob.active_field, 1);
@@ -798,7 +837,7 @@ mod tests {
         ob.handle_confirm_key(KeyCode::Char('x'));
         ob.handle_confirm_key(KeyCode::Esc);
         assert!(matches!(ob.screen, Screen::NameInput));
-        assert_eq!(ob.active_field, 2); // password field
+        assert_eq!(ob.active_field, FIELD_PASSWORD);
         assert!(ob.confirm_password.is_empty());
         assert!(!ob.confirm_mismatch);
     }
@@ -813,5 +852,43 @@ mod tests {
         ob.handle_confirm_key(KeyCode::Backspace);
         assert_eq!(ob.confirm_password, "a");
         assert_eq!(ob.confirm_cursor, 1);
+    }
+
+    #[test]
+    fn confirm_delete_key_removes_char_at_cursor() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::ConfirmPassword;
+        ob.handle_confirm_key(KeyCode::Char('a'));
+        ob.handle_confirm_key(KeyCode::Char('b'));
+        ob.handle_confirm_key(KeyCode::Char('c'));
+        ob.handle_confirm_key(KeyCode::Home);
+        ob.handle_confirm_key(KeyCode::Delete);
+        assert_eq!(ob.confirm_password, "bc");
+        assert_eq!(ob.confirm_cursor, 0);
+    }
+
+    #[test]
+    fn confirm_mismatch_clears_on_next_keystroke() {
+        let mut ob = make_onboarding();
+        ob.password = "abc".into();
+        ob.screen = Screen::ConfirmPassword;
+        ob.handle_confirm_key(KeyCode::Char('x'));
+        ob.handle_confirm_key(KeyCode::Enter);
+        assert!(ob.confirm_mismatch);
+        ob.handle_confirm_key(KeyCode::Char('a'));
+        assert!(!ob.confirm_mismatch);
+    }
+
+    #[test]
+    fn confirm_trims_before_comparison() {
+        let mut ob = make_onboarding();
+        ob.password = "abc ".into();
+        ob.screen = Screen::ConfirmPassword;
+        // Type "abc" without trailing space — should still match after trim
+        ob.handle_confirm_key(KeyCode::Char('a'));
+        ob.handle_confirm_key(KeyCode::Char('b'));
+        ob.handle_confirm_key(KeyCode::Char('c'));
+        let result = ob.handle_confirm_key(KeyCode::Enter);
+        assert!(matches!(result, StepResult::NextScreen));
     }
 }
