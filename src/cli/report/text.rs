@@ -13,7 +13,7 @@ fn with_header(company_name: &str, body: String) -> String {
     if company_name.is_empty() {
         body
     } else {
-        format!("{company_name}\n{body}")
+        format!("{company_name}\n\n{body}")
     }
 }
 
@@ -383,4 +383,19 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_header;
+
+    #[test]
+    fn with_header_prepends_when_set() {
+        assert_eq!(with_header("Acme Corp", "Report".into()), "Acme Corp\n\nReport");
+    }
+
+    #[test]
+    fn with_header_passthrough_when_empty() {
+        assert_eq!(with_header("", "Report".into()), "Report");
+    }
 }
