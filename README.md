@@ -8,16 +8,16 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 
 ## Features
 
-- **Interactive dashboard** — run `nigel` with no arguments to see YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, view rules, run reports, export PDFs, and switch data files — all from the dashboard
+- **Interactive dashboard** — run `nigel` with no arguments to see YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, view rules, view/export reports, and switch data files — all from the dashboard
 - **Bank imports** — CSV/XLSX parsers with format auto-detection
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
-- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance
+- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default, with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser with keyboard navigation, jump-to-date, and transaction search
-- **PDF export** — export any report to PDF, individually or all at once
+- **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 
@@ -59,8 +59,9 @@ nigel categorize
 
 # Review flagged transactions
 nigel review
+nigel review --id 185                 # Re-review a specific transaction by ID
 
-# Generate reports
+# View reports (interactive ratatui views)
 nigel report pnl --year 2025
 nigel report expenses --month 2025-03
 nigel report tax --year 2025
@@ -68,13 +69,15 @@ nigel report cashflow
 nigel report balance
 nigel report flagged
 
+# Export reports
+nigel report pnl --year 2025 --mode export            # PDF
+nigel report pnl --year 2025 --mode export --format text  # Text file
+nigel report all --year 2025                           # All reports to PDF
+nigel report all --year 2025 --output-dir ~/exports/   # Custom directory
+
 # Interactive register browser
 nigel browse register --year 2025
 nigel browse register --account "BofA Checking"
-
-# Export reports to PDF
-nigel export pnl --year 2025
-nigel export all --year 2025 --output-dir ~/exports/
 
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67

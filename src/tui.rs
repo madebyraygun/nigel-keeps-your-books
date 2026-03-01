@@ -1,6 +1,9 @@
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use ratatui::Frame;
 
+use crate::error::Result;
 use crate::fmt::money;
 
 pub const HEADER_STYLE: Style = Style::new()
@@ -35,4 +38,59 @@ pub fn wrap_text(text: &str, width: usize) -> (String, u16) {
     let wrapped = textwrap::fill(text, width);
     let lines = wrapped.lines().count().max(1) as u16;
     (wrapped, lines)
+}
+
+// ---------------------------------------------------------------------------
+// Report view infrastructure
+// ---------------------------------------------------------------------------
+
+pub enum ReportViewAction {
+    Continue,
+    Close,
+}
+
+pub trait ReportView {
+    fn draw(&mut self, frame: &mut Frame);
+    fn handle_key(&mut self, code: KeyCode) -> ReportViewAction;
+}
+
+/// Run an interactive ratatui report view. Sets up the terminal, event loop,
+/// and panic hook, then restores the terminal on exit.
+pub fn run_report_view(view: &mut dyn ReportView) -> Result<()> {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        hook(info);
+    }));
+
+    let mut terminal = ratatui::init();
+
+    let result: Result<()> = loop {
+        if let Err(e) = terminal.draw(|frame| view.draw(frame)) {
+            break Err(e.into());
+        }
+
+        match event::read() {
+            Err(e) => break Err(e.into()),
+            Ok(Event::Key(key)) => {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('c')
+                {
+                    break Ok(());
+                }
+                match view.handle_key(key.code) {
+                    ReportViewAction::Close => break Ok(()),
+                    ReportViewAction::Continue => {}
+                }
+            }
+            _ => {}
+        }
+    };
+
+    drop(terminal);
+    ratatui::restore();
+    result
 }

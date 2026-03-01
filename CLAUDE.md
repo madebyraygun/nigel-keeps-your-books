@@ -8,11 +8,12 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, browse, export, load, backup, status
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, rules, report, browse, load, backup, status
 - **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_loc, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
-- **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`) for interactive screens; `browser.rs`, `cli/review.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
-- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse and Review screens; Report/Export use ratatui picker screens; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command
+- **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait, `run_report_view()`) for interactive screens; `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
+- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu; inline transitions to Browse and Review screens; merged View/Export picker screen for reports; Import, Rules, Reconcile, Load use terminal-mode (break TUI → run CLI command → return); outer loop re-initializes TUI after each terminal command
+- **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
@@ -39,15 +40,22 @@ nigel rules update 5 --category "Rent / Lease"    # Reassign rule category
 nigel rules delete 3                              # Deactivate a rule (soft-delete)
 nigel categorize                                  # Re-run rules on uncategorized
 nigel review                                      # Interactive review
-nigel report pnl --year 2025                      # Profit & Loss
+nigel review --id 185                             # Re-review a specific transaction by ID
+nigel report pnl --year 2025                      # Interactive view (ratatui)
 nigel report expenses --month 2025-03             # Expense breakdown
 nigel report tax --year 2025                      # Tax summary
 nigel report cashflow                             # Cash flow
 nigel report balance                              # Cash position
-nigel report register --year 2025                 # All transactions for a period
+nigel report register --year 2025                 # Interactive register browser
 nigel report register --account "BofA Checking"   # Filter by account
 nigel report flagged                              # Flagged transactions
 nigel report k1 --year 2025                       # K-1 prep worksheet (1120-S)
+nigel report pnl --year 2025 --mode export        # Export as PDF
+nigel report pnl --year 2025 --mode export --format text  # Export as text file
+nigel report pnl --year 2025 --output ~/report.pdf  # --output implies export
+nigel report all --year 2025                      # Bulk export all reports (PDF)
+nigel report all --year 2025 --format text        # Bulk export as text files
+nigel report all --year 2025 --output-dir ~/exports/  # Custom output directory
 nigel browse register --year 2025                 # Interactive register browser
 nigel browse register --account "BofA Checking"   # Browse filtered by account
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
@@ -55,17 +63,6 @@ nigel status                                      # Show active DB and summary s
 nigel load ~/other-books                          # Switch to a different data directory
 nigel backup                                      # Back up DB to <data_dir>/backups/
 nigel backup --output /tmp/nigel-backup.db        # Back up to custom path
-nigel export pnl --year 2025                      # Export P&L to PDF
-nigel export expenses --month 2025-03             # Export expenses to PDF
-nigel export tax --year 2025                      # Export tax summary to PDF
-nigel export cashflow                             # Export cash flow to PDF
-nigel export balance                              # Export cash position to PDF
-nigel export register --year 2025                 # Export transaction register to PDF
-nigel export flagged                              # Export flagged transactions to PDF
-nigel export k1 --year 2025                       # Export K-1 prep to PDF
-nigel export all --year 2025                      # Export all reports to PDF (includes K-1)
-nigel export pnl --output ~/report.pdf            # Custom output path
-nigel export all --output-dir ~/exports/          # Custom output directory
 ```
 
 ## Documentation Policy
@@ -106,9 +103,12 @@ src/
     categorize.rs       # nigel categorize
     rules.rs            # nigel rules add/list
     review.rs           # nigel review
-    report.rs           # nigel report (all variants)
+    report/             # nigel report (unified view/export command)
+      mod.rs            # Dispatch: view vs export, TTY detection, text export
+      text.rs           # comfy_table text formatters (used for stdout + text file export)
+      view.rs           # Ratatui interactive report views (scrollable, colored)
     browse.rs           # nigel browse (interactive browsers)
-    export.rs           # nigel export (PDF export, feature-gated)
+    export.rs           # PDF export helpers (per-function feature-gated behind "pdf")
     reconcile.rs        # nigel reconcile
     load.rs             # nigel load (switch data directory)
     backup.rs           # nigel backup (database backup)
@@ -120,7 +120,7 @@ src/
   reviewer.rs           # Interactive review flow
   reports.rs            # Report data functions (pnl, expenses, tax, cashflow, balance, flagged, k1_prep)
   browser.rs            # Interactive register browser (ratatui, row selection, inline editing, flag toggle, scroll navigation)
-  tui.rs                # Shared ratatui helpers (styles, money_span, wrap_text)
+  tui.rs                # Shared ratatui helpers (styles, money_span, wrap_text, ReportView trait, run_report_view)
   pdf.rs                # PDF rendering engine (feature-gated behind "pdf")
   reconciler.rs         # Monthly reconciliation
   settings.rs           # Settings management (~/.config/nigel/)

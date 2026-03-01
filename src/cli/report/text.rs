@@ -1,25 +1,90 @@
 use colored::Colorize;
 use comfy_table::{Cell, Table};
 
-use super::parse_month_opt;
+use crate::cli::parse_month_opt;
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
 use crate::reports;
 use crate::settings::get_data_dir;
 
+// ---------------------------------------------------------------------------
+// Data-fetching + formatting wrappers (used by dispatch)
+// ---------------------------------------------------------------------------
+
 pub fn pnl(
     month: Option<String>,
     year: Option<i32>,
     from_date: Option<String>,
     to_date: Option<String>,
-) -> Result<()> {
+) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
-    let m = mm;
-    let pnl = reports::get_pnl(&conn, y, m, from_date.as_deref(), to_date.as_deref())?;
+    let data = reports::get_pnl(&conn, y, mm, from_date.as_deref(), to_date.as_deref())?;
+    Ok(format_pnl(&data))
+}
 
+pub fn expenses(month: Option<String>, year: Option<i32>) -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let (my, mm) = parse_month_opt(&month);
+    let data = reports::get_expense_breakdown(&conn, year.or(my), mm)?;
+    Ok(format_expenses(&data))
+}
+
+pub fn tax(year: Option<i32>) -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let data = reports::get_tax_summary(&conn, year)?;
+    Ok(format_tax(&data))
+}
+
+pub fn cashflow(month: Option<String>, year: Option<i32>) -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let (my, mm) = parse_month_opt(&month);
+    let data = reports::get_cashflow(&conn, year.or(my), mm)?;
+    Ok(format_cashflow(&data))
+}
+
+pub fn register(
+    month: Option<String>,
+    year: Option<i32>,
+    from_date: Option<String>,
+    to_date: Option<String>,
+    account: Option<String>,
+) -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let (my, mm) = parse_month_opt(&month);
+    let y = year.or(my);
+    let data = reports::get_register(
+        &conn, y, mm,
+        from_date.as_deref(), to_date.as_deref(), account.as_deref(),
+    )?;
+    Ok(format_register(&data))
+}
+
+pub fn flagged() -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let rows = reports::get_flagged(&conn)?;
+    Ok(format_flagged(&rows))
+}
+
+pub fn balance() -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let data = reports::get_balance(&conn)?;
+    Ok(format_balance(&data))
+}
+
+pub fn k1(year: Option<i32>) -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let data = reports::get_k1_prep(&conn, year)?;
+    Ok(format_k1(&data))
+}
+
+// ---------------------------------------------------------------------------
+// Pure formatting functions (report data → String)
+// ---------------------------------------------------------------------------
+
+pub fn format_pnl(pnl: &reports::PnlReport) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Category", "Amount"]);
 
@@ -60,15 +125,10 @@ pub fn pnl(
     };
     table.add_row(vec![Cell::new(net_label), Cell::new(money(pnl.net))]);
 
-    println!("Profit & Loss\n{table}");
-    Ok(())
+    format!("Profit & Loss\n{table}")
 }
 
-pub fn expenses(month: Option<String>, year: Option<i32>) -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let (my, mm) = parse_month_opt(&month);
-    let data = reports::get_expense_breakdown(&conn, year.or(my), mm)?;
-
+pub fn format_expenses(data: &reports::ExpenseBreakdown) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Category", "Amount", "%", "Count"]);
     for item in &data.categories {
@@ -85,7 +145,7 @@ pub fn expenses(month: Option<String>, year: Option<i32>) -> Result<()> {
         Cell::new(""),
         Cell::new(""),
     ]);
-    println!("Expense Breakdown\n{table}");
+    let mut out = format!("Expense Breakdown\n{table}");
 
     if !data.top_vendors.is_empty() {
         let mut vtable = Table::new();
@@ -97,15 +157,12 @@ pub fn expenses(month: Option<String>, year: Option<i32>) -> Result<()> {
                 Cell::new(v.count),
             ]);
         }
-        println!("\nTop Vendors\n{vtable}");
+        out.push_str(&format!("\n\nTop Vendors\n{vtable}"));
     }
-    Ok(())
+    out
 }
 
-pub fn tax(year: Option<i32>) -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let data = reports::get_tax_summary(&conn, year)?;
-
+pub fn format_tax(data: &reports::TaxSummary) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Category", "Tax Line", "Type", "Amount"]);
     for item in &data.line_items {
@@ -116,15 +173,10 @@ pub fn tax(year: Option<i32>) -> Result<()> {
             Cell::new(money(item.total.abs())),
         ]);
     }
-    println!("Tax Summary\n{table}");
-    Ok(())
+    format!("Tax Summary\n{table}")
 }
 
-pub fn cashflow(month: Option<String>, year: Option<i32>) -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let (my, mm) = parse_month_opt(&month);
-    let data = reports::get_cashflow(&conn, year.or(my), mm)?;
-
+pub fn format_cashflow(data: &reports::CashflowReport) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Month", "Inflows", "Outflows", "Net", "Running"]);
     for m in &data.months {
@@ -141,32 +193,12 @@ pub fn cashflow(month: Option<String>, year: Option<i32>) -> Result<()> {
             Cell::new(money(m.running_balance)),
         ]);
     }
-    println!("Cash Flow\n{table}");
-    Ok(())
+    format!("Cash Flow\n{table}")
 }
 
-pub fn register(
-    month: Option<String>,
-    year: Option<i32>,
-    from_date: Option<String>,
-    to_date: Option<String>,
-    account: Option<String>,
-) -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let (my, mm) = parse_month_opt(&month);
-    let y = year.or(my);
-    let data = reports::get_register(
-        &conn,
-        y,
-        mm,
-        from_date.as_deref(),
-        to_date.as_deref(),
-        account.as_deref(),
-    )?;
-
+pub fn format_register(data: &reports::RegisterReport) -> String {
     if data.rows.is_empty() {
-        println!("No transactions found.");
-        return Ok(());
+        return "No transactions found.".to_string();
     }
 
     let mut table = Table::new();
@@ -177,7 +209,7 @@ pub fn register(
         } else {
             money(r.amount).green().to_string()
         };
-        let cat = r.category.as_deref().unwrap_or("—");
+        let cat = r.category.as_deref().unwrap_or("\u{2014}");
         let vendor = r.vendor.as_deref().unwrap_or("");
         table.add_row(vec![
             Cell::new(r.id),
@@ -189,22 +221,21 @@ pub fn register(
             Cell::new(&r.account_name),
         ]);
     }
-    println!("Transaction Register ({} transactions, net: {})\n{table}", data.rows.len(), money(data.total));
-    Ok(())
+    format!(
+        "Transaction Register ({} transactions, net: {})\n{table}",
+        data.rows.len(),
+        money(data.total)
+    )
 }
 
-pub fn flagged() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let rows = reports::get_flagged(&conn)?;
-
+pub fn format_flagged(rows: &[reports::FlaggedTransaction]) -> String {
     if rows.is_empty() {
-        println!("No flagged transactions.");
-        return Ok(());
+        return "No flagged transactions.".to_string();
     }
 
     let mut table = Table::new();
     table.set_header(vec!["ID", "Date", "Description", "Amount", "Account"]);
-    for r in &rows {
+    for r in rows {
         let amt = if r.amount < 0.0 {
             money(r.amount.abs()).red().to_string()
         } else {
@@ -218,14 +249,10 @@ pub fn flagged() -> Result<()> {
             Cell::new(&r.account_name),
         ]);
     }
-    println!("Flagged Transactions ({})\n{table}", rows.len());
-    Ok(())
+    format!("Flagged Transactions ({})\n{table}", rows.len())
 }
 
-pub fn balance() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let data = reports::get_balance(&conn)?;
-
+pub fn format_balance(data: &reports::BalanceReport) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Account", "Type", "Balance"]);
     for a in &data.accounts {
@@ -245,41 +272,25 @@ pub fn balance() -> Result<()> {
         Cell::new(""),
         Cell::new(money(data.total)),
     ]);
-    println!("Cash Position\n{table}");
-    println!("\nYTD Net Income: {}", money(data.ytd_net_income));
-    Ok(())
+    format!("Cash Position\n{table}\n\nYTD Net Income: {}", money(data.ytd_net_income))
 }
 
-pub fn k1(year: Option<i32>) -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let data = reports::get_k1_prep(&conn, year)?;
+pub fn format_k1(data: &reports::K1PrepReport) -> String {
+    let mut out = String::new();
 
     // 1. Income Summary
     let mut summary = Table::new();
     summary.set_header(vec!["Item", "Amount"]);
-    summary.add_row(vec![
-        Cell::new("Gross Receipts"),
-        Cell::new(money(data.gross_receipts)),
-    ]);
-    summary.add_row(vec![
-        Cell::new("Other Income"),
-        Cell::new(money(data.other_income)),
-    ]);
-    summary.add_row(vec![
-        Cell::new("Total Deductions"),
-        Cell::new(money(data.total_deductions)),
-    ]);
+    summary.add_row(vec![Cell::new("Gross Receipts"), Cell::new(money(data.gross_receipts))]);
+    summary.add_row(vec![Cell::new("Other Income"), Cell::new(money(data.other_income))]);
+    summary.add_row(vec![Cell::new("Total Deductions"), Cell::new(money(data.total_deductions))]);
     let obi_label = if data.ordinary_business_income >= 0.0 {
         "Ordinary Business Income".green().bold().to_string()
     } else {
         "Ordinary Business Loss".red().bold().to_string()
     };
-    summary.add_row(vec![
-        Cell::new(obi_label),
-        Cell::new(money(data.ordinary_business_income)),
-    ]);
-    println!("K-1 Preparation Worksheet (Form 1120-S)\n");
-    println!("Income Summary\n{summary}");
+    summary.add_row(vec![Cell::new(obi_label), Cell::new(money(data.ordinary_business_income))]);
+    out.push_str(&format!("K-1 Preparation Worksheet (Form 1120-S)\n\nIncome Summary\n{summary}"));
 
     // 2. Deductions by Line
     if !data.deduction_lines.is_empty() {
@@ -292,7 +303,7 @@ pub fn k1(year: Option<i32>) -> Result<()> {
                 Cell::new(money(item.total)),
             ]);
         }
-        println!("\nDeductions by Line\n{ded}");
+        out.push_str(&format!("\n\nDeductions by Line\n{ded}"));
     }
 
     // 3. Schedule K Items
@@ -306,7 +317,7 @@ pub fn k1(year: Option<i32>) -> Result<()> {
                 Cell::new(money(item.total.abs())),
             ]);
         }
-        println!("\nSchedule K\n{sk}");
+        out.push_str(&format!("\n\nSchedule K\n{sk}"));
     }
 
     // 4. Line 19 Detail (Other Deductions)
@@ -326,33 +337,33 @@ pub fn k1(year: Option<i32>) -> Result<()> {
             Cell::new(""),
             Cell::new(money(data.other_deductions_total)),
         ]);
-        println!("\nLine 19 — Other Deductions\n{od}");
+        out.push_str(&format!("\n\nLine 19 \u{2014} Other Deductions\n{od}"));
     }
 
     // 5. Validation warnings
     if data.validation.uncategorized_count > 0 {
-        eprintln!(
-            "{}",
+        out.push_str(&format!(
+            "\n{}",
             format!(
-                "Warning: {} uncategorized transactions — run `nigel review` before filing",
+                "Warning: {} uncategorized transactions \u{2014} run `nigel review` before filing",
                 data.validation.uncategorized_count
             )
             .yellow()
-        );
+        ));
     }
     if let Some(ratio) = data.validation.comp_dist_ratio {
         if ratio < 1.0 {
-            eprintln!(
-                "{}",
+            out.push_str(&format!(
+                "\n{}",
                 format!(
-                    "Warning: Officer compensation ({}) is less than distributions ({}) — review reasonable comp",
+                    "Warning: Officer compensation ({}) is less than distributions ({}) \u{2014} review reasonable comp",
                     money(data.validation.officer_comp),
                     money(data.validation.distributions)
                 )
                 .yellow()
-            );
+            ));
         }
     }
 
-    Ok(())
+    out
 }
