@@ -40,6 +40,14 @@ pub fn excel_serial_to_date(serial: f64) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
+fn create_csv_reader(file_path: &Path) -> Result<csv::Reader<std::io::BufReader<std::fs::File>>> {
+    let file = std::fs::File::open(file_path)?;
+    Ok(csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(std::io::BufReader::new(file)))
+}
+
 fn compute_checksum(file_path: &Path) -> Result<String> {
     let data = std::fs::read(file_path)?;
     let mut hasher = Sha256::new();
@@ -279,11 +287,7 @@ fn detect_bofa_checking(file_path: &Path) -> bool {
 }
 
 fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
-    let file = std::fs::File::open(file_path)?;
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .flexible(true)
-        .from_reader(std::io::BufReader::new(file));
+    let mut rdr = create_csv_reader(file_path)?;
     let mut rows = Vec::new();
     let mut found_header = false;
 
@@ -330,11 +334,22 @@ fn detect_bofa_credit_card(file_path: &Path) -> bool {
 }
 
 fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
-    let file = std::fs::File::open(file_path)?;
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .flexible(true)
-        .from_reader(std::io::BufReader::new(file));
+    parse_bofa_card_format(file_path, true)
+}
+
+// ---------------------------------------------------------------------------
+// BofA Line of Credit parser
+// ---------------------------------------------------------------------------
+
+fn parse_bofa_line_of_credit(file_path: &Path) -> Result<Vec<ParsedRow>> {
+    parse_bofa_card_format(file_path, false)
+}
+
+/// Shared parser for BofA Credit Card and Line of Credit CSV formats.
+/// - `has_type_column: true`  → Credit Card (D/C sign logic)
+/// - `has_type_column: false` → Line of Credit (always negate)
+fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec<ParsedRow>> {
+    let mut rdr = create_csv_reader(file_path)?;
     let mut rows = Vec::new();
     let mut found_header = false;
     let (mut idx_date, mut idx_desc, mut idx_amount, mut idx_type) = (3, 5, 6, 9);
@@ -350,7 +365,7 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
                     if f == "Posting Date" { idx_date = i; }
                     if f == "Payee" { idx_desc = i; }
                     if f == "Amount" { idx_amount = i; }
-                    if f == "Type" { idx_type = i; }
+                    if has_type_column && f == "Type" { idx_type = i; }
                 }
                 found_header = true;
             }
@@ -370,8 +385,12 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
         let adj_date = idx_date + offset;
         let adj_desc = idx_desc + offset;
         let adj_amount = idx_amount + offset;
-        let adj_type = idx_type + offset;
-        let min_cols = [adj_date, adj_desc, adj_amount, adj_type].into_iter().max().unwrap_or(0) + 1;
+        let min_cols = if has_type_column {
+            let adj_type = idx_type + offset;
+            [adj_date, adj_desc, adj_amount, adj_type].into_iter().max().unwrap_or(0) + 1
+        } else {
+            [adj_date, adj_desc, adj_amount].into_iter().max().unwrap_or(0) + 1
+        };
         if record.len() < min_cols {
             continue;
         }
@@ -388,84 +407,17 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
         if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
             continue;
         }
-        let mut amount = parse_amount(amount_str);
-        let txn_type = record[adj_type].trim();
-        if txn_type == "D" {
-            amount = -amount.abs();
-        } else {
-            amount = amount.abs();
-        }
-        rows.push(ParsedRow {
-            date,
-            description,
-            amount,
-        });
-    }
-    Ok(rows)
-}
-
-// ---------------------------------------------------------------------------
-// BofA Line of Credit parser
-// ---------------------------------------------------------------------------
-
-fn parse_bofa_line_of_credit(file_path: &Path) -> Result<Vec<ParsedRow>> {
-    let file = std::fs::File::open(file_path)?;
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .flexible(true)
-        .from_reader(std::io::BufReader::new(file));
-    let mut rows = Vec::new();
-    let mut found_header = false;
-    let (mut idx_date, mut idx_desc, mut idx_amount) = (3, 5, 6);
-    let mut header_field_count: usize = 0;
-
-    for result in rdr.records() {
-        let Ok(record) = result else { continue };
-        if !found_header {
-            if record.iter().any(|f| f.contains("Posting Date")) {
-                header_field_count = record.len();
-                for (i, field) in record.iter().enumerate() {
-                    let f = field.trim();
-                    if f == "Posting Date" { idx_date = i; }
-                    if f == "Payee" { idx_desc = i; }
-                    if f == "Amount" { idx_amount = i; }
-                }
-                found_header = true;
+        let amount = if has_type_column {
+            let adj_type = idx_type + offset;
+            let txn_type = record[adj_type].trim();
+            if txn_type == "D" {
+                -parse_amount(amount_str).abs()
+            } else {
+                parse_amount(amount_str).abs()
             }
-            continue;
-        }
-        // When the cardholder name contains commas (e.g. "RAYGUN DESIGN, LLC"),
-        // the CSV parser splits it across multiple fields, giving data rows more
-        // fields than the header. We assume all extra fields originate from the
-        // CardHolder Name column (position 0) — BofA only puts unquoted commas
-        // there. The date and amount validation below guards against silent
-        // misalignment if that assumption ever breaks.
-        let offset = if header_field_count > 0 && record.len() > header_field_count {
-            record.len() - header_field_count
         } else {
-            0
+            -parse_amount(amount_str)
         };
-        let adj_date = idx_date + offset;
-        let adj_desc = idx_desc + offset;
-        let adj_amount = idx_amount + offset;
-        let min_cols = [adj_date, adj_desc, adj_amount].into_iter().max().unwrap_or(0) + 1;
-        if record.len() < min_cols {
-            continue;
-        }
-        // Validate that adjusted indices land on the right columns — a date
-        // that doesn't parse or a non-numeric amount means the offset was wrong.
-        let Some(date) = parse_date_mdy(&record[adj_date]) else {
-            continue;
-        };
-        let description = record[adj_desc].trim().to_string();
-        if description.is_empty() {
-            continue;
-        }
-        let amount_str = record[adj_amount].trim();
-        if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
-            continue;
-        }
-        let amount = -parse_amount(amount_str);
         rows.push(ParsedRow {
             date,
             description,
