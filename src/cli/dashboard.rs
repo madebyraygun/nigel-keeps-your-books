@@ -95,7 +95,6 @@ enum TerminalCommand {
     Import,
     Load,
     Reconcile,
-    Export(usize),
 }
 
 struct HomeData {
@@ -118,6 +117,7 @@ struct Dashboard {
     home_data: Option<HomeData>,
     terminal_action: Option<TerminalCommand>,
     pending_report_view: Option<usize>,
+    pending_export: Option<usize>,
     status_message: Option<String>,
 }
 
@@ -135,6 +135,7 @@ impl Dashboard {
             home_data: None,
             terminal_action: None,
             pending_report_view: None,
+            pending_export: None,
             status_message: None,
         }
     }
@@ -707,7 +708,6 @@ fn run_terminal_command(cmd: TerminalCommand) {
         TerminalCommand::Import => run_import(),
         TerminalCommand::Load => run_load(),
         TerminalCommand::Reconcile => run_reconcile(),
-        TerminalCommand::Export(idx) => run_export(idx),
     };
     if let Err(e) = result {
         eprintln!("\nError: {e}");
@@ -802,28 +802,52 @@ fn run_reconcile() -> Result<()> {
     super::reconcile::run(&accounts[idx - 1], &month, balance)
 }
 
-fn run_export(idx: usize) -> Result<()> {
+fn do_export(idx: usize) -> Result<String> {
     #[cfg(not(feature = "pdf"))]
     {
         let _ = idx;
-        println!("PDF export is not available — build with the 'pdf' feature.");
-        return Ok(());
+        return Err(crate::error::NigelError::Other(
+            "PDF export requires the 'pdf' feature".into(),
+        ));
     }
     #[cfg(feature = "pdf")]
     {
         let year = Some(chrono::Local::now().year());
+        let exports_dir = get_data_dir().join("exports");
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        let name = match idx {
+            0 => "pnl",
+            1 => "expenses",
+            2 => "tax",
+            3 => "cashflow",
+            4 => "register",
+            5 => "flagged",
+            6 => "balance",
+            7 => "k1-prep",
+            8 => {
+                super::export::all(year, None)?;
+                return Ok(format!("All reports exported to {}", exports_dir.display()));
+            }
+            _ => return Ok(String::new()),
+        };
+
         match idx {
-            0 => super::export::pnl(None, year, None, None, None),
-            1 => super::export::expenses(None, year, None),
-            2 => super::export::tax(year, None),
-            3 => super::export::cashflow(None, year, None),
-            4 => super::export::register(None, year, None, None, None, None),
-            5 => super::export::flagged(None),
-            6 => super::export::balance(None),
-            7 => super::export::k1(year, None),
-            8 => super::export::all(year, None),
-            _ => Ok(()),
+            0 => super::export::pnl(None, year, None, None, None)?,
+            1 => super::export::expenses(None, year, None)?,
+            2 => super::export::tax(year, None)?,
+            3 => super::export::cashflow(None, year, None)?,
+            4 => super::export::register(None, year, None, None, None, None)?,
+            5 => super::export::flagged(None)?,
+            6 => super::export::balance(None)?,
+            7 => super::export::k1(year, None)?,
+            _ => {}
         }
+
+        Ok(format!(
+            "Exported {}",
+            exports_dir.join(format!("{name}-{date}.pdf")).display()
+        ))
     }
 }
 
@@ -939,7 +963,7 @@ pub fn run() -> Result<()> {
                                             dashboard.pending_report_view = Some(*selection);
                                         }
                                         ReportPickerMode::Export => {
-                                            dashboard.terminal_action = Some(TerminalCommand::Export(*selection));
+                                            dashboard.pending_export = Some(*selection);
                                         }
                                     }
                                 }
@@ -956,6 +980,14 @@ pub fn run() -> Result<()> {
 
                     if let Some(idx) = dashboard.pending_report_view.take() {
                         dashboard.screen = dashboard.enter_report_view(idx, &conn);
+                    }
+
+                    if let Some(idx) = dashboard.pending_export.take() {
+                        match do_export(idx) {
+                            Ok(msg) => dashboard.status_message = Some(msg),
+                            Err(e) => dashboard.status_message = Some(format!("Export failed: {e}")),
+                        }
+                        dashboard.screen = DashboardScreen::Home;
                     }
 
                     if let Some(cmd) = dashboard.terminal_action.take() {
