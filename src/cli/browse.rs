@@ -49,9 +49,14 @@ pub fn register(
     }
     let filters_desc = filters.join(", ");
 
+    let no_filters = filters_desc.is_empty();
     let total = data.total;
     let categories = get_categories(&conn).unwrap_or_default();
-    let mut browser = RegisterBrowser::new(data.rows, total, filters_desc, categories);
+    let desc = if no_filters { "all transactions".to_string() } else { filters_desc };
+    let mut browser = RegisterBrowser::new(data.rows, total, desc, categories);
+    if no_filters {
+        browser.scroll_to_today();
+    }
     browser.run(&conn)?;
     Ok(())
 }
