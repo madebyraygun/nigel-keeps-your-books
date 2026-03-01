@@ -1,3 +1,4 @@
+pub mod account_manager;
 pub mod accounts;
 pub mod backup;
 pub mod browse;

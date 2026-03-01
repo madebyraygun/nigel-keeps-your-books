@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::browser::{BrowseAction, RegisterBrowser};
+use crate::cli::account_manager::{AccountAction, AccountManager};
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::db::get_connection;
 use crate::error::Result;
@@ -44,6 +45,7 @@ const MENU_ITEMS: &[&str] = &[
     "Import a statement",
     "Review flagged transactions",
     "Reconcile an account",
+    "Add or modify accounts",
     "View or edit categorization rules",
     "View a report",
     "Export a report",
@@ -51,7 +53,7 @@ const MENU_ITEMS: &[&str] = &[
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
-const MENU_LEFT_COUNT: usize = 4;
+const MENU_LEFT_COUNT: usize = 5;
 
 const REPORT_TYPES: &[&str] = &[
     "Profit & Loss",
@@ -86,6 +88,7 @@ enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
     Review(TransactionReviewer),
+    Accounts(AccountManager),
     ReportPicker { selection: usize, mode: ReportPickerMode },
     ReportView(Box<dyn ReportView>),
 }
@@ -227,6 +230,10 @@ impl Dashboard {
         }
         if let DashboardScreen::Review(ref reviewer) = self.screen {
             reviewer.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Accounts(ref manager) = self.screen {
+            manager.draw(frame);
             return;
         }
         if let DashboardScreen::ReportView(ref mut view) = self.screen {
@@ -561,10 +568,11 @@ impl Dashboard {
                 1 => self.terminal_action = Some(TerminalCommand::Import),
                 2 => self.screen = self.enter_review(conn),
                 3 => self.terminal_action = Some(TerminalCommand::Reconcile),
-                4 => self.terminal_action = Some(TerminalCommand::RulesList),
-                5 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
-                6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
-                7 => self.terminal_action = Some(TerminalCommand::Load),
+                4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
+                5 => self.terminal_action = Some(TerminalCommand::RulesList),
+                6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
+                7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
+                8 => self.terminal_action = Some(TerminalCommand::Load),
                 _ => {}
             },
             _ => {}
@@ -912,6 +920,15 @@ pub fn run() -> Result<()> {
                                 HandleResult::Done => {
                                     return_home = true;
                                 }
+                            }
+                            false
+                        }
+                        DashboardScreen::Accounts(ref mut manager) => {
+                            match manager.handle_key(key.code, &conn) {
+                                AccountAction::Close => {
+                                    return_home = true;
+                                }
+                                AccountAction::Continue => {}
                             }
                             false
                         }
