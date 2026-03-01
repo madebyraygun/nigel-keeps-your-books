@@ -24,7 +24,7 @@ Nigel is designed for humans but works extremely well with AI agents. The repo i
 
 Importers currently include Bank of America and Gusto, but adding new importers is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
 
-Nigel also includes a demo mode** — `nigel demo` which loads sample data so you can explore every feature without requiring any personal data. Explore the demo data by taking a guided tour with the [docs/walkthrough.md](docs/walkthrough.md): explore accounts and rules, review flagged transactions, add new rules, and run every report.
+Nigel also includes a **demo mode** — `nigel demo` which generates 18 months of sample transactions (counting backwards from today) so reports always show current-year data. Explore the demo by taking a guided tour with the [docs/walkthrough.md](docs/walkthrough.md): explore accounts and rules, review flagged transactions, add new rules, and run every report.
 
 ## Install
 

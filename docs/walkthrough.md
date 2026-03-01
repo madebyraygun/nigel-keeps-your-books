@@ -11,20 +11,20 @@ Initialized nigel at /Users/you/Documents/nigel
 $ nigel demo
 Demo data loaded!
   Account:      BofA Checking
-  Transactions: 44
+  Transactions: 252
   Rules:        9
-  Categorized:  30
-  Flagged:      14
+  Categorized:  ...
+  Flagged:      ...
 
 Try these next:
   nigel accounts list
   nigel rules list
-  nigel report pnl --year 2025
+  nigel report pnl
   nigel report flagged
   nigel review
 ```
 
-Nigel created a checking account with 3 months of sample transactions (Jan–Mar 2025), added 9 categorization rules, and auto-categorized everything it could. 14 transactions are flagged for review.
+Nigel created a checking account with 18 months of sample transactions (dynamically generated from the current date backwards), added 9 categorization rules, and auto-categorized everything it could. The remaining transactions are flagged for review.
 
 ## 2. Explore what's there
 
@@ -72,7 +72,7 @@ ID  Date         Description                  Amount       Account
 15  2025-01-31   INTEREST PAYMENT                  $2.14   BofA Checking
 26  2025-02-07   WEWORK MEMBERSHIP              -$450.00   BofA Checking
 27  2025-02-12   ZOOM VIDEO COMMUNICATIONS       -$14.99   BofA Checking
-28  2025-02-19   DOORDASH DELIVERY               -$29.33   BofA Checking
+28  2025-02-19   COSTCO WHOLESALE                -$29.33   BofA Checking
 29  2025-02-25   FEDEX SHIPPING                  -$18.75   BofA Checking
 30  2025-02-28   INTEREST PAYMENT                  $1.87   BofA Checking
 41  2025-03-14   DROPBOX BUSINESS                -$19.99   BofA Checking
@@ -164,43 +164,16 @@ Reconciled! Calculated: $17,480.37
 ## 7. Run reports
 
 ```
-$ nigel report pnl --year 2025
-```
-```
-Profit & Loss
-
-Category                      Amount
-INCOME
-  Client Services           $70,000.00
-Total Income                $70,000.00
-
-EXPENSES
-  Software & Subscriptions     $307.17
-  Hosting & Infrastructure     $854.45
-  Meals                        $228.18
-Total Expenses               $1,389.80
-
-NET                         $68,610.20
+$ nigel report pnl
 ```
 
-```
-$ nigel report expenses --year 2025
-```
-```
-Expense Breakdown
-
-Category                      Amount       %    Count
-Hosting & Infrastructure     $854.45   61.5%        6
-Software & Subscriptions     $307.17   22.1%        9
-Meals                        $228.18   16.4%        6
-Total                      $1,389.80  100.0%       21
-```
+This shows an interactive P&L for the current year. Since demo data spans 18 months, there will always be income and expenses in the current year.
 
 Other reports to try:
 
 ```
-nigel report tax --year 2025       # Tax summary by IRS line items
-nigel report cashflow --year 2025  # Monthly inflows/outflows
+nigel report tax               # Tax summary by IRS line items
+nigel report cashflow          # Monthly inflows/outflows
 nigel report balance               # Cash position across accounts
 nigel report flagged               # Remaining flagged transactions
 ```
