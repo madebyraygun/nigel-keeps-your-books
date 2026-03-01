@@ -42,17 +42,17 @@ const GREETINGS: &[&str] = &[
     "Right then, where were we?",
 ];
 
-const MENU_ITEMS: &[&str] = &[
-    "Browse the register",
-    "Import a statement",
-    "Review flagged transactions",
-    "Reconcile an account",
-    "Add or modify accounts",
-    "View or edit categorization rules",
-    "View a report",
-    "Export a report",
-    "Load a different data file",
-    "Snake",
+const MENU_ITEMS: &[(&str, char)] = &[
+    ("[b] Browse the register", 'b'),
+    ("[i] Import a statement", 'i'),
+    ("[r] Review flagged transactions", 'r'),
+    ("[c] Reconcile an account", 'c'),
+    ("[a] Add or modify accounts", 'a'),
+    ("[u] View or edit categorization rules", 'u'),
+    ("[v] View a report", 'v'),
+    ("[e] Export a report", 'e'),
+    ("[l] Load a different data file", 'l'),
+    ("[s] Snake", 's'),
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
@@ -515,7 +515,7 @@ impl Dashboard {
             );
         } else {
             frame.render_widget(
-                Paragraph::new(" Up/Down=navigate  Enter=select  r=refresh  q=quit")
+                Paragraph::new(" Up/Down=navigate  Enter=select  F5=refresh  q=quit")
                     .style(FOOTER_STYLE),
                 hints_area,
             );
@@ -572,7 +572,7 @@ impl Dashboard {
 
     fn menu_item_line(&self, i: usize, flagged_count: usize) -> Line<'static> {
         let marker = if i == self.menu_selection { ">" } else { " " };
-        let item = MENU_ITEMS[i];
+        let (item, _) = MENU_ITEMS[i];
         let label = if i == 2 {
             format!(" {marker} {item} ({flagged_count})")
         } else {
@@ -586,6 +586,22 @@ impl Dashboard {
         Line::from(Span::styled(label, style))
     }
 
+    fn activate_menu_item(&mut self, idx: usize, conn: &rusqlite::Connection) {
+        match idx {
+            0 => self.screen = self.enter_browse(conn),
+            1 => self.screen = DashboardScreen::Import(ImportScreen::new(conn, &self.greeting)),
+            2 => self.screen = self.enter_review(conn),
+            3 => self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting)),
+            4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
+            5 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
+            6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
+            7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
+            8 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            9 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            _ => {}
+        }
+    }
+
     fn handle_home_key(&mut self, code: KeyCode, conn: &rusqlite::Connection) -> bool {
         self.status_message = None;
         match code {
@@ -596,19 +612,12 @@ impl Dashboard {
                 self.menu_selection = (self.menu_selection + 1).min(MENU_ITEMS.len() - 1);
             }
             KeyCode::Char('q') => return true,
-            KeyCode::Enter => match self.menu_selection {
-                0 => self.screen = self.enter_browse(conn),
-                1 => self.screen = DashboardScreen::Import(ImportScreen::new(conn, &self.greeting)),
-                2 => self.screen = self.enter_review(conn),
-                3 => self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting)),
-                4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
-                5 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
-                6 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
-                7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
-                8 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-                9 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
-                _ => {}
-            },
+            KeyCode::Enter => self.activate_menu_item(self.menu_selection, conn),
+            KeyCode::Char(ch) => {
+                if let Some(idx) = MENU_ITEMS.iter().position(|(_, key)| *key == ch) {
+                    self.activate_menu_item(idx, conn);
+                }
+            }
             _ => {}
         }
         false
@@ -889,7 +898,7 @@ pub fn run() -> Result<()> {
                     let mut pending_reload: Option<(usize, Option<i32>, Option<String>)> = None;
                     let should_quit = match &mut dashboard.screen {
                         DashboardScreen::Home => {
-                            if key.code == KeyCode::Char('r') {
+                            if key.code == KeyCode::F(5) {
                                 let _ = dashboard.load_data(&conn);
                                 false
                             } else {
