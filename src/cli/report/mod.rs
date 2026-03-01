@@ -12,6 +12,22 @@ use super::ReportCommands;
 pub fn dispatch(cmd: ReportCommands) -> Result<()> {
     let args = cmd.output_args();
 
+    // Validate --mode and --format values
+    if let Some(ref mode) = args.mode {
+        if mode != "view" && mode != "export" {
+            return Err(crate::error::NigelError::Other(
+                format!("Unknown --mode '{mode}'. Expected 'view' or 'export'."),
+            ));
+        }
+    }
+    if let Some(ref format) = args.format {
+        if format != "pdf" && format != "text" {
+            return Err(crate::error::NigelError::Other(
+                format!("Unknown --format '{format}'. Expected 'pdf' or 'text'."),
+            ));
+        }
+    }
+
     // `report all` is always an export
     if matches!(cmd, ReportCommands::All { .. }) {
         return dispatch_export(cmd, args);
@@ -19,7 +35,7 @@ pub fn dispatch(cmd: ReportCommands) -> Result<()> {
 
     if args.output.is_some() || args.mode.as_deref() == Some("export") {
         dispatch_export(cmd, args)
-    } else if std::io::stdout().is_terminal() {
+    } else if args.mode.as_deref() == Some("view") || std::io::stdout().is_terminal() {
         dispatch_view(cmd)
     } else {
         // Non-TTY: plain text to stdout
@@ -29,7 +45,6 @@ pub fn dispatch(cmd: ReportCommands) -> Result<()> {
     }
 }
 
-/// Interactive ratatui view (Phase 2 — currently falls back to text)
 fn dispatch_view(cmd: ReportCommands) -> Result<()> {
     view::dispatch(cmd)
 }
@@ -125,7 +140,8 @@ fn dispatch_pdf_export(cmd: ReportCommands, output: Option<String>) -> Result<()
 
     #[cfg(feature = "pdf")]
     {
-        crate::cli::export::dispatch_pdf(cmd, output)
+        crate::cli::export::dispatch_pdf(cmd, output)?;
+        Ok(())
     }
 }
 

@@ -813,26 +813,7 @@ fn do_export(idx: usize) -> Result<String> {
     #[cfg(feature = "pdf")]
     {
         let year = Some(chrono::Local::now().year());
-        let exports_dir = get_data_dir().join("exports");
-        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-
-        let name = match idx {
-            0 => "pnl",
-            1 => "expenses",
-            2 => "tax",
-            3 => "cashflow",
-            4 => "register",
-            5 => "flagged",
-            6 => "balance",
-            7 => "k1-prep",
-            8 => {
-                super::export::all(year, None)?;
-                return Ok(format!("All reports exported to {}", exports_dir.display()));
-            }
-            _ => return Ok(String::new()),
-        };
-
-        match idx {
+        let path = match idx {
             0 => super::export::pnl(None, year, None, None, None)?,
             1 => super::export::expenses(None, year, None)?,
             2 => super::export::tax(year, None)?,
@@ -841,13 +822,10 @@ fn do_export(idx: usize) -> Result<String> {
             5 => super::export::flagged(None)?,
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
-            _ => {}
-        }
-
-        Ok(format!(
-            "Exported {}",
-            exports_dir.join(format!("{name}-{date}.pdf")).display()
-        ))
+            8 => return super::export::all(year, None),
+            _ => return Ok(String::new()),
+        };
+        Ok(format!("Exported {path}"))
     }
 }
 

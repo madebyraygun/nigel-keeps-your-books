@@ -29,18 +29,19 @@ fn default_path(name: &str) -> PathBuf {
 }
 
 #[cfg(feature = "pdf")]
-fn write_pdf(bytes: &[u8], path: &PathBuf) -> Result<()> {
+fn write_pdf(bytes: &[u8], path: &PathBuf) -> Result<String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, bytes)?;
-    println!("Wrote {}", path.display());
-    Ok(())
+    let display = format!("{}", path.display());
+    println!("Wrote {display}");
+    Ok(display)
 }
 
-/// Dispatch a report command as PDF export. Called from report/mod.rs.
+/// Dispatch a report command as PDF export. Returns the written path(s).
 #[cfg(feature = "pdf")]
-pub fn dispatch_pdf(cmd: ReportCommands, output: Option<String>) -> Result<()> {
+pub fn dispatch_pdf(cmd: ReportCommands, output: Option<String>) -> Result<String> {
     match cmd {
         ReportCommands::Pnl { month, year, from_date, to_date, .. } => {
             pnl(month, year, from_date, to_date, output)
@@ -65,7 +66,7 @@ pub fn pnl(
     from_date: Option<String>,
     to_date: Option<String>,
     output: Option<String>,
-) -> Result<()> {
+) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
@@ -78,7 +79,7 @@ pub fn pnl(
 }
 
 #[cfg(feature = "pdf")]
-pub fn expenses(month: Option<String>, year: Option<i32>, output: Option<String>) -> Result<()> {
+pub fn expenses(month: Option<String>, year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let report = crate::reports::get_expense_breakdown(&conn, year.or(my), mm)?;
@@ -90,7 +91,7 @@ pub fn expenses(month: Option<String>, year: Option<i32>, output: Option<String>
 }
 
 #[cfg(feature = "pdf")]
-pub fn tax(year: Option<i32>, output: Option<String>) -> Result<()> {
+pub fn tax(year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_tax_summary(&conn, year)?;
     let company = load_settings().company_name;
@@ -101,7 +102,7 @@ pub fn tax(year: Option<i32>, output: Option<String>) -> Result<()> {
 }
 
 #[cfg(feature = "pdf")]
-pub fn cashflow(month: Option<String>, year: Option<i32>, output: Option<String>) -> Result<()> {
+pub fn cashflow(month: Option<String>, year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let report = crate::reports::get_cashflow(&conn, year.or(my), mm)?;
@@ -120,7 +121,7 @@ pub fn register(
     to_date: Option<String>,
     account: Option<String>,
     output: Option<String>,
-) -> Result<()> {
+) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
@@ -136,7 +137,7 @@ pub fn register(
 }
 
 #[cfg(feature = "pdf")]
-pub fn flagged(output: Option<String>) -> Result<()> {
+pub fn flagged(output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let rows = crate::reports::get_flagged(&conn)?;
     let company = load_settings().company_name;
@@ -146,7 +147,7 @@ pub fn flagged(output: Option<String>) -> Result<()> {
 }
 
 #[cfg(feature = "pdf")]
-pub fn balance(output: Option<String>) -> Result<()> {
+pub fn balance(output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_balance(&conn)?;
     let company = load_settings().company_name;
@@ -156,7 +157,7 @@ pub fn balance(output: Option<String>) -> Result<()> {
 }
 
 #[cfg(feature = "pdf")]
-pub fn k1(year: Option<i32>, output: Option<String>) -> Result<()> {
+pub fn k1(year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_k1_prep(&conn, year)?;
     let company = load_settings().company_name;
@@ -167,7 +168,7 @@ pub fn k1(year: Option<i32>, output: Option<String>) -> Result<()> {
 }
 
 #[cfg(feature = "pdf")]
-pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<()> {
+pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<String> {
     let data_dir = get_data_dir();
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
     let company = load_settings().company_name;
@@ -205,5 +206,5 @@ pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<()> {
     let report = crate::reports::get_k1_prep(&conn, year)?;
     write_pdf(&crate::pdf::render_k1(&report, &company, &range)?, &path("k1-prep"))?;
 
-    Ok(())
+    Ok(format!("All reports exported to {}", dir.display()))
 }

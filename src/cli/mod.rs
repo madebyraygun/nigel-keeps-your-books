@@ -266,6 +266,8 @@ pub enum ReportCommands {
         output: ReportOutputArgs,
     },
     /// Export all reports (export-only).
+    /// Note: All uses top-level fields instead of ReportOutputArgs because it has
+    /// output_dir (not output) and is always export mode (no --mode flag needed).
     All {
         #[arg(long)]
         year: Option<i32>,

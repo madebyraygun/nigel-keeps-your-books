@@ -73,6 +73,7 @@ pub(crate) struct TableReportView {
     rows: Vec<Row<'static>>,
     widths: Vec<Constraint>,
     offset: usize,
+    visible_count: usize,
 }
 
 impl TableReportView {
@@ -88,6 +89,7 @@ impl TableReportView {
             rows,
             widths,
             offset: 0,
+            visible_count: 20,
         }
     }
 }
@@ -111,6 +113,7 @@ impl ReportView for TableReportView {
         // Compute visible rows (header takes ~2 lines: header + bottom_margin)
         let header_overhead = 2u16;
         let visible = inner.height.saturating_sub(header_overhead) as usize;
+        self.visible_count = visible.max(1);
 
         let visible_rows: Vec<Row> = self
             .rows
@@ -147,7 +150,7 @@ impl ReportView for TableReportView {
     }
 
     fn handle_key(&mut self, code: KeyCode) -> ReportViewAction {
-        let page = 20usize;
+        let page = self.visible_count;
         let max = self.rows.len().saturating_sub(page);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => ReportViewAction::Close,
@@ -430,12 +433,6 @@ pub(crate) fn build_flagged() -> Result<Box<dyn ReportView>> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let data = reports::get_flagged(&conn)?;
 
-    if data.is_empty() {
-        return Err(crate::error::NigelError::Other(
-            "No flagged transactions.".into(),
-        ));
-    }
-
     let widths = vec![
         Constraint::Length(6),
         Constraint::Length(10),
@@ -449,24 +446,33 @@ pub(crate) fn build_flagged() -> Result<Box<dyn ReportView>> {
 
     let mut rows = Vec::new();
 
-    for r in &data {
+    if data.is_empty() {
         rows.push(Row::new([
-            text_cell(r.id.to_string()),
-            text_cell(&r.date),
-            text_cell(truncate(&r.description, 50)),
-            money_cell(r.amount),
-            text_cell(&r.account_name),
+            Cell::from(""),
+            Cell::from(""),
+            text_cell("No flagged transactions."),
+            Cell::from(""),
+            Cell::from(""),
+        ]));
+    } else {
+        for r in &data {
+            rows.push(Row::new([
+                text_cell(r.id.to_string()),
+                text_cell(&r.date),
+                text_cell(truncate(&r.description, 50)),
+                money_cell(r.amount),
+                text_cell(&r.account_name),
+            ]));
+        }
+        rows.push(blank_row(5));
+        rows.push(Row::new([
+            bold_cell(format!("Total: {}", data.len())),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
         ]));
     }
-
-    rows.push(blank_row(5));
-    rows.push(Row::new([
-        bold_cell(format!("Total: {}", data.len())),
-        Cell::from(""),
-        Cell::from(""),
-        Cell::from(""),
-        Cell::from(""),
-    ]));
 
     Ok(Box::new(TableReportView::new(
         format!("Flagged Transactions ({})", data.len()),
@@ -769,9 +775,11 @@ fn register_standalone(cmd: ReportCommands) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         s.to_string()
     } else {
-        format!("{}\u{2026}", &s[..max - 1])
+        let truncated: String = s.chars().take(max - 1).collect();
+        format!("{truncated}\u{2026}")
     }
 }
