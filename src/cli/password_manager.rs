@@ -132,7 +132,7 @@ impl PasswordManager {
         db::set_db_password(Some(pw.to_string()));
         let mut msg = "Database encrypted successfully.".to_string();
         if trimmed {
-            msg.push_str(" (Note: leading/trailing spaces were removed from password)");
+            msg.push_str(" Note: leading/trailing spaces were removed from password.");
         }
         Ok(msg)
     }
@@ -145,7 +145,7 @@ impl PasswordManager {
         db::set_db_password(Some(new_pw.to_string()));
         let mut msg = "Password changed successfully.".to_string();
         if trimmed {
-            msg.push_str(" (Note: leading/trailing spaces were removed from password)");
+            msg.push_str(" Note: leading/trailing spaces were removed from password.");
         }
         Ok(msg)
     }
