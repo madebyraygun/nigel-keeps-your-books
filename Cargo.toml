@@ -11,7 +11,7 @@ pdf = ["dep:printpdf"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.31", features = ["bundled", "backup"] }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher", "backup"] }
 csv = "1"
 calamine = { version = "0.25", optional = true }
 regex = "1"
@@ -30,6 +30,7 @@ dirs = "5"
 printpdf = { version = "0.7", optional = true }
 anyhow = "1"
 thiserror = "1"
+rpassword = "7"
 
 [dev-dependencies]
 tempfile = "3"
