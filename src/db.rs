@@ -1,8 +1,21 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use rusqlite::Connection;
 
 use crate::error::Result;
+
+static DB_PASSWORD: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set the global database password. Call before `get_connection()`.
+pub fn set_db_password(password: Option<String>) {
+    *DB_PASSWORD.lock().unwrap() = password;
+}
+
+/// Read the current global database password.
+pub fn get_db_password() -> Option<String> {
+    DB_PASSWORD.lock().unwrap().clone()
+}
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
@@ -123,7 +136,17 @@ const DEFAULT_CATEGORIES: &[(&str, Option<i64>, &str, Option<&str>, Option<&str>
 ];
 
 pub fn get_connection(db_path: &Path) -> Result<Connection> {
+    let password = get_db_password();
+    open_connection(db_path, password.as_deref())
+}
+
+/// Open a connection with an explicit password (bypasses global state).
+/// Used by backup, password management, and tests.
+pub fn open_connection(db_path: &Path, password: Option<&str>) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
+    if let Some(pw) = password {
+        conn.pragma_update(None, "key", pw)?;
+    }
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     Ok(conn)
 }
@@ -210,6 +233,60 @@ mod tests {
         ).unwrap();
         assert!(income >= 5, "expected >= 5 income categories, got {income}");
         assert!(expense >= 20, "expected >= 20 expense categories, got {expense}");
+    }
+
+    #[test]
+    fn test_encrypted_db_cannot_open_without_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+
+        // Create encrypted DB
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+
+        // Try opening without password — should fail
+        set_db_password(None);
+        let result = get_connection(&db_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_db_opens_with_correct_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+
+        // Reopen with same password
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        let result: i64 = conn
+            .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert!(result > 0);
+    }
+
+    #[test]
+    fn test_unencrypted_db_works_without_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("plain.db");
+
+        set_db_password(None);
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+
+        set_db_password(None);
+        let conn = get_connection(&db_path).unwrap();
+        let result: i64 = conn
+            .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert!(result > 0);
     }
 
     #[test]
