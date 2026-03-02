@@ -852,4 +852,19 @@ JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seat
         // Amount validation rejects "AMAZON" as non-numeric, so row is skipped.
         assert_eq!(rows.len(), 0, "row with misaligned comma should be skipped");
     }
+
+    #[test]
+    fn test_import_file_links_transactions_to_import_batch() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
+            ("01/15/2025", "PAYMENT ONE", "-100.00"),
+        ]);
+        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let import_id: i64 = conn.query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0)).unwrap();
+        let tx_import_id: i64 = conn
+            .query_row("SELECT import_id FROM transactions LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tx_import_id, import_id);
+    }
 }
