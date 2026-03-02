@@ -15,6 +15,7 @@ pub mod load;
 pub mod load_manager;
 pub mod onboarding;
 pub mod password;
+pub mod password_manager;
 pub mod reconcile;
 pub mod reconcile_manager;
 pub mod report;
