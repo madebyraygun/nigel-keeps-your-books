@@ -249,7 +249,7 @@ mod tests {
         let id = list_accounts(&conn).unwrap()[0].id;
 
         conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount) VALUES (?1, '2025-01-01', 'Test', 100.0)",
+            "INSERT INTO transactions (account_id, date, description, amount) VALUES (?1, '2025-01-01', 'Test', '100.00')",
             [id],
         ).unwrap();
 
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(transaction_count(&conn, id).unwrap(), 0);
 
         conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount) VALUES (?1, '2025-01-01', 'Test', 50.0)",
+            "INSERT INTO transactions (account_id, date, description, amount) VALUES (?1, '2025-01-01', 'Test', '50.00')",
             [id],
         ).unwrap();
 

@@ -429,7 +429,7 @@ mod tests {
             .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-01', 'Test', -50.0, ?2)",
+             VALUES (?1, '2025-01-01', 'Test', '-50.00', ?2)",
             rusqlite::params![acct_id, cat_id],
         )
         .unwrap();
@@ -489,7 +489,7 @@ mod tests {
             .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-02-01', 'Count test', -10.0, ?2)",
+             VALUES (?1, '2025-02-01', 'Count test', '-10.00', ?2)",
             rusqlite::params![acct_id, cat_id],
         )
         .unwrap();

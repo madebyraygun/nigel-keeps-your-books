@@ -627,13 +627,13 @@ mod tests {
             .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-15', 'Client payment', 1000.0, ?2)",
+             VALUES (?1, '2025-01-15', 'Client payment', '1000.00', ?2)",
             rusqlite::params![acct, income_cat],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-20', 'Adobe CC', -50.0, ?2)",
+             VALUES (?1, '2025-01-20', 'Adobe CC', '-50.00', ?2)",
             rusqlite::params![acct, expense_cat],
         )
         .unwrap();

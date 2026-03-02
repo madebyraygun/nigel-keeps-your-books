@@ -612,17 +612,17 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-15', 'Client payment', 1000.0, ?2)",
+             VALUES (?1, '2025-01-15', 'Client payment', '1000.00', ?2)",
             rusqlite::params![acct, income_cat],
         ).unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-20', 'Adobe CC', -50.0, ?2)",
+             VALUES (?1, '2025-01-20', 'Adobe CC', '-50.00', ?2)",
             rusqlite::params![acct, expense_cat],
         ).unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-02-10', 'GitHub', -10.0, ?2)",
+             VALUES (?1, '2025-02-10', 'GitHub', '-10.00', ?2)",
             rusqlite::params![acct, expense_cat],
         ).unwrap();
     }
@@ -684,7 +684,7 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2024-06-15', 'Old payment', 500.0, ?2)",
+             VALUES (?1, '2024-06-15', 'Old payment', '500.00', ?2)",
             rusqlite::params![acct, cat],
         ).unwrap();
         // No date filters — should return all 4 transactions across both years
@@ -704,7 +704,7 @@ mod tests {
         let acct = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) \
-             VALUES (?1, '2025-01-15', 'UNKNOWN VENDOR', -99.0, 1, 'No matching rule')",
+             VALUES (?1, '2025-01-15', 'UNKNOWN VENDOR', '-99.00', 1, 'No matching rule')",
             rusqlite::params![acct],
         )
         .unwrap();
@@ -781,7 +781,7 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-03-15', 'Business lunch', -100.0, ?2)",
+             VALUES (?1, '2025-03-15', 'Business lunch', '-100.00', ?2)",
             rusqlite::params![acct, meals_cat],
         ).unwrap();
         let report = get_k1_prep(&conn, Some(2025)).unwrap();

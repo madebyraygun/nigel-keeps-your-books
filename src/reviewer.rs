@@ -190,7 +190,7 @@ mod tests {
         let acct = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) \
-             VALUES (?1, '2025-01-15', 'ADOBE CREATIVE', -50.0, 1, 'No matching rule')",
+             VALUES (?1, '2025-01-15', 'ADOBE CREATIVE', '-50.00', 1, 'No matching rule')",
             rusqlite::params![acct],
         ).unwrap();
         conn.last_insert_rowid()

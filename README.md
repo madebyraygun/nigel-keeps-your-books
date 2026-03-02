@@ -23,6 +23,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
+- **Exact decimal arithmetic** — all monetary values use `rust_decimal` for precise calculations, eliminating floating-point rounding errors
 - **SQLite storage** — single portable database, no server required
 - **Snake** - 🍎 🐍
 

@@ -382,7 +382,7 @@ mod tests {
         let current_year = Local::now().date_naive().year();
         let ytd_income: f64 = conn
             .query_row(
-                "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE amount > 0 AND date LIKE ?1",
+                "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM transactions WHERE CAST(amount AS REAL) > 0 AND date LIKE ?1",
                 [format!("{current_year}%")],
                 |r| r.get(0),
             )

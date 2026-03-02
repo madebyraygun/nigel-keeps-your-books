@@ -95,7 +95,7 @@ mod tests {
         for desc in descriptions {
             conn.execute(
                 "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) \
-                 VALUES (?1, '2025-01-15', ?2, -50.00, 1, 'No matching rule')",
+                 VALUES (?1, '2025-01-15', ?2, '-50.00', 1, 'No matching rule')",
                 rusqlite::params![account_id, desc],
             ).unwrap();
         }
