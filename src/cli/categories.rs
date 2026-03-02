@@ -193,12 +193,20 @@ pub fn update_category(
 pub fn blocking_reason(conn: &Connection, id: i64) -> Result<Option<String>> {
     let (txn_count, rule_count) = usage_count(conn, id)?;
     if txn_count > 0 {
-        let noun = if txn_count == 1 { "transaction" } else { "transactions" };
-        return Ok(Some(format!("Cannot delete: category has {txn_count} {noun}")));
+        let noun = if txn_count == 1 {
+            "transaction"
+        } else {
+            "transactions"
+        };
+        return Ok(Some(format!(
+            "Cannot delete: category has {txn_count} {noun}"
+        )));
     }
     if rule_count > 0 {
         let noun = if rule_count == 1 { "rule" } else { "rules" };
-        return Ok(Some(format!("Cannot delete: category has {rule_count} active {noun}")));
+        return Ok(Some(format!(
+            "Cannot delete: category has {rule_count} active {noun}"
+        )));
     }
     Ok(None)
 }
@@ -249,8 +257,12 @@ mod tests {
         let categories = list_categories(&conn).unwrap();
         assert!(!categories.is_empty(), "should have seeded categories");
         // Spot-check known seeded categories
-        assert!(categories.iter().any(|c| c.name == "Client Services" && c.category_type == "income"));
-        assert!(categories.iter().any(|c| c.name == "Office Expense" && c.category_type == "expense"));
+        assert!(categories
+            .iter()
+            .any(|c| c.name == "Client Services" && c.category_type == "income"));
+        assert!(categories
+            .iter()
+            .any(|c| c.name == "Office Expense" && c.category_type == "expense"));
         // Income categories come first (explicit CASE ordering)
         let first_expense_idx = categories.iter().position(|c| c.category_type == "expense");
         let last_income_idx = categories.iter().rposition(|c| c.category_type == "income");
@@ -268,7 +280,10 @@ mod tests {
         add_category(&conn, "New Category", "income", Some("Line 1"), None).unwrap();
         let categories = list_categories(&conn).unwrap();
         let found = categories.iter().find(|c| c.name == "New Category");
-        assert!(found.is_some(), "newly added category should appear in list");
+        assert!(
+            found.is_some(),
+            "newly added category should appear in list"
+        );
         let cat = found.unwrap();
         assert_eq!(cat.category_type, "income");
         assert_eq!(cat.tax_line.as_deref(), Some("Line 1"));
@@ -300,7 +315,14 @@ mod tests {
     #[test]
     fn test_update_category_changes_all_fields() {
         let (_dir, conn) = test_conn();
-        add_category(&conn, "Original", "expense", Some("Line 8"), Some("1120S-16")).unwrap();
+        add_category(
+            &conn,
+            "Original",
+            "expense",
+            Some("Line 8"),
+            Some("1120S-16"),
+        )
+        .unwrap();
         let id = list_categories(&conn)
             .unwrap()
             .iter()
@@ -398,10 +420,7 @@ mod tests {
 
         delete_category(&conn, id).unwrap();
 
-        let found = list_categories(&conn)
-            .unwrap()
-            .iter()
-            .any(|c| c.id == id);
+        let found = list_categories(&conn).unwrap().iter().any(|c| c.id == id);
         assert!(!found, "deleted category should not appear in active list");
     }
 
@@ -423,9 +442,11 @@ mod tests {
         )
         .unwrap();
         let acct_id: i64 = conn
-            .query_row("SELECT id FROM accounts WHERE name = 'Test Acct'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT id FROM accounts WHERE name = 'Test Acct'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \

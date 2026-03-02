@@ -9,7 +9,10 @@ pub fn run(account: &str, month: &str, balance: f64) -> Result<()> {
     let result = reconciler::reconcile(&conn, account, month, balance)?;
 
     if result.is_reconciled {
-        println!("Reconciled! Calculated: {}", money(result.calculated_balance));
+        println!(
+            "Reconciled! Calculated: {}",
+            money(result.calculated_balance)
+        );
     } else {
         println!(
             "DISCREPANCY: {}\n  Statement:  {}\n  Calculated: {}",

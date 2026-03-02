@@ -52,8 +52,7 @@ pub fn rekey_database(db_path: &Path, current_password: &str, new_password: &str
 }
 
 fn prompt(msg: &str) -> Result<String> {
-    rpassword::prompt_password(msg)
-        .map_err(|e| crate::error::NigelError::Other(e.to_string()))
+    rpassword::prompt_password(msg).map_err(|e| crate::error::NigelError::Other(e.to_string()))
 }
 
 fn prompt_and_confirm(msg: &str) -> Result<String> {

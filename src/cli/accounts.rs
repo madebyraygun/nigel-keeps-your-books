@@ -1,4 +1,4 @@
-use comfy_table::{Table, Cell};
+use comfy_table::{Cell, Table};
 use rusqlite::Connection;
 
 use crate::db::get_connection;
@@ -6,7 +6,12 @@ use crate::error::{NigelError, Result};
 use crate::models::Account;
 use crate::settings::get_data_dir;
 
-pub fn add(name: &str, account_type: &str, institution: Option<&str>, last_four: Option<&str>) -> Result<()> {
+pub fn add(
+    name: &str,
+    account_type: &str,
+    institution: Option<&str>,
+    last_four: Option<&str>,
+) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     conn.execute(
         "INSERT INTO accounts (name, account_type, institution, last_four) VALUES (?1, ?2, ?3, ?4)",
@@ -18,7 +23,9 @@ pub fn add(name: &str, account_type: &str, institution: Option<&str>, last_four:
 
 pub fn list() -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let mut stmt = conn.prepare("SELECT id, name, account_type, institution, last_four FROM accounts")?;
+    let mut stmt =
+        conn.prepare("SELECT id, name, account_type, institution, last_four FROM accounts")?;
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(i64, String, String, Option<String>, Option<String>)> = stmt
         .query_map([], |row| {
             Ok((
@@ -138,17 +145,21 @@ pub fn account_names(conn: &Connection) -> Vec<String> {
 pub fn delete_account(conn: &Connection, id: i64) -> Result<()> {
     let count = transaction_count(conn, id)?;
     if count > 0 {
-        let noun = if count == 1 { "transaction" } else { "transactions" };
+        let noun = if count == 1 {
+            "transaction"
+        } else {
+            "transactions"
+        };
         return Err(NigelError::Other(format!(
             "Cannot delete: account has {count} {noun}"
         )));
     }
     // Clean up reconciliations; null out imports to preserve checksums for duplicate detection
+    conn.execute("DELETE FROM reconciliations WHERE account_id = ?1", [id])?;
     conn.execute(
-        "DELETE FROM reconciliations WHERE account_id = ?1",
+        "UPDATE imports SET account_id = NULL WHERE account_id = ?1",
         [id],
     )?;
-    conn.execute("UPDATE imports SET account_id = NULL WHERE account_id = ?1", [id])?;
     let deleted = conn.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
     if deleted == 0 {
         return Err(NigelError::Other(format!("Account not found: id {id}")));
@@ -178,7 +189,14 @@ mod tests {
     #[test]
     fn test_add_and_list_accounts() {
         let (_dir, conn) = test_conn();
-        add_account(&conn, "BofA Checking", "checking", Some("Bank of America"), Some("1234")).unwrap();
+        add_account(
+            &conn,
+            "BofA Checking",
+            "checking",
+            Some("Bank of America"),
+            Some("1234"),
+        )
+        .unwrap();
         add_account(&conn, "Chase Credit", "credit_card", None, None).unwrap();
 
         let accounts = list_accounts(&conn).unwrap();
@@ -226,7 +244,12 @@ mod tests {
         let (_dir, conn) = test_conn();
         add_account(&conn, "Account A", "checking", None, None).unwrap();
         add_account(&conn, "Account B", "checking", None, None).unwrap();
-        let id_b = list_accounts(&conn).unwrap().iter().find(|a| a.name == "Account B").unwrap().id;
+        let id_b = list_accounts(&conn)
+            .unwrap()
+            .iter()
+            .find(|a| a.name == "Account B")
+            .unwrap()
+            .id;
 
         let err = rename_account(&conn, id_b, "Account A").unwrap_err();
         assert!(err.to_string().contains("already exists"));

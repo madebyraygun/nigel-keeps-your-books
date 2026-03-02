@@ -44,7 +44,10 @@ struct FormField {
 
 enum FieldKind {
     Text,
-    Selector { options: Vec<String>, selected: usize },
+    Selector {
+        options: Vec<String>,
+        selected: usize,
+    },
 }
 
 impl CategoryForm {
@@ -263,8 +266,7 @@ impl CategoryManager {
             );
         } else {
             frame.render_widget(
-                Paragraph::new(" a=add  e=edit  d=delete  Esc=back  q=quit")
-                    .style(FOOTER_STYLE),
+                Paragraph::new(" a=add  e=edit  d=delete  Esc=back  q=quit").style(FOOTER_STYLE),
                 hints_area,
             );
         }
@@ -323,7 +325,11 @@ impl CategoryManager {
                     ]));
                 }
                 FieldKind::Selector { options, selected } => {
-                    let arrows = if is_focused { ("< ", " >") } else { ("  ", "  ") };
+                    let arrows = if is_focused {
+                        ("< ", " >")
+                    } else {
+                        ("  ", "  ")
+                    };
                     lines.push(Line::from(vec![
                         Span::styled(format!("   {:<14} ", field.label), label_style),
                         Span::styled(
@@ -487,11 +493,19 @@ impl CategoryManager {
                 let cat_type = form.fields[TYPE_IDX].value.clone();
                 let tax_line = {
                     let v = form.fields[TAX_LINE_IDX].value.trim().to_string();
-                    if v.is_empty() { None } else { Some(v) }
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v)
+                    }
                 };
                 let form_line = {
                     let v = form.fields[FORM_LINE_IDX].value.trim().to_string();
-                    if v.is_empty() { None } else { Some(v) }
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v)
+                    }
                 };
 
                 match mode {

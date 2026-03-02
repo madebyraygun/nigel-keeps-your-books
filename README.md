@@ -72,6 +72,7 @@ nigel report tax --year 2025
 nigel report cashflow
 nigel report balance
 nigel report flagged
+nigel report register --year 2025   # Transaction register
 
 # Export reports
 nigel report pnl --year 2025 --mode export            # PDF
@@ -126,7 +127,7 @@ cargo build --release --no-default-features
 cargo build              # Debug build
 cargo build --release    # Release build
 cargo test               # Run all tests
-cargo test --no-default-features  # Test without gusto feature
+cargo test --no-default-features  # Test without gusto/pdf features
 ```
 
 ## License

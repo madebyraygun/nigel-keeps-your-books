@@ -132,10 +132,8 @@ impl LoadScreen {
                 let db_path = resolved.join("nigel.db");
 
                 if !db_path.exists() {
-                    self.status_message = Some((
-                        format!("No database found at {}", db_path.display()),
-                        true,
-                    ));
+                    self.status_message =
+                        Some((format!("No database found at {}", db_path.display()), true));
                     return LoadAction::Continue;
                 }
 
@@ -143,10 +141,8 @@ impl LoadScreen {
                 settings.data_dir = resolved.to_string_lossy().to_string();
                 match save_settings(&settings) {
                     Ok(()) => {
-                        self.status_message = Some((
-                            format!("Switched to {}", resolved.display()),
-                            false,
-                        ));
+                        self.status_message =
+                            Some((format!("Switched to {}", resolved.display()), false));
                         self.done = true;
                     }
                     Err(e) => {

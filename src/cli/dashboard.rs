@@ -100,7 +100,10 @@ enum DashboardScreen {
     Rules(RulesManager),
     Reconcile(ReconcileScreen),
     Load(LoadScreen),
-    ReportPicker { selection: usize, mode: ReportPickerMode },
+    ReportPicker {
+        selection: usize,
+        mode: ReportPickerMode,
+    },
     ReportView(Box<dyn ReportView>),
     Password(super::password_manager::PasswordManager),
     Snake(SnakeGame),
@@ -136,10 +139,7 @@ struct Dashboard {
 impl Dashboard {
     fn new(user_name: Option<String>) -> Self {
         let mut rng = rand::thread_rng();
-        let random_greeting = GREETINGS
-            .choose(&mut rng)
-            .unwrap_or(&"Hello.")
-            .to_string();
+        let random_greeting = GREETINGS.choose(&mut rng).unwrap_or(&"Hello.").to_string();
         let first_name = user_name
             .as_deref()
             .and_then(|n| n.split_whitespace().next())
@@ -232,20 +232,19 @@ impl Dashboard {
             .collect();
 
         // Derive year range from first/last cashflow months (e.g. "2025 - 26")
-        let cashflow_year_range = if let (Some(first), Some(last)) =
-            (recent_months.first(), recent_months.last())
-        {
-            let first_year = &first.month[..4];
-            let last_year = &last.month[..4];
-            if first_year == last_year {
-                first_year.to_string()
+        let cashflow_year_range =
+            if let (Some(first), Some(last)) = (recent_months.first(), recent_months.last()) {
+                let first_year = &first.month[..4];
+                let last_year = &last.month[..4];
+                if first_year == last_year {
+                    first_year.to_string()
+                } else {
+                    // Short form: "2025 - 26"
+                    format!("{} - {}", first_year, &last_year[2..])
+                }
             } else {
-                // Short form: "2025 - 26"
-                format!("{} - {}", first_year, &last_year[2..])
-            }
-        } else {
-            String::new()
-        };
+                String::new()
+            };
 
         // Top 5 expense categories from rolling 3-month window
         let top_expenses: Vec<(String, f64)> = recent_pnl
@@ -361,11 +360,9 @@ impl Dashboard {
 
         if let Some(data) = &self.home_data {
             // Stats + Balances — same 50/50 split used for charts below
-            let [left_area, right_area] = Layout::horizontal([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
-            .areas(stats_area);
+            let [left_area, right_area] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(stats_area);
 
             // YTD summary — 1-space indent to align with "N" in " Nigel:"
             let stats_lines = vec![
@@ -377,14 +374,8 @@ impl Dashboard {
                     Span::raw(" YTD Expenses   "),
                     money_span(data.total_expenses),
                 ]),
-                Line::from(vec![
-                    Span::raw(" Net Profit     "),
-                    money_span(data.net),
-                ]),
-                Line::from(format!(
-                    " Transactions   {}",
-                    number(data.txn_count)
-                )),
+                Line::from(vec![Span::raw(" Net Profit     "), money_span(data.net)]),
+                Line::from(format!(" Transactions   {}", number(data.txn_count))),
                 Line::from(format!(" Flagged        {}", data.flagged_count)),
             ];
             frame.render_widget(Paragraph::new(stats_lines), left_area);
@@ -403,11 +394,9 @@ impl Dashboard {
             frame.render_widget(Paragraph::new(balance_lines), right_area);
 
             // Charts — same 50/50 split so right column aligns with Account Balances
-            let [chart_left, chart_right] = Layout::horizontal([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
-            .areas(charts_area);
+            let [chart_left, chart_right] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(charts_area);
 
             // Monthly Cash Flow bar chart with y-axis labels
             if !data.cashflow_labels.is_empty() {
@@ -450,11 +439,9 @@ impl Dashboard {
                 let mid_label = format_k(mid_tick);
                 let y_label_width = top_label.len().max(mid_label.len()) as u16 + 1;
 
-                let [y_axis_area, bar_area] = Layout::horizontal([
-                    Constraint::Length(y_label_width),
-                    Constraint::Fill(1),
-                ])
-                .areas(chart_body);
+                let [y_axis_area, bar_area] =
+                    Layout::horizontal([Constraint::Length(y_label_width), Constraint::Fill(1)])
+                        .areas(chart_body);
 
                 // Y-axis labels: top tick near top, mid tick at middle
                 let inner_height = bar_area.height.saturating_sub(1); // month labels
@@ -494,10 +481,7 @@ impl Dashboard {
                     })
                     .collect();
 
-                let mut chart = BarChart::default()
-                    .bar_width(2)
-                    .bar_gap(0)
-                    .group_gap(1);
+                let mut chart = BarChart::default().bar_width(2).bar_gap(0).group_gap(1);
                 for group in &groups {
                     chart = chart.data(group.clone());
                 }
@@ -534,11 +518,8 @@ impl Dashboard {
             .map(|d| d.flagged_count)
             .unwrap_or(0);
 
-        let [menu_title_area, menu_cols_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(menu_area);
+        let [menu_title_area, menu_cols_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(menu_area);
 
         frame.render_widget(
             Paragraph::new(Span::styled(
@@ -548,11 +529,9 @@ impl Dashboard {
             menu_title_area,
         );
 
-        let [menu_left, menu_right] = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(menu_cols_area);
+        let [menu_left, menu_right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(menu_cols_area);
 
         let left_lines: Vec<Line> = (0..MENU_LEFT_COUNT)
             .map(|i| self.menu_item_line(i, flagged_count))
@@ -614,10 +593,7 @@ impl Dashboard {
             } else {
                 Style::default()
             };
-            lines.push(Line::from(Span::styled(
-                format!(" {marker} {item}"),
-                style,
-            )));
+            lines.push(Line::from(Span::styled(format!(" {marker} {item}"), style)));
         }
         frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -648,19 +624,32 @@ impl Dashboard {
             0 => self.screen = self.enter_browse(conn),
             1 => self.screen = DashboardScreen::Import(ImportScreen::new(conn, &self.greeting)),
             2 => self.screen = self.enter_review(conn),
-            3 => self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting)),
+            3 => {
+                self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting))
+            }
             4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
-            5 => self.screen = DashboardScreen::Categories(CategoryManager::new(conn, &self.greeting)),
+            5 => {
+                self.screen =
+                    DashboardScreen::Categories(CategoryManager::new(conn, &self.greeting))
+            }
             6 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
-            7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
-            8 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
-            9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            10 => {
-                match super::password_manager::PasswordManager::new(&self.greeting) {
-                    Ok(mgr) => self.screen = DashboardScreen::Password(mgr),
-                    Err(e) => self.status_message = Some(format!("Error: {e}")),
+            7 => {
+                self.screen = DashboardScreen::ReportPicker {
+                    selection: 0,
+                    mode: ReportPickerMode::View,
                 }
             }
+            8 => {
+                self.screen = DashboardScreen::ReportPicker {
+                    selection: 0,
+                    mode: ReportPickerMode::Export,
+                }
+            }
+            9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            10 => match super::password_manager::PasswordManager::new(&self.greeting) {
+                Ok(mgr) => self.screen = DashboardScreen::Password(mgr),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
             11 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
@@ -690,10 +679,7 @@ impl Dashboard {
     fn enter_browse(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
         match reports::get_register(conn, None, None, None, None, None) {
             Ok(data) => {
-                let categories = match get_categories(conn) {
-                    Ok(c) => c,
-                    Err(_) => vec![],
-                };
+                let categories = get_categories(conn).unwrap_or_default();
                 self.status_message = None;
                 let mut browser = RegisterBrowser::new(
                     data.rows,
@@ -777,8 +763,8 @@ impl Dashboard {
 fn y_axis_ticks(max_val: f64) -> (f64, f64) {
     // Round steps: 1k, 2.5k, 5k, 10k, 25k, 50k, 100k, 250k, ...
     let steps = [
-        1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0, 100000.0, 250000.0, 500000.0,
-        1000000.0, 2500000.0, 5000000.0, 10000000.0,
+        1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0, 100000.0, 250000.0, 500000.0, 1000000.0,
+        2500000.0, 5000000.0, 10000000.0,
     ];
     let top = steps
         .iter()
@@ -908,7 +894,10 @@ pub fn run() -> Result<()> {
             }
             super::onboarding::PostSetupAction::Import => {
                 // User chose "Load existing" during onboarding — prompt for path
-                print!("Current data directory: {}\nPath to data directory: ", get_data_dir().display());
+                print!(
+                    "Current data directory: {}\nPath to data directory: ",
+                    get_data_dir().display()
+                );
                 std::io::Write::flush(&mut std::io::stdout()).unwrap();
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
@@ -1102,20 +1091,16 @@ pub fn run() -> Result<()> {
                             };
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),
-                                KeyCode::Down => {
-                                    *selection = (*selection + 1).min(max_idx)
-                                }
+                                KeyCode::Down => *selection = (*selection + 1).min(max_idx),
                                 KeyCode::Esc => return_home = true,
-                                KeyCode::Enter => {
-                                    match mode {
-                                        ReportPickerMode::View => {
-                                            dashboard.pending_report_view = Some(*selection);
-                                        }
-                                        ReportPickerMode::Export => {
-                                            dashboard.pending_export = Some(*selection);
-                                        }
+                                KeyCode::Enter => match mode {
+                                    ReportPickerMode::View => {
+                                        dashboard.pending_report_view = Some(*selection);
                                     }
-                                }
+                                    ReportPickerMode::Export => {
+                                        dashboard.pending_export = Some(*selection);
+                                    }
+                                },
                                 _ => {}
                             }
                             key.code == KeyCode::Char('q')
@@ -1141,9 +1126,8 @@ pub fn run() -> Result<()> {
                     };
 
                     if let Some((idx, year, month)) = pending_reload {
-                        dashboard.screen = dashboard.enter_report_view_with_date(
-                            idx, &conn, year, month,
-                        );
+                        dashboard.screen =
+                            dashboard.enter_report_view_with_date(idx, &conn, year, month);
                     }
 
                     if return_home {
@@ -1159,14 +1143,17 @@ pub fn run() -> Result<()> {
                     if let Some(idx) = dashboard.pending_export.take() {
                         // Use the current report view's date params if we have
                         // one active, otherwise default to current year
-                        let (year, month) = if let DashboardScreen::ReportView(ref view) = dashboard.screen {
-                            view.date_params()
-                        } else {
-                            (None, None)
-                        };
+                        let (year, month) =
+                            if let DashboardScreen::ReportView(ref view) = dashboard.screen {
+                                view.date_params()
+                            } else {
+                                (None, None)
+                            };
                         match do_export(idx, year, month) {
                             Ok(msg) => dashboard.status_message = Some(msg),
-                            Err(e) => dashboard.status_message = Some(format!("Export failed: {e}")),
+                            Err(e) => {
+                                dashboard.status_message = Some(format!("Export failed: {e}"))
+                            }
                         }
                         dashboard.screen = DashboardScreen::Home;
                     }
@@ -1188,8 +1175,8 @@ pub fn run() -> Result<()> {
 
         match exit {
             Err(e) => return Err(e),
-            Ok(true) => return Ok(()),  // quit
-            Ok(false) => continue,       // reload (data directory changed)
+            Ok(true) => return Ok(()), // quit
+            Ok(false) => continue,     // reload (data directory changed)
         }
     }
 }

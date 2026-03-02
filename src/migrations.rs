@@ -10,14 +10,13 @@ struct Migration {
     up: fn(&Connection) -> Result<()>,
 }
 
-const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        description: "baseline — establish schema version tracking",
-        up: |_conn| Ok(()),
-    },
-];
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    description: "baseline — establish schema version tracking",
+    up: |_conn| Ok(()),
+}];
 
+#[cfg(test)]
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 pub fn get_schema_version(conn: &Connection) -> u32 {
@@ -102,7 +101,9 @@ mod tests {
             description: "failing migration",
             up: |conn| {
                 conn.execute_batch("CREATE TABLE _test_rollback (id INTEGER)")?;
-                Err(crate::error::NigelError::Other("intentional failure".into()))
+                Err(crate::error::NigelError::Other(
+                    "intentional failure".into(),
+                ))
             },
         }];
 

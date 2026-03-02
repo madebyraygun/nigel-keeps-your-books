@@ -101,39 +101,250 @@ CREATE TABLE IF NOT EXISTS metadata (
 );
 ";
 
-// (name, parent_id, category_type, tax_line, form_line, description)
-const DEFAULT_CATEGORIES: &[(&str, Option<i64>, &str, Option<&str>, Option<&str>, &str)] = &[
+type CategoryDef = (
+    &'static str,
+    Option<i64>,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+    &'static str,
+);
+
+const DEFAULT_CATEGORIES: &[CategoryDef] = &[
     // Income
-    ("Client Services", None, "income", Some("Gross receipts"), None, "Project fees, retainer payments"),
-    ("Hosting & Maintenance", None, "income", Some("Gross receipts"), None, "Recurring client hosting/maintenance fees"),
-    ("Reimbursements", None, "income", Some("Gross receipts"), None, "Client reimbursements for expenses"),
-    ("Interest Income", None, "income", Some("Other income"), Some("K-4"), "Bank interest"),
-    ("Other Income", None, "income", Some("Other income"), None, "Anything else"),
+    (
+        "Client Services",
+        None,
+        "income",
+        Some("Gross receipts"),
+        None,
+        "Project fees, retainer payments",
+    ),
+    (
+        "Hosting & Maintenance",
+        None,
+        "income",
+        Some("Gross receipts"),
+        None,
+        "Recurring client hosting/maintenance fees",
+    ),
+    (
+        "Reimbursements",
+        None,
+        "income",
+        Some("Gross receipts"),
+        None,
+        "Client reimbursements for expenses",
+    ),
+    (
+        "Interest Income",
+        None,
+        "income",
+        Some("Other income"),
+        Some("K-4"),
+        "Bank interest",
+    ),
+    (
+        "Other Income",
+        None,
+        "income",
+        Some("Other income"),
+        None,
+        "Anything else",
+    ),
     // Expenses
-    ("Advertising & Marketing", None, "expense", Some("Line 8"), Some("1120S-16"), "Ads, sponsorships, marketing tools"),
-    ("Car & Truck", None, "expense", Some("Line 9"), Some("1120S-19"), "Mileage, fuel, parking"),
-    ("Commissions & Fees", None, "expense", Some("Line 10"), Some("1120S-19"), "Subcontractor commissions, platform fees"),
-    ("Contract Labor", None, "expense", Some("Line 11"), Some("1120S-19"), "Freelancers, subcontractors (1099 work)"),
-    ("Insurance", None, "expense", Some("Line 15"), Some("1120S-19"), "Business insurance, E&O"),
-    ("Legal & Professional", None, "expense", Some("Line 17"), Some("1120S-19"), "Accountant, lawyer, professional services"),
-    ("Office Expense", None, "expense", Some("Line 18"), Some("1120S-19"), "Office supplies, minor equipment"),
-    ("Rent / Lease", None, "expense", Some("Line 20b"), Some("1120S-11"), "Office rent, coworking"),
-    ("Software & Subscriptions", None, "expense", Some("Line 18/27a"), Some("1120S-19"), "SaaS tools, domain renewals, cloud services"),
-    ("Hosting & Infrastructure", None, "expense", Some("Line 18/27a"), Some("1120S-19"), "AWS, server costs, CDN"),
-    ("Taxes & Licenses", None, "expense", Some("Line 23"), Some("1120S-12"), "Business licenses, state fees"),
-    ("Travel", None, "expense", Some("Line 24a"), Some("1120S-19"), "Flights, hotels, conference travel"),
-    ("Meals", None, "expense", Some("Line 24b"), Some("1120S-19"), "Business meals (50% deductible)"),
-    ("Utilities", None, "expense", Some("Line 25"), Some("1120S-19"), "Internet, phone (business portion)"),
-    ("Payroll — Wages", None, "expense", Some("Line 26"), Some("1120S-8"), "Employee salaries (from Gusto)"),
-    ("Payroll — Taxes", None, "expense", Some("Line 23"), Some("1120S-12"), "Employer payroll taxes (from Gusto)"),
-    ("Payroll — Benefits", None, "expense", Some("Line 14"), Some("1120S-18"), "Health insurance, retirement (from Gusto)"),
-    ("Bank & Merchant Fees", None, "expense", Some("Line 27a"), Some("1120S-19"), "Stripe fees, bank charges, wire fees"),
-    ("Education & Training", None, "expense", Some("Line 27a"), Some("1120S-19"), "Courses, books, conferences"),
-    ("Equipment", None, "expense", Some("Line 13"), Some("1120S-19"), "Hardware, major purchases"),
-    ("Home Office", None, "expense", Some("Line 30"), Some("1120S-19"), "Simplified method or actual expenses"),
-    ("Owner Draw / Distribution", None, "expense", Some("Not deductible"), Some("K-16d"), "Owner payments, distributions"),
-    ("Transfer", None, "expense", Some("Not deductible"), None, "Transfers between own accounts"),
-    ("Uncategorized", None, "expense", Some("\u{2014}"), None, "Needs review"),
+    (
+        "Advertising & Marketing",
+        None,
+        "expense",
+        Some("Line 8"),
+        Some("1120S-16"),
+        "Ads, sponsorships, marketing tools",
+    ),
+    (
+        "Car & Truck",
+        None,
+        "expense",
+        Some("Line 9"),
+        Some("1120S-19"),
+        "Mileage, fuel, parking",
+    ),
+    (
+        "Commissions & Fees",
+        None,
+        "expense",
+        Some("Line 10"),
+        Some("1120S-19"),
+        "Subcontractor commissions, platform fees",
+    ),
+    (
+        "Contract Labor",
+        None,
+        "expense",
+        Some("Line 11"),
+        Some("1120S-19"),
+        "Freelancers, subcontractors (1099 work)",
+    ),
+    (
+        "Insurance",
+        None,
+        "expense",
+        Some("Line 15"),
+        Some("1120S-19"),
+        "Business insurance, E&O",
+    ),
+    (
+        "Legal & Professional",
+        None,
+        "expense",
+        Some("Line 17"),
+        Some("1120S-19"),
+        "Accountant, lawyer, professional services",
+    ),
+    (
+        "Office Expense",
+        None,
+        "expense",
+        Some("Line 18"),
+        Some("1120S-19"),
+        "Office supplies, minor equipment",
+    ),
+    (
+        "Rent / Lease",
+        None,
+        "expense",
+        Some("Line 20b"),
+        Some("1120S-11"),
+        "Office rent, coworking",
+    ),
+    (
+        "Software & Subscriptions",
+        None,
+        "expense",
+        Some("Line 18/27a"),
+        Some("1120S-19"),
+        "SaaS tools, domain renewals, cloud services",
+    ),
+    (
+        "Hosting & Infrastructure",
+        None,
+        "expense",
+        Some("Line 18/27a"),
+        Some("1120S-19"),
+        "AWS, server costs, CDN",
+    ),
+    (
+        "Taxes & Licenses",
+        None,
+        "expense",
+        Some("Line 23"),
+        Some("1120S-12"),
+        "Business licenses, state fees",
+    ),
+    (
+        "Travel",
+        None,
+        "expense",
+        Some("Line 24a"),
+        Some("1120S-19"),
+        "Flights, hotels, conference travel",
+    ),
+    (
+        "Meals",
+        None,
+        "expense",
+        Some("Line 24b"),
+        Some("1120S-19"),
+        "Business meals (50% deductible)",
+    ),
+    (
+        "Utilities",
+        None,
+        "expense",
+        Some("Line 25"),
+        Some("1120S-19"),
+        "Internet, phone (business portion)",
+    ),
+    (
+        "Payroll — Wages",
+        None,
+        "expense",
+        Some("Line 26"),
+        Some("1120S-8"),
+        "Employee salaries (from Gusto)",
+    ),
+    (
+        "Payroll — Taxes",
+        None,
+        "expense",
+        Some("Line 23"),
+        Some("1120S-12"),
+        "Employer payroll taxes (from Gusto)",
+    ),
+    (
+        "Payroll — Benefits",
+        None,
+        "expense",
+        Some("Line 14"),
+        Some("1120S-18"),
+        "Health insurance, retirement (from Gusto)",
+    ),
+    (
+        "Bank & Merchant Fees",
+        None,
+        "expense",
+        Some("Line 27a"),
+        Some("1120S-19"),
+        "Stripe fees, bank charges, wire fees",
+    ),
+    (
+        "Education & Training",
+        None,
+        "expense",
+        Some("Line 27a"),
+        Some("1120S-19"),
+        "Courses, books, conferences",
+    ),
+    (
+        "Equipment",
+        None,
+        "expense",
+        Some("Line 13"),
+        Some("1120S-19"),
+        "Hardware, major purchases",
+    ),
+    (
+        "Home Office",
+        None,
+        "expense",
+        Some("Line 30"),
+        Some("1120S-19"),
+        "Simplified method or actual expenses",
+    ),
+    (
+        "Owner Draw / Distribution",
+        None,
+        "expense",
+        Some("Not deductible"),
+        Some("K-16d"),
+        "Owner payments, distributions",
+    ),
+    (
+        "Transfer",
+        None,
+        "expense",
+        Some("Not deductible"),
+        None,
+        "Transfers between own accounts",
+    ),
+    (
+        "Uncategorized",
+        None,
+        "expense",
+        Some("\u{2014}"),
+        None,
+        "Needs review",
+    ),
 ];
 
 pub fn get_connection(db_path: &Path) -> Result<Connection> {
@@ -217,11 +428,9 @@ pub fn init_db(conn: &Connection) -> Result<()> {
 }
 
 pub fn get_metadata(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM metadata WHERE key = ?1",
-        [key],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT value FROM metadata WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
     .ok()
 }
 
@@ -248,14 +457,27 @@ mod tests {
     fn test_init_db_creates_tables() {
         let (_dir, conn) = test_db();
         let tables: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            )
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
-        for expected in &["accounts", "categories", "transactions", "rules", "imports", "reconciliations", "metadata"] {
-            assert!(tables.contains(&expected.to_string()), "missing table: {expected}");
+        for expected in &[
+            "accounts",
+            "categories",
+            "transactions",
+            "rules",
+            "imports",
+            "reconciliations",
+            "metadata",
+        ] {
+            assert!(
+                tables.contains(&expected.to_string()),
+                "missing table: {expected}"
+            );
         }
     }
 
@@ -268,21 +490,34 @@ mod tests {
     #[test]
     fn test_init_db_seeds_categories() {
         let (_dir, conn) = test_db();
-        let count: i64 = conn.query_row("SELECT count(*) FROM categories", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
+            .unwrap();
         assert!(count >= 29, "expected at least 29 categories, got {count}");
     }
 
     #[test]
     fn test_income_and_expense_categories() {
         let (_dir, conn) = test_db();
-        let income: i64 = conn.query_row(
-            "SELECT count(*) FROM categories WHERE category_type = 'income'", [], |r| r.get(0),
-        ).unwrap();
-        let expense: i64 = conn.query_row(
-            "SELECT count(*) FROM categories WHERE category_type = 'expense'", [], |r| r.get(0),
-        ).unwrap();
+        let income: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM categories WHERE category_type = 'income'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let expense: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM categories WHERE category_type = 'expense'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(income >= 5, "expected >= 5 income categories, got {income}");
-        assert!(expense >= 20, "expected >= 20 expense categories, got {expense}");
+        assert!(
+            expense >= 20,
+            "expected >= 20 expense categories, got {expense}"
+        );
     }
 
     #[test]
@@ -372,9 +607,13 @@ mod tests {
     #[test]
     fn test_categories_have_form_line() {
         let (_dir, conn) = test_db();
-        let form_line: Option<String> = conn.query_row(
-            "SELECT form_line FROM categories WHERE name = 'Payroll — Wages'", [], |r| r.get(0),
-        ).unwrap();
+        let form_line: Option<String> = conn
+            .query_row(
+                "SELECT form_line FROM categories WHERE name = 'Payroll — Wages'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(form_line.as_deref(), Some("1120S-8"));
     }
 

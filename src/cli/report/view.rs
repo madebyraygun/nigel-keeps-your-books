@@ -15,8 +15,8 @@ use crate::fmt::money;
 use crate::reports;
 use crate::settings::get_data_dir;
 use crate::tui::{
-    money_span, ReportView, ReportViewAction, run_report_view, FOOTER_STYLE, HEADER_STYLE,
-    AMOUNT_NEG_STYLE, AMOUNT_POS_STYLE,
+    money_span, run_report_view, ReportView, ReportViewAction, AMOUNT_NEG_STYLE, AMOUNT_POS_STYLE,
+    FOOTER_STYLE, HEADER_STYLE,
 };
 
 // ---------------------------------------------------------------------------
@@ -42,8 +42,18 @@ pub(crate) enum PeriodMode {
 }
 
 const MONTH_NAMES: &[&str] = &[
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 // ---------------------------------------------------------------------------
@@ -69,16 +79,22 @@ pub fn dispatch(cmd: ReportCommands) -> Result<()> {
 /// Does NOT handle Register (which uses RegisterBrowser) or All (export-only).
 pub(crate) fn build_view(cmd: &ReportCommands) -> Result<Box<dyn ReportView>> {
     match cmd {
-        ReportCommands::Pnl { month, year, from_date, to_date, .. } => {
-            build_pnl(month.clone(), *year, from_date.clone(), to_date.clone())
-        }
+        ReportCommands::Pnl {
+            month,
+            year,
+            from_date,
+            to_date,
+            ..
+        } => build_pnl(month.clone(), *year, from_date.clone(), to_date.clone()),
         ReportCommands::Expenses { month, year, .. } => build_expenses(month.clone(), *year),
         ReportCommands::Tax { year, .. } => build_tax(*year),
         ReportCommands::Cashflow { month, year, .. } => build_cashflow(month.clone(), *year),
         ReportCommands::Flagged { .. } => build_flagged(),
         ReportCommands::Balance { .. } => build_balance(),
         ReportCommands::K1 { year, .. } => build_k1(*year),
-        _ => Err(crate::error::NigelError::Other("Unsupported report for view mode".into())),
+        _ => Err(crate::error::NigelError::Other(
+            "Unsupported report for view mode".into(),
+        )),
     }
 }
 
@@ -87,9 +103,7 @@ pub(crate) fn build_view(cmd: &ReportCommands) -> Result<Box<dyn ReportView>> {
 // ---------------------------------------------------------------------------
 
 const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
-const SECTION_STYLE: Style = Style::new()
-    .fg(Color::Yellow)
-    .add_modifier(Modifier::BOLD);
+const SECTION_STYLE: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 const HEADER_ROW_STYLE: Style = Style::new()
     .fg(Color::DarkGray)
     .add_modifier(Modifier::BOLD);
@@ -164,9 +178,7 @@ impl TableReportView {
             DateGranularity::MonthAndYear => match self.period_mode {
                 PeriodMode::Year => format!(" \u{2014} FY {}", self.year),
                 PeriodMode::Month => {
-                    let name = MONTH_NAMES
-                        .get((self.month - 1) as usize)
-                        .unwrap_or(&"???");
+                    let name = MONTH_NAMES.get((self.month - 1) as usize).unwrap_or(&"???");
                     format!(" \u{2014} {} {}", name, self.year)
                 }
             },
@@ -214,14 +226,13 @@ impl TableReportView {
 impl ReportView for TableReportView {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
-        let [header_area, sep_area, content_area, footer_area] =
-            Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Fill(1),
-                Constraint::Length(1),
-            ])
-            .areas(area);
+        let [header_area, sep_area, content_area, footer_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(area);
 
         // Header (with period label for date-navigable reports)
         frame.render_widget(
@@ -257,11 +268,7 @@ impl ReportView for TableReportView {
         // Footer
         let max = self.rows.len().saturating_sub(visible);
         let pos_info = if max > 0 {
-            format!(
-                "  line {}/{}",
-                self.offset + 1,
-                self.rows.len()
-            )
+            format!("  line {}/{}", self.offset + 1, self.rows.len())
         } else {
             String::new()
         };
@@ -349,10 +356,7 @@ fn bold_cell(s: impl Into<String>) -> Cell<'static> {
 }
 
 fn section_row(label: &str, num_cols: usize) -> Row<'static> {
-    let mut cells: Vec<Cell> = vec![Cell::from(Span::styled(
-        label.to_string(),
-        SECTION_STYLE,
-    ))];
+    let mut cells: Vec<Cell> = vec![Cell::from(Span::styled(label.to_string(), SECTION_STYLE))];
     for _ in 1..num_cols {
         cells.push(Cell::from(""));
     }
@@ -420,18 +424,18 @@ pub(crate) fn build_pnl(
         rows.push(blank_row(2));
     }
 
-    rows.push(Row::new([
-        bold_cell("NET"),
-        money_cell(data.net),
-    ]));
+    rows.push(Row::new([bold_cell("NET"), money_cell(data.net)]));
 
-    let effective_year = year.or(my).unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
-    Ok(Box::new(TableReportView::new(
-        "Profit & Loss",
-        header,
-        rows,
-        widths,
-    ).with_date(DateGranularity::MonthAndYear, effective_year, mm.map(|m| m as u32))))
+    let effective_year = year
+        .or(my)
+        .unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
+    Ok(Box::new(
+        TableReportView::new("Profit & Loss", header, rows, widths).with_date(
+            DateGranularity::MonthAndYear,
+            effective_year,
+            mm,
+        ),
+    ))
 }
 
 pub(crate) fn build_expenses(
@@ -476,14 +480,12 @@ pub(crate) fn build_expenses(
         rows.push(section_row("TOP VENDORS", 4));
         rows.push(blank_row(4));
         // Sub-header for vendor section
-        rows.push(
-            Row::new([
-                Cell::from(Span::styled("Vendor", HEADER_ROW_STYLE)),
-                Cell::from(Span::styled("Amount", HEADER_ROW_STYLE)),
-                Cell::from(Span::styled("Count", HEADER_ROW_STYLE)),
-                Cell::from(""),
-            ])
-        );
+        rows.push(Row::new([
+            Cell::from(Span::styled("Vendor", HEADER_ROW_STYLE)),
+            Cell::from(Span::styled("Amount", HEADER_ROW_STYLE)),
+            Cell::from(Span::styled("Count", HEADER_ROW_STYLE)),
+            Cell::from(""),
+        ]));
         for v in &data.top_vendors {
             rows.push(Row::new([
                 text_cell(&v.vendor),
@@ -494,13 +496,16 @@ pub(crate) fn build_expenses(
         }
     }
 
-    let effective_year = year.or(my).unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
-    Ok(Box::new(TableReportView::new(
-        "Expense Breakdown",
-        header,
-        rows,
-        widths,
-    ).with_date(DateGranularity::MonthAndYear, effective_year, mm.map(|m| m as u32))))
+    let effective_year = year
+        .or(my)
+        .unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
+    Ok(Box::new(
+        TableReportView::new("Expense Breakdown", header, rows, widths).with_date(
+            DateGranularity::MonthAndYear,
+            effective_year,
+            mm,
+        ),
+    ))
 }
 
 pub(crate) fn build_tax(year: Option<i32>) -> Result<Box<dyn ReportView>> {
@@ -534,12 +539,13 @@ pub(crate) fn build_tax(year: Option<i32>) -> Result<Box<dyn ReportView>> {
     }
 
     let effective_year = year.unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
-    Ok(Box::new(TableReportView::new(
-        "Tax Summary",
-        header,
-        rows,
-        widths,
-    ).with_date(DateGranularity::YearOnly, effective_year, None)))
+    Ok(Box::new(
+        TableReportView::new("Tax Summary", header, rows, widths).with_date(
+            DateGranularity::YearOnly,
+            effective_year,
+            None,
+        ),
+    ))
 }
 
 pub(crate) fn build_cashflow(
@@ -573,13 +579,16 @@ pub(crate) fn build_cashflow(
         ]));
     }
 
-    let effective_year = year.or(my).unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
-    Ok(Box::new(TableReportView::new(
-        "Cash Flow",
-        header,
-        rows,
-        widths,
-    ).with_date(DateGranularity::MonthAndYear, effective_year, mm.map(|m| m as u32))))
+    let effective_year = year
+        .or(my)
+        .unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
+    Ok(Box::new(
+        TableReportView::new("Cash Flow", header, rows, widths).with_date(
+            DateGranularity::MonthAndYear,
+            effective_year,
+            mm,
+        ),
+    ))
 }
 
 pub(crate) fn build_flagged() -> Result<Box<dyn ReportView>> {
@@ -692,10 +701,8 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         .style(HEADER_ROW_STYLE)
         .bottom_margin(1);
 
-    let mut rows = Vec::new();
-
     // Income Summary
-    rows.push(section_row("INCOME SUMMARY", 3));
+    let mut rows = vec![section_row("INCOME SUMMARY", 3)];
     rows.push(Row::new([
         text_cell("  Gross Receipts"),
         Cell::from(""),
@@ -822,12 +829,15 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
     }
 
     let effective_year = year.unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
-    Ok(Box::new(TableReportView::new(
-        "K-1 Preparation Worksheet (Form 1120-S)",
-        header,
-        rows,
-        widths,
-    ).with_date(DateGranularity::YearOnly, effective_year, None)))
+    Ok(Box::new(
+        TableReportView::new(
+            "K-1 Preparation Worksheet (Form 1120-S)",
+            header,
+            rows,
+            widths,
+        )
+        .with_date(DateGranularity::YearOnly, effective_year, None),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +904,9 @@ fn register_standalone(cmd: ReportCommands) -> Result<()> {
                 if key.kind != crossterm::event::KeyEventKind::Press {
                     continue;
                 }
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
                     && key.code == KeyCode::Char('c')
                 {
                     break Ok(());

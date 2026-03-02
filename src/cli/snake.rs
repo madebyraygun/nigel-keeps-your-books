@@ -446,7 +446,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..100 {
             let val = SnakeGame::random_food_value(&mut rng);
-            assert!(val >= 1.0 && val <= 9.99);
+            assert!((1.0..=9.99).contains(&val));
         }
     }
 

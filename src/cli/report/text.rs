@@ -70,8 +70,12 @@ pub fn register(
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
     let data = reports::get_register(
-        &conn, y, mm,
-        from_date.as_deref(), to_date.as_deref(), account.as_deref(),
+        &conn,
+        y,
+        mm,
+        from_date.as_deref(),
+        to_date.as_deref(),
+        account.as_deref(),
     )?;
     Ok(with_header(&company, format_register(&data)))
 }
@@ -219,7 +223,15 @@ pub fn format_register(data: &reports::RegisterReport) -> String {
     }
 
     let mut table = Table::new();
-    table.set_header(vec!["ID", "Date", "Description", "Amount", "Category", "Vendor", "Account"]);
+    table.set_header(vec![
+        "ID",
+        "Date",
+        "Description",
+        "Amount",
+        "Category",
+        "Vendor",
+        "Account",
+    ]);
     for r in &data.rows {
         let amt = if r.amount < 0.0 {
             money(r.amount.abs()).red().to_string()
@@ -289,7 +301,10 @@ pub fn format_balance(data: &reports::BalanceReport) -> String {
         Cell::new(""),
         Cell::new(money(data.total)),
     ]);
-    format!("Cash Position\n{table}\n\nYTD Net Income: {}", money(data.ytd_net_income))
+    format!(
+        "Cash Position\n{table}\n\nYTD Net Income: {}",
+        money(data.ytd_net_income)
+    )
 }
 
 pub fn format_k1(data: &reports::K1PrepReport) -> String {
@@ -298,16 +313,30 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
     // 1. Income Summary
     let mut summary = Table::new();
     summary.set_header(vec!["Item", "Amount"]);
-    summary.add_row(vec![Cell::new("Gross Receipts"), Cell::new(money(data.gross_receipts))]);
-    summary.add_row(vec![Cell::new("Other Income"), Cell::new(money(data.other_income))]);
-    summary.add_row(vec![Cell::new("Total Deductions"), Cell::new(money(data.total_deductions))]);
+    summary.add_row(vec![
+        Cell::new("Gross Receipts"),
+        Cell::new(money(data.gross_receipts)),
+    ]);
+    summary.add_row(vec![
+        Cell::new("Other Income"),
+        Cell::new(money(data.other_income)),
+    ]);
+    summary.add_row(vec![
+        Cell::new("Total Deductions"),
+        Cell::new(money(data.total_deductions)),
+    ]);
     let obi_label = if data.ordinary_business_income >= 0.0 {
         "Ordinary Business Income".green().bold().to_string()
     } else {
         "Ordinary Business Loss".red().bold().to_string()
     };
-    summary.add_row(vec![Cell::new(obi_label), Cell::new(money(data.ordinary_business_income))]);
-    out.push_str(&format!("K-1 Preparation Worksheet (Form 1120-S)\n\nIncome Summary\n{summary}"));
+    summary.add_row(vec![
+        Cell::new(obi_label),
+        Cell::new(money(data.ordinary_business_income)),
+    ]);
+    out.push_str(&format!(
+        "K-1 Preparation Worksheet (Form 1120-S)\n\nIncome Summary\n{summary}"
+    ));
 
     // 2. Deductions by Line
     if !data.deduction_lines.is_empty() {
@@ -342,7 +371,11 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
         let mut od = Table::new();
         od.set_header(vec!["Category", "Full Amount", "Deductible"]);
         for item in &data.other_deductions {
-            let note = if item.deductible < item.total { " (50%)" } else { "" };
+            let note = if item.deductible < item.total {
+                " (50%)"
+            } else {
+                ""
+            };
             od.add_row(vec![
                 Cell::new(format!("{}{}", item.category_name, note)),
                 Cell::new(money(item.total)),
@@ -391,7 +424,10 @@ mod tests {
 
     #[test]
     fn with_header_prepends_when_set() {
-        assert_eq!(with_header("Acme Corp", "Report".into()), "Acme Corp\n\nReport");
+        assert_eq!(
+            with_header("Acme Corp", "Report".into()),
+            "Acme Corp\n\nReport"
+        );
     }
 
     #[test]
