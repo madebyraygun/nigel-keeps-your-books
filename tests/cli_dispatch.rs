@@ -129,13 +129,14 @@ fn report_pnl_text_export() {
     let env = TestEnv::new();
     env.init_and_demo();
 
+    let year = chrono::Local::now().format("%Y").to_string();
     let output_path = env.home.path().join("pnl-report.txt");
     env.cmd()
         .args([
             "report",
             "pnl",
             "--year",
-            "2025",
+            &year,
             "--mode",
             "export",
             "--format",
@@ -157,13 +158,14 @@ fn report_all_text_export() {
     let env = TestEnv::new();
     env.init_and_demo();
 
+    let year = chrono::Local::now().format("%Y").to_string();
     let output_dir = env.home.path().join("all-reports");
     env.cmd()
         .args([
             "report",
             "all",
             "--year",
-            "2025",
+            &year,
             "--format",
             "text",
             "--output-dir",
@@ -206,7 +208,8 @@ fn import_nonexistent_file() {
     env.cmd()
         .args(["import", "nonexistent.csv", "--account", "BofA Checking"])
         .assert()
-        .failure();
+        .failure()
+        .stderr(predicate::str::contains("No such file or directory"));
 }
 
 #[test]
@@ -271,9 +274,7 @@ fn init_without_db_then_status() {
         .arg("status")
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("Transactions:").and(predicate::str::contains("0")),
-        );
+        .stdout(predicate::str::contains("Transactions:  0"));
 }
 
 #[test]
