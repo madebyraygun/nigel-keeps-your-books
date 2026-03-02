@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -10,13 +11,13 @@ use crate::models::ParsedRow;
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub fn parse_amount(raw: &str) -> f64 {
+pub fn parse_amount(raw: &str) -> Option<f64> {
     let s = raw.replace(',', "").replace('"', "").replace('$', "");
     let s = s.trim();
     if let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
-        return -inner.trim().parse::<f64>().unwrap_or(0.0);
+        return Some(-inner.trim().parse::<f64>().ok()?);
     }
-    s.parse().unwrap_or(0.0)
+    s.parse().ok()
 }
 
 pub fn parse_date_mdy(raw: &str) -> Option<String> {
@@ -120,13 +121,14 @@ impl ImporterKind {
         }
     }
 
-    pub fn parse(&self, file_path: &Path) -> Result<Vec<ParsedRow>> {
+    pub fn parse(&self, file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
         match self {
             Self::BofaChecking => parse_bofa_checking(file_path),
             Self::BofaCreditCard => parse_bofa_credit_card(file_path),
             Self::BofaLineOfCredit => parse_bofa_line_of_credit(file_path),
             #[cfg(feature = "gusto")]
-            Self::GustoPayroll => parse_gusto_payroll(file_path),
+            // Gusto extracts aggregate totals only; per-row malformed tracking is not applicable.
+            Self::GustoPayroll => parse_gusto_payroll(file_path).map(|rows| (rows, 0)),
         }
     }
 
@@ -182,6 +184,7 @@ pub fn get_for_file(account_type: &str, file_path: &Path) -> Option<ImporterKind
 pub struct ImportResult {
     pub imported: usize,
     pub skipped: usize,
+    pub malformed: usize,
     pub duplicate_file: bool,
 }
 
@@ -208,6 +211,7 @@ pub fn import_file(
             return Ok(ImportResult {
                 imported: 0,
                 skipped: 0,
+                malformed: 0,
                 duplicate_file: true,
             });
         }
@@ -220,21 +224,7 @@ pub fn import_file(
             .ok_or_else(|| NigelError::NoImporter(account_type.clone()))?
     };
 
-    let parsed_rows = importer.parse(file_path)?;
-
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for row in &parsed_rows {
-        if is_duplicate_row(conn, account_id, row) {
-            skipped += 1;
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, 1, 'No matching rule')",
-            rusqlite::params![account_id, row.date, row.description, row.amount],
-        )?;
-        imported += 1;
-    }
+    let (parsed_rows, malformed) = importer.parse(file_path)?;
 
     let dates: Vec<&str> = parsed_rows.iter().map(|r| r.date.as_str()).collect();
     let min_date = dates.iter().min().copied();
@@ -250,6 +240,21 @@ pub fn import_file(
             checksum,
         ],
     )?;
+    let import_id = conn.last_insert_rowid();
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    for row in &parsed_rows {
+        if is_duplicate_row(conn, account_id, row) {
+            skipped += 1;
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, import_id, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, ?5, 1, 'No matching rule')",
+            rusqlite::params![account_id, row.date, row.description, row.amount, import_id],
+        )?;
+        imported += 1;
+    }
 
     if importer.has_post_import() {
         importer.post_import(conn, account_id, &parsed_rows)?;
@@ -258,6 +263,7 @@ pub fn import_file(
     Ok(ImportResult {
         imported,
         skipped,
+        malformed,
         duplicate_file: false,
     })
 }
@@ -286,10 +292,11 @@ fn detect_bofa_checking(file_path: &Path) -> bool {
     false
 }
 
-fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
+fn parse_bofa_checking(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     let mut rdr = create_csv_reader(file_path)?;
     let mut rows = Vec::new();
     let mut found_header = false;
+    let mut malformed = 0usize;
 
     for result in rdr.records() {
         let Ok(record) = result else { continue };
@@ -312,14 +319,17 @@ fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
         if description.is_empty() || description.contains("Beginning balance") {
             continue;
         }
-        let amount = parse_amount(&record[2]);
+        let Some(amount) = parse_amount(&record[2]) else {
+            malformed += 1;
+            continue;
+        };
         rows.push(ParsedRow {
             date,
             description,
             amount,
         });
     }
-    Ok(rows)
+    Ok((rows, malformed))
 }
 
 // ---------------------------------------------------------------------------
@@ -327,13 +337,22 @@ fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
 // ---------------------------------------------------------------------------
 
 fn detect_bofa_credit_card(file_path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(file_path) else {
+    let Ok(file) = std::fs::File::open(file_path) else {
         return false;
     };
-    content.contains("CardHolder Name")
+    let reader = std::io::BufReader::new(file);
+    // BofA credit card CSVs put the "CardHolder Name" header in the first
+    // 1-3 rows, so scanning the first 5 lines is sufficient for detection.
+    for line in reader.lines().take(5) {
+        let Ok(line) = line else { continue };
+        if line.contains("CardHolder Name") {
+            return true;
+        }
+    }
+    false
 }
 
-fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
+fn parse_bofa_credit_card(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     parse_bofa_card_format(file_path, true)
 }
 
@@ -341,17 +360,18 @@ fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
 // BofA Line of Credit parser
 // ---------------------------------------------------------------------------
 
-fn parse_bofa_line_of_credit(file_path: &Path) -> Result<Vec<ParsedRow>> {
+fn parse_bofa_line_of_credit(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     parse_bofa_card_format(file_path, false)
 }
 
 /// Shared parser for BofA Credit Card and Line of Credit CSV formats.
 /// - `has_type_column: true`  → Credit Card (D/C sign logic)
 /// - `has_type_column: false` → Line of Credit (always negate)
-fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec<ParsedRow>> {
+fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<(Vec<ParsedRow>, usize)> {
     let mut rdr = create_csv_reader(file_path)?;
     let mut rows = Vec::new();
     let mut found_header = false;
+    let mut malformed = 0usize;
     let (mut idx_date, mut idx_desc, mut idx_amount, mut idx_type) = (3, 5, 6, 9);
     let mut header_field_count: usize = 0;
 
@@ -404,18 +424,25 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec
             continue;
         }
         let amount_str = record[adj_amount].trim();
+        // Pre-validation catches obviously non-numeric strings (e.g. text fields);
+        // parse_amount catches edge cases that pass character filtering but fail f64 parsing (e.g. ".").
         if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
+            malformed += 1;
             continue;
         }
+        let Some(parsed) = parse_amount(amount_str) else {
+            malformed += 1;
+            continue;
+        };
         let amount = if has_type_column {
             let txn_type = record[adj_type].trim();
             if txn_type == "D" {
-                -parse_amount(amount_str).abs()
+                -parsed.abs()
             } else {
-                parse_amount(amount_str).abs()
+                parsed.abs()
             }
         } else {
-            -parse_amount(amount_str)
+            -parsed
         };
         rows.push(ParsedRow {
             date,
@@ -423,7 +450,7 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec
             amount,
         });
     }
-    Ok(rows)
+    Ok((rows, malformed))
 }
 
 // ---------------------------------------------------------------------------
@@ -593,24 +620,24 @@ mod tests {
 
     #[test]
     fn test_parse_amount() {
-        assert_eq!(parse_amount("1,234.56"), 1234.56);
-        assert_eq!(parse_amount("\"500.00\""), 500.0);
-        assert_eq!(parse_amount("  -42.50  "), -42.5);
-        assert_eq!(parse_amount("0"), 0.0);
-        assert_eq!(parse_amount("not_a_number"), 0.0);
+        assert_eq!(parse_amount("1,234.56"), Some(1234.56));
+        assert_eq!(parse_amount("\"500.00\""), Some(500.0));
+        assert_eq!(parse_amount("  -42.50  "), Some(-42.5));
+        assert_eq!(parse_amount("0"), Some(0.0));
+        assert_eq!(parse_amount("not_a_number"), None);
     }
 
     #[test]
     fn test_parse_amount_parenthesized_negatives() {
-        assert_eq!(parse_amount("(500.00)"), -500.0);
-        assert_eq!(parse_amount("(1,234.56)"), -1234.56);
-        assert_eq!(parse_amount("\"(50.00)\""), -50.0);
+        assert_eq!(parse_amount("(500.00)"), Some(-500.0));
+        assert_eq!(parse_amount("(1,234.56)"), Some(-1234.56));
+        assert_eq!(parse_amount("\"(50.00)\""), Some(-50.0));
     }
 
     #[test]
     fn test_parse_amount_currency_symbol() {
-        assert_eq!(parse_amount("$1,234.56"), 1234.56);
-        assert_eq!(parse_amount("-$50.00"), -50.0);
+        assert_eq!(parse_amount("$1,234.56"), Some(1234.56));
+        assert_eq!(parse_amount("-$50.00"), Some(-50.0));
     }
 
     #[test]
@@ -708,7 +735,7 @@ Date,Description,Amount,Running Bal.
 01/31/2025,BKOFAMERICA MOBILE DEPOSIT,\"2,000.00\",\"32,742.87\"
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaChecking.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaChecking.parse(&path).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].amount, 2000.0);
     }
@@ -727,7 +754,7 @@ Date,Description,Amount,Running Bal.
 01/17/2025,STRIPE PAYOUT,2500.00,3450.00
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaChecking.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaChecking.parse(&path).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].description, "ADOBE CREATIVE");
         assert_eq!(rows[0].amount, -50.0);
@@ -747,7 +774,7 @@ RAYGUN DESIGN, LLC,1234,01/16/2025,01/16/2025,-75.50,Travel,DELTA AIRLINES,456 A
 RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,200.00,Refund,STORE REFUND,789 Oak Ave,Portland OR,REF003,C
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 3, "all 3 rows should be parsed");
         assert_eq!(rows[0].date, "2025-01-15");
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
@@ -768,7 +795,7 @@ CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Pay
 RAYGUN DESIGN LLC,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON PURCHASE,123 Main St,Seattle WA,REF001,D
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
         assert_eq!(rows[0].amount, -50.0);
@@ -784,7 +811,7 @@ RAYGUN DESIGN, LLC,5678,02/01/2025,02/01/2025,-1000.00,Transfer,LINE OF CREDIT D
 RAYGUN DESIGN, LLC,5678,02/05/2025,02/05/2025,500.00,Payment,LOC PAYMENT,100 Bank St,Boston MA,REF102
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaLineOfCredit.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaLineOfCredit.parse(&path).unwrap();
         assert_eq!(rows.len(), 2, "all 2 rows should be parsed");
         assert_eq!(rows[0].date, "2025-02-01");
         assert_eq!(rows[0].description, "LINE OF CREDIT DRAW");
@@ -803,7 +830,7 @@ CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Pay
 SMITH, JONES, AND ASSOCIATES,1234,01/15/2025,01/15/2025,-99.00,Office,STAPLES,100 Main,City ST,REF001,D
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].description, "STAPLES");
         assert_eq!(rows[0].amount, -99.0);
@@ -821,7 +848,7 @@ JOHN DOE,1234,01/16/2025,01/16/2025,-30.00,Food,RESTAURANT,456 Elm St,Portland O
 RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak Ave,City ST,REF003,C
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 3, "all 3 rows should be parsed");
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
         assert_eq!(rows[0].amount, -50.0);
@@ -829,6 +856,22 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak
         assert_eq!(rows[1].amount, -30.0);
         assert_eq!(rows[2].description, "STORE REFUND");
         assert_eq!(rows[2].amount, 100.0);
+    }
+
+    #[test]
+    fn test_import_skips_malformed_amount_rows() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
+            ("01/15/2025", "VALID PAYMENT", "-100.00"),
+            ("01/16/2025", "BAD AMOUNT ROW", "not_a_number"),
+            ("01/17/2025", "ANOTHER VALID", "250.00"),
+        ]);
+        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        assert_eq!(result.imported, 2, "malformed amount row should be skipped");
+        assert_eq!(result.malformed, 1, "one row should be counted as malformed");
+        let count: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]
@@ -843,12 +886,45 @@ CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Pay
 JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seattle WA,REF001,D
 ";
         std::fs::write(&path, content).unwrap();
-        let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        let (rows, _malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         // Row has 12 fields (one extra from Payee comma) but CardHolder Name
         // has no comma, so offset=1 shifts all indices — the adjusted date
         // column now points at "01/15/2025" → date still looks valid, but
         // adjusted desc points at "Shopping" and adjusted amount at "AMAZON".
         // Amount validation rejects "AMAZON" as non-numeric, so row is skipped.
         assert_eq!(rows.len(), 0, "row with misaligned comma should be skipped");
+    }
+
+    #[test]
+    fn test_import_file_links_transactions_to_import_batch() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
+            ("01/15/2025", "PAYMENT ONE", "-100.00"),
+        ]);
+        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let import_id: i64 = conn.query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0)).unwrap();
+        let tx_import_id: i64 = conn
+            .query_row("SELECT import_id FROM transactions LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tx_import_id, import_id);
+    }
+
+    #[test]
+    fn test_bofa_credit_card_malformed_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cc.csv");
+        let content = "\
+CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Payee,Address,City/State,Reference Number,Type
+RAYGUN DESIGN LLC,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON PURCHASE,123 Main St,Seattle WA,REF001,D
+RAYGUN DESIGN LLC,1234,01/16/2025,01/16/2025,NOT_A_NUMBER,Food,RESTAURANT,456 Elm St,Portland OR,REF002,D
+RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oak Ave,City ST,REF003,D
+";
+        std::fs::write(&path, content).unwrap();
+        let (rows, malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        assert_eq!(rows.len(), 2, "only valid rows should be imported");
+        assert_eq!(malformed, 1, "one row should be counted as malformed");
+        assert_eq!(rows[0].description, "AMAZON PURCHASE");
+        assert_eq!(rows[1].description, "DELTA AIRLINES");
     }
 }

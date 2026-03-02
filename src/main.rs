@@ -6,6 +6,7 @@ mod effects;
 mod error;
 mod fmt;
 mod importer;
+mod migrations;
 mod models;
 mod tui;
 #[cfg(feature = "pdf")]

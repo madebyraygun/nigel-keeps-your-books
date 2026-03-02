@@ -374,7 +374,7 @@ impl Onboarding {
         field_idx: usize,
         masked: bool,
     ) {
-        let label_width = 16u16;
+        let label_width = 26u16;
         let [label_area, input_area] = Layout::horizontal([
             Constraint::Length(label_width),
             Constraint::Fill(1),

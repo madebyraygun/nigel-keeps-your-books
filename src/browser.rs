@@ -88,7 +88,8 @@ impl RegisterBrowser {
         if let Some(i) = idx {
             // Position that row on screen (offset so it's visible, near middle)
             self.offset = i.saturating_sub(PAGE_SIZE / 2);
-            self.selected = i - self.offset;
+            let max_sel = self.visible_count.saturating_sub(1);
+            self.selected = (i - self.offset).min(max_sel);
         } else if !self.rows.is_empty() {
             // All transactions are in the future — start at the beginning
             self.offset = 0;
@@ -216,6 +217,7 @@ impl RegisterBrowser {
         }
 
         self.visible_count = vis.max(1);
+        self.selected = self.selected.min(self.visible_count.saturating_sub(1));
 
         // Table column constraints
         let widths: Vec<Constraint> = if narrow {
@@ -984,5 +986,40 @@ mod tests {
 
         browser.apply_flag_toggle_to_local_row(true);
         assert!(browser.rows[0].is_flagged);
+    }
+
+    #[test]
+    fn test_scroll_to_today_clamps_selected() {
+        // Build rows with future dates so scroll_to_today picks the last row
+        // with date <= today, which will be far into the list.
+        let mut rows: Vec<RegisterRow> = (0..50)
+            .map(|i| RegisterRow {
+                id: (i + 1) as i64,
+                date: format!("2025-06-{:02}", (i % 28) + 1),
+                description: format!("Txn {}", i + 1),
+                amount: 100.0,
+                category: None,
+                category_id: None,
+                vendor: None,
+                account_name: "Test".to_string(),
+                is_flagged: false,
+            })
+            .collect();
+        // Ensure there's a row matching "today" far into the list
+        rows[45].date = Local::now().format("%Y-%m-%d").to_string();
+
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        // Simulate a short terminal by reducing visible_count
+        browser.visible_count = 5;
+
+        browser.scroll_to_today();
+
+        // selected must not exceed visible_count - 1
+        assert!(
+            browser.selected < browser.visible_count,
+            "selected {} should be < visible_count {}",
+            browser.selected,
+            browser.visible_count,
+        );
     }
 }
