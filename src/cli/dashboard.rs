@@ -807,6 +807,10 @@ pub fn run() -> Result<()> {
                 onboarding_company = Some(result.company_name);
             }
             post_setup_action = Some(result.action);
+
+            if let Some(ref pw) = result.password {
+                crate::db::set_db_password(Some(pw.clone()));
+            }
         }
     }
 
@@ -817,6 +821,12 @@ pub fn run() -> Result<()> {
     std::fs::create_dir_all(data_dir.join("exports"))?;
     std::fs::create_dir_all(data_dir.join("snapshots"))?;
     std::fs::create_dir_all(data_dir.join("backups"))?;
+    if !is_first_run {
+        let db_path = data_dir.join("nigel.db");
+        if db_path.exists() {
+            crate::db::prompt_password_if_needed(&db_path)?;
+        }
+    }
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
     crate::db::init_db(&conn)?;
 
