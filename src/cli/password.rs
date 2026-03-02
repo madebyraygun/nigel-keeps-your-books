@@ -6,12 +6,13 @@ use crate::settings::get_data_dir;
 
 /// Encrypt an unencrypted database with a new password.
 /// Uses ATTACH + sqlcipher_export since the backup API requires matching keys.
-fn encrypt_database(db_path: &Path, new_password: &str) -> Result<()> {
+pub fn encrypt_database(db_path: &Path, new_password: &str) -> Result<()> {
     let tmp_path = db_path.with_extension("db.encrypting");
+    let tmp_str = tmp_path.to_string_lossy();
     let conn = open_connection(db_path, None)?;
     conn.execute(
         "ATTACH DATABASE ?1 AS encrypted KEY ?2",
-        rusqlite::params![tmp_path.to_str().unwrap(), new_password],
+        rusqlite::params![&*tmp_str, new_password],
     )?;
     conn.execute_batch("SELECT sqlcipher_export('encrypted');")?;
     conn.execute_batch("DETACH DATABASE encrypted;")?;
@@ -24,13 +25,14 @@ fn encrypt_database(db_path: &Path, new_password: &str) -> Result<()> {
 
 /// Decrypt an encrypted database (remove password).
 /// Uses ATTACH + sqlcipher_export since the backup API requires matching keys.
-fn decrypt_database(db_path: &Path, current_password: &str) -> Result<()> {
+pub fn decrypt_database(db_path: &Path, current_password: &str) -> Result<()> {
     let tmp_path = db_path.with_extension("db.decrypting");
+    let tmp_str = tmp_path.to_string_lossy();
     let conn = open_connection(db_path, Some(current_password))?;
     conn.execute_batch("SELECT count(*) FROM sqlite_master;")?;
     conn.execute(
         "ATTACH DATABASE ?1 AS plaintext KEY ''",
-        rusqlite::params![tmp_path.to_str().unwrap()],
+        rusqlite::params![&*tmp_str],
     )?;
     conn.execute_batch("SELECT sqlcipher_export('plaintext');")?;
     conn.execute_batch("DETACH DATABASE plaintext;")?;
@@ -42,7 +44,7 @@ fn decrypt_database(db_path: &Path, current_password: &str) -> Result<()> {
 }
 
 /// Change the password on an already-encrypted database.
-fn rekey_database(db_path: &Path, current_password: &str, new_password: &str) -> Result<()> {
+pub fn rekey_database(db_path: &Path, current_password: &str, new_password: &str) -> Result<()> {
     let conn = open_connection(db_path, Some(current_password))?;
     conn.execute_batch("SELECT count(*) FROM sqlite_master;")?;
     conn.pragma_update(None, "rekey", new_password)?;

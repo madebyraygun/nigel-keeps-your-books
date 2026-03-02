@@ -127,55 +127,21 @@ impl PasswordManager {
 
     fn do_encrypt(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
         let pw = self.new_pw.trim();
-        let tmp = db_path.with_extension("db.encrypting");
-        let conn = db::open_connection(db_path, None).map_err(|e| e.to_string())?;
-        conn.execute(
-            "ATTACH DATABASE ?1 AS encrypted KEY ?2",
-            rusqlite::params![tmp.to_str().unwrap(), pw],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute_batch("SELECT sqlcipher_export('encrypted');")
-            .map_err(|e| e.to_string())?;
-        conn.execute_batch("DETACH DATABASE encrypted;")
-            .map_err(|e| e.to_string())?;
-        drop(conn);
-        let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
-        let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
-        std::fs::rename(&tmp, db_path).map_err(|e| e.to_string())?;
+        super::password::encrypt_database(db_path, pw).map_err(|e| e.to_string())?;
         db::set_db_password(Some(pw.to_string()));
         Ok("Database encrypted successfully.".into())
     }
 
     fn do_change(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
-        let conn = db::open_connection(db_path, Some(self.current_pw.trim()))
-            .map_err(|e| e.to_string())?;
-        conn.execute_batch("SELECT count(*) FROM sqlite_master;")
-            .map_err(|_| "Current password is incorrect.".to_string())?;
-        conn.pragma_update(None, "rekey", self.new_pw.trim())
+        super::password::rekey_database(db_path, self.current_pw.trim(), self.new_pw.trim())
             .map_err(|e| e.to_string())?;
         db::set_db_password(Some(self.new_pw.trim().to_string()));
         Ok("Password changed successfully.".into())
     }
 
     fn do_remove(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
-        let tmp = db_path.with_extension("db.decrypting");
-        let conn = db::open_connection(db_path, Some(self.current_pw.trim()))
+        super::password::decrypt_database(db_path, self.current_pw.trim())
             .map_err(|e| e.to_string())?;
-        conn.execute_batch("SELECT count(*) FROM sqlite_master;")
-            .map_err(|_| "Current password is incorrect.".to_string())?;
-        conn.execute(
-            "ATTACH DATABASE ?1 AS plaintext KEY ''",
-            rusqlite::params![tmp.to_str().unwrap()],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute_batch("SELECT sqlcipher_export('plaintext');")
-            .map_err(|e| e.to_string())?;
-        conn.execute_batch("DETACH DATABASE plaintext;")
-            .map_err(|e| e.to_string())?;
-        drop(conn);
-        let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
-        let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
-        std::fs::rename(&tmp, db_path).map_err(|e| e.to_string())?;
         db::set_db_password(None);
         Ok("Database decrypted. Password removed.".into())
     }

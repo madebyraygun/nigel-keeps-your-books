@@ -155,16 +155,20 @@ pub fn open_connection(db_path: &Path, password: Option<&str>) -> Result<Connect
 
 /// Check whether a database file is encrypted (requires a password to open).
 /// Returns false for nonexistent files (they will be created fresh).
+/// Detection uses the SQLite magic header: plaintext databases always start
+/// with "SQLite format 3\0". Anything else is encrypted or corrupt.
 pub fn is_encrypted(db_path: &Path) -> Result<bool> {
     if !db_path.exists() {
         return Ok(false);
     }
-    let conn = Connection::open(db_path)?;
-    match conn.execute_batch("SELECT count(*) FROM sqlite_master;") {
-        Ok(_) => Ok(false),
-        Err(e) if e.to_string().contains("not a database") => Ok(true),
-        Err(e) => Err(e.into()),
+    let mut buf = [0u8; 16];
+    let mut file = std::fs::File::open(db_path)?;
+    use std::io::Read;
+    let n = file.read(&mut buf)?;
+    if n < 16 {
+        return Ok(false); // too small to be a valid DB
     }
+    Ok(&buf != b"SQLite format 3\0")
 }
 
 /// If the database is encrypted, prompt the user for a password (up to 3 attempts).
@@ -177,8 +181,10 @@ pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
         let pw = rpassword::prompt_password("Database password: ")
             .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
         set_db_password(Some(pw));
-        let conn = get_connection(db_path)?;
-        match conn.execute_batch("SELECT count(*) FROM sqlite_master;") {
+        // get_connection runs PRAGMAs that read the DB header, so it will fail
+        // on a wrong password. Match on the result instead of using ? to avoid
+        // short-circuiting the retry loop.
+        match get_connection(db_path) {
             Ok(_) => return Ok(()),
             Err(_) => {
                 set_db_password(None);
