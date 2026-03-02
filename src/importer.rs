@@ -10,13 +10,13 @@ use crate::models::ParsedRow;
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub fn parse_amount(raw: &str) -> f64 {
+pub fn parse_amount(raw: &str) -> Option<f64> {
     let s = raw.replace(',', "").replace('"', "").replace('$', "");
     let s = s.trim();
     if let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
-        return -inner.trim().parse::<f64>().unwrap_or(0.0);
+        return Some(-inner.trim().parse::<f64>().ok()?);
     }
-    s.parse().unwrap_or(0.0)
+    s.parse().ok()
 }
 
 pub fn parse_date_mdy(raw: &str) -> Option<String> {
@@ -313,7 +313,9 @@ fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
         if description.is_empty() || description.contains("Beginning balance") {
             continue;
         }
-        let amount = parse_amount(&record[2]);
+        let Some(amount) = parse_amount(&record[2]) else {
+            continue;
+        };
         rows.push(ParsedRow {
             date,
             description,
@@ -328,10 +330,18 @@ fn parse_bofa_checking(file_path: &Path) -> Result<Vec<ParsedRow>> {
 // ---------------------------------------------------------------------------
 
 fn detect_bofa_credit_card(file_path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(file_path) else {
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(file_path) else {
         return false;
     };
-    content.contains("CardHolder Name")
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines().take(5) {
+        let Ok(line) = line else { break };
+        if line.contains("CardHolder Name") {
+            return true;
+        }
+    }
+    false
 }
 
 fn parse_bofa_credit_card(file_path: &Path) -> Result<Vec<ParsedRow>> {
@@ -408,15 +418,18 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<Vec
         if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
             continue;
         }
+        let Some(parsed) = parse_amount(amount_str) else {
+            continue;
+        };
         let amount = if has_type_column {
             let txn_type = record[adj_type].trim();
             if txn_type == "D" {
-                -parse_amount(amount_str).abs()
+                -parsed.abs()
             } else {
-                parse_amount(amount_str).abs()
+                parsed.abs()
             }
         } else {
-            -parse_amount(amount_str)
+            -parsed
         };
         rows.push(ParsedRow {
             date,
@@ -594,24 +607,24 @@ mod tests {
 
     #[test]
     fn test_parse_amount() {
-        assert_eq!(parse_amount("1,234.56"), 1234.56);
-        assert_eq!(parse_amount("\"500.00\""), 500.0);
-        assert_eq!(parse_amount("  -42.50  "), -42.5);
-        assert_eq!(parse_amount("0"), 0.0);
-        assert_eq!(parse_amount("not_a_number"), 0.0);
+        assert_eq!(parse_amount("1,234.56"), Some(1234.56));
+        assert_eq!(parse_amount("\"500.00\""), Some(500.0));
+        assert_eq!(parse_amount("  -42.50  "), Some(-42.5));
+        assert_eq!(parse_amount("0"), Some(0.0));
+        assert_eq!(parse_amount("not_a_number"), None);
     }
 
     #[test]
     fn test_parse_amount_parenthesized_negatives() {
-        assert_eq!(parse_amount("(500.00)"), -500.0);
-        assert_eq!(parse_amount("(1,234.56)"), -1234.56);
-        assert_eq!(parse_amount("\"(50.00)\""), -50.0);
+        assert_eq!(parse_amount("(500.00)"), Some(-500.0));
+        assert_eq!(parse_amount("(1,234.56)"), Some(-1234.56));
+        assert_eq!(parse_amount("\"(50.00)\""), Some(-50.0));
     }
 
     #[test]
     fn test_parse_amount_currency_symbol() {
-        assert_eq!(parse_amount("$1,234.56"), 1234.56);
-        assert_eq!(parse_amount("-$50.00"), -50.0);
+        assert_eq!(parse_amount("$1,234.56"), Some(1234.56));
+        assert_eq!(parse_amount("-$50.00"), Some(-50.0));
     }
 
     #[test]
