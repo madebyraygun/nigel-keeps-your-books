@@ -222,20 +222,6 @@ pub fn import_file(
 
     let parsed_rows = importer.parse(file_path)?;
 
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for row in &parsed_rows {
-        if is_duplicate_row(conn, account_id, row) {
-            skipped += 1;
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, 1, 'No matching rule')",
-            rusqlite::params![account_id, row.date, row.description, row.amount],
-        )?;
-        imported += 1;
-    }
-
     let dates: Vec<&str> = parsed_rows.iter().map(|r| r.date.as_str()).collect();
     let min_date = dates.iter().min().copied();
     let max_date = dates.iter().max().copied();
@@ -250,6 +236,21 @@ pub fn import_file(
             checksum,
         ],
     )?;
+    let import_id = conn.last_insert_rowid();
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    for row in &parsed_rows {
+        if is_duplicate_row(conn, account_id, row) {
+            skipped += 1;
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, import_id, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, ?5, 1, 'No matching rule')",
+            rusqlite::params![account_id, row.date, row.description, row.amount, import_id],
+        )?;
+        imported += 1;
+    }
 
     if importer.has_post_import() {
         importer.post_import(conn, account_id, &parsed_rows)?;
@@ -850,5 +851,20 @@ JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seat
         // adjusted desc points at "Shopping" and adjusted amount at "AMAZON".
         // Amount validation rejects "AMAZON" as non-numeric, so row is skipped.
         assert_eq!(rows.len(), 0, "row with misaligned comma should be skipped");
+    }
+
+    #[test]
+    fn test_import_file_links_transactions_to_import_batch() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
+            ("01/15/2025", "PAYMENT ONE", "-100.00"),
+        ]);
+        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let import_id: i64 = conn.query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0)).unwrap();
+        let tx_import_id: i64 = conn
+            .query_row("SELECT import_id FROM transactions LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tx_import_id, import_id);
     }
 }
