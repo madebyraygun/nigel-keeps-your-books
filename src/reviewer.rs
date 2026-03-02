@@ -96,7 +96,7 @@ pub fn apply_review(
                 "INSERT INTO rules (pattern, match_type, vendor, category_id) VALUES (?1, 'contains', ?2, ?3)",
                 rusqlite::params![pattern, vendor, category_id],
             )?;
-            Some(conn.last_insert_rowid())
+            Some(tx.last_insert_rowid())
         } else {
             None
         }
