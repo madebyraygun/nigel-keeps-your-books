@@ -1,8 +1,27 @@
 use std::path::Path;
+use std::str::FromStr;
 
+use rust_decimal::Decimal;
 use rusqlite::Connection;
 
 use crate::error::Result;
+
+/// Read a Decimal from a TEXT column.
+pub fn read_decimal(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
+    let s: String = row.get(idx)?;
+    Decimal::from_str(&s).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
+/// Read a Decimal from a SQL SUM() result (which returns f64 even on TEXT columns).
+// TODO: SQLite SUM() uses f64 internally; for very large datasets consider Rust-side aggregation.
+pub fn read_decimal_sum(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
+    let f: f64 = row.get(idx)?;
+    Decimal::from_str(&format!("{:.2}", f)).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Real, Box::new(e))
+    })
+}
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS accounts (

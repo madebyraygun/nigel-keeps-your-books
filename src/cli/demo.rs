@@ -380,14 +380,14 @@ mod tests {
         categorize_transactions(&conn).unwrap();
 
         let current_year = Local::now().date_naive().year();
-        let ytd_income: f64 = conn
+        let count: i64 = conn
             .query_row(
-                "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM transactions WHERE CAST(amount AS REAL) > 0 AND date LIKE ?1",
+                "SELECT COUNT(*) FROM transactions WHERE CAST(amount AS REAL) > 0 AND date LIKE ?1",
                 [format!("{current_year}%")],
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(ytd_income > 0.0, "YTD income should be non-zero, got {ytd_income}");
+        assert!(count > 0, "Should have income transactions in current year, got {count}");
     }
 
     #[test]

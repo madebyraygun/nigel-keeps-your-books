@@ -1,8 +1,7 @@
-use std::str::FromStr;
-
 use rust_decimal::Decimal;
 use rusqlite::Connection;
 
+use crate::db::read_decimal;
 use crate::error::{NigelError, Result};
 
 #[derive(Debug)]
@@ -12,13 +11,6 @@ pub struct FlaggedTxn {
     pub description: String,
     pub amount: Decimal,
     pub account_name: String,
-}
-
-fn read_decimal(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
-    let s: String = row.get(idx)?;
-    Decimal::from_str(&s).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-        idx, rusqlite::types::Type::Text, Box::new(e),
-    ))
 }
 
 pub struct CategoryChoice {

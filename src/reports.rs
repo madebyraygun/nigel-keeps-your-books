@@ -1,24 +1,9 @@
-use std::str::FromStr;
-
 use chrono::Datelike;
 use rust_decimal::Decimal;
 use rusqlite::Connection;
 
+use crate::db::{read_decimal, read_decimal_sum};
 use crate::error::Result;
-
-fn read_decimal(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
-    let s: String = row.get(idx)?;
-    Decimal::from_str(&s).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-        idx, rusqlite::types::Type::Text, Box::new(e),
-    ))
-}
-
-fn read_decimal_sum(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
-    let f: f64 = row.get(idx)?;
-    Decimal::from_str(&format!("{:.2}", f)).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-        idx, rusqlite::types::Type::Real, Box::new(e),
-    ))
-}
 
 // ---------------------------------------------------------------------------
 // Date filter helper

@@ -1,8 +1,7 @@
-use std::str::FromStr;
-
 use rust_decimal::Decimal;
 use rusqlite::Connection;
 
+use crate::db::read_decimal_sum;
 use crate::error::{NigelError, Result};
 
 pub struct ReconcileResult {
@@ -27,12 +26,7 @@ pub fn reconcile(
     let calculated: Decimal = conn.query_row(
         "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ?1 AND date <= ?2 || '-31'",
         rusqlite::params![account_id, month],
-        |row| {
-            let f: f64 = row.get(0)?;
-            Decimal::from_str(&format!("{:.2}", f)).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                0, rusqlite::types::Type::Real, Box::new(e),
-            ))
-        },
+        |row| read_decimal_sum(row, 0),
     )?;
 
     let discrepancy = (calculated - statement_balance).abs();
