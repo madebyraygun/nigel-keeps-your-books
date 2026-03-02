@@ -1,11 +1,10 @@
 use rusqlite::Connection;
 
-use crate::db::{get_metadata, set_metadata};
+use crate::db::set_metadata;
 use crate::error::Result;
 
 struct Migration {
     version: u32,
-    #[allow(dead_code)]
     description: &'static str,
     up: fn(&Connection) -> Result<()>,
 }
@@ -19,10 +18,20 @@ const MIGRATIONS: &[Migration] = &[Migration {
 #[cfg(test)]
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
-pub fn get_schema_version(conn: &Connection) -> u32 {
-    get_metadata(conn, "schema_version")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
+/// Returns the current schema version, or 0 if no version has been set.
+/// Propagates actual DB errors instead of silently defaulting to 0.
+pub fn get_schema_version(conn: &Connection) -> Result<u32> {
+    match conn.query_row(
+        "SELECT value FROM metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(v) => v.parse::<u32>().map_err(|_| {
+            crate::error::NigelError::Other(format!("invalid schema_version: {v}"))
+        }),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -30,9 +39,13 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 }
 
 fn apply_migrations(conn: &Connection, migrations: &[Migration]) -> Result<()> {
-    let current = get_schema_version(conn);
+    let current = get_schema_version(conn)?;
     for migration in migrations {
         if migration.version > current {
+            eprintln!(
+                "Applying migration v{}: {}",
+                migration.version, migration.description
+            );
             let sp_name = format!("migration_v{}", migration.version);
             conn.execute_batch(&format!("SAVEPOINT {sp_name}"))?;
             match (|| -> Result<()> {
@@ -66,7 +79,7 @@ mod tests {
     #[test]
     fn test_fresh_install_at_latest_version() {
         let (_dir, conn) = test_db();
-        let version = get_schema_version(&conn);
+        let version = get_schema_version(&conn).unwrap();
         assert_eq!(version, LATEST_VERSION);
     }
 
@@ -76,25 +89,25 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         // Create schema without running migrations (simulates 0.1.x)
         conn.execute_batch(crate::db::SCHEMA).unwrap();
-        assert_eq!(get_schema_version(&conn), 0);
+        assert_eq!(get_schema_version(&conn).unwrap(), 0);
 
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn), LATEST_VERSION);
+        assert_eq!(get_schema_version(&conn).unwrap(), LATEST_VERSION);
     }
 
     #[test]
     fn test_idempotent_rerun() {
         let (_dir, conn) = test_db();
-        let v1 = get_schema_version(&conn);
+        let v1 = get_schema_version(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        let v2 = get_schema_version(&conn);
+        let v2 = get_schema_version(&conn).unwrap();
         assert_eq!(v1, v2);
     }
 
     #[test]
     fn test_failed_migration_rolls_back() {
         let (_dir, conn) = test_db();
-        assert_eq!(get_schema_version(&conn), LATEST_VERSION);
+        assert_eq!(get_schema_version(&conn).unwrap(), LATEST_VERSION);
 
         let bad_migrations = &[Migration {
             version: LATEST_VERSION + 1,
@@ -110,7 +123,7 @@ mod tests {
         let result = apply_migrations(&conn, bad_migrations);
         assert!(result.is_err());
         // Version unchanged
-        assert_eq!(get_schema_version(&conn), LATEST_VERSION);
+        assert_eq!(get_schema_version(&conn).unwrap(), LATEST_VERSION);
         // Table creation rolled back
         let table_exists: bool = conn
             .query_row(

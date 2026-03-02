@@ -442,6 +442,8 @@ pub fn set_metadata(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+// Tests mutate the global DB_PASSWORD mutex and must run with --test-threads=1
+// to avoid interference between tests. See also: cli::password::tests, cli::backup::tests.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,7 +622,7 @@ mod tests {
     #[test]
     fn test_init_db_sets_schema_version() {
         let (_dir, conn) = test_db();
-        let version = crate::migrations::get_schema_version(&conn);
+        let version = crate::migrations::get_schema_version(&conn).unwrap();
         assert_eq!(version, crate::migrations::LATEST_VERSION);
     }
 }
