@@ -24,6 +24,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
+- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or later via `nigel password set`; backups preserve encryption state
 - **Snake** - 🍎 🐍
 
 Importers currently include Bank of America and Gusto, but adding a new importer is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
@@ -95,6 +96,11 @@ nigel load ~/other-books
 # Back up your database
 nigel backup
 nigel backup --output /tmp/nigel-backup.db
+
+# Database encryption
+nigel password set                                # Encrypt database with a password
+nigel password change                             # Change existing password
+nigel password remove                             # Decrypt database (remove password)
 ```
 
 ## Configuration
