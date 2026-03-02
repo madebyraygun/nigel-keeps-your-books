@@ -1,7 +1,6 @@
 target/
 .DS_Store
 data/
-docs/plans/
 storage
 .worktrees/
 scratchpads/

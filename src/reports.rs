@@ -149,8 +149,12 @@ pub fn get_expense_breakdown(
          GROUP BY c.name ORDER BY total ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
+    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
+        .iter()
+        .map(|p| p as &dyn rusqlite::types::ToSql)
+        .collect();
     let raw: Vec<(String, Decimal, i64)> = stmt
-        .query_map([&params[0]], |row| Ok((row.get(0)?, read_decimal_sum(row, 1)?, row.get(2)?)))?
+        .query_map(param_values.as_slice(), |row| Ok((row.get(0)?, read_decimal_sum(row, 1)?, row.get(2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: Decimal = raw.iter().map(|(_, t, _)| *t).sum();
@@ -172,7 +176,7 @@ pub fn get_expense_breakdown(
     );
     let mut vstmt = conn.prepare(&vendor_sql)?;
     let top_vendors: Vec<VendorItem> = vstmt
-        .query_map([&params[0]], |row| {
+        .query_map(param_values.as_slice(), |row| {
             Ok(VendorItem {
                 vendor: row.get(0)?,
                 total: read_decimal_sum(row, 1)?,
@@ -214,8 +218,12 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
          ORDER BY c.category_type DESC, c.tax_line"
     );
     let mut stmt = conn.prepare(&sql)?;
+    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
+        .iter()
+        .map(|p| p as &dyn rusqlite::types::ToSql)
+        .collect();
     let items: Vec<TaxItem> = stmt
-        .query_map([&params[0]], |row| {
+        .query_map(param_values.as_slice(), |row| {
             Ok(TaxItem {
                 name: row.get(0)?,
                 tax_line: row.get(1)?,
@@ -255,8 +263,12 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
          GROUP BY substr(t.date, 1, 7) ORDER BY month"
     );
     let mut stmt = conn.prepare(&sql)?;
+    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
+        .iter()
+        .map(|p| p as &dyn rusqlite::types::ToSql)
+        .collect();
     let raw: Vec<(String, Decimal, Decimal)> = stmt
-        .query_map([&params[0]], |row| Ok((row.get(0)?, read_decimal_sum(row, 1)?, read_decimal_sum(row, 2)?)))?
+        .query_map(param_values.as_slice(), |row| Ok((row.get(0)?, read_decimal_sum(row, 1)?, read_decimal_sum(row, 2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut months = Vec::new();

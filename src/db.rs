@@ -5,6 +5,7 @@ use rust_decimal::Decimal;
 use rusqlite::Connection;
 
 use crate::error::Result;
+use crate::migrations;
 
 /// Read a Decimal from a TEXT column.
 pub fn read_decimal(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
@@ -143,6 +144,7 @@ const DEFAULT_CATEGORIES: &[(&str, Option<i64>, &str, Option<&str>, Option<&str>
 
 pub fn get_connection(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     Ok(conn)
 }
@@ -159,6 +161,8 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             )?;
         }
     }
+
+    migrations::run_migrations(conn)?;
     Ok(())
 }
 
@@ -238,5 +242,12 @@ mod tests {
             "SELECT form_line FROM categories WHERE name = 'Payroll — Wages'", [], |r| r.get(0),
         ).unwrap();
         assert_eq!(form_line.as_deref(), Some("1120S-8"));
+    }
+
+    #[test]
+    fn test_init_db_sets_schema_version() {
+        let (_dir, conn) = test_db();
+        let version = crate::migrations::get_schema_version(&conn);
+        assert_eq!(version, crate::migrations::LATEST_VERSION);
     }
 }

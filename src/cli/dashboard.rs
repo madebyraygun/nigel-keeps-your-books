@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, Paragraph},
     Frame,
 };
 
@@ -117,6 +117,7 @@ struct HomeData {
     cashflow_labels: Vec<String>,
     cashflow_income: Vec<u64>,
     cashflow_expenses: Vec<u64>,
+    cashflow_year_range: String,
     top_expenses: Vec<(String, Decimal)>,
 }
 
@@ -163,12 +164,20 @@ impl Dashboard {
     }
 
     fn load_data(&mut self, conn: &rusqlite::Connection) -> Result<()> {
-        let year = chrono::Local::now().year();
+        let now = chrono::Local::now();
+        let year = now.year();
 
         let pnl = reports::get_pnl(conn, Some(year), None, None, None)?;
         let balance = reports::get_balance(conn)?;
-        let cashflow = reports::get_cashflow(conn, Some(year), None)?;
+        let cashflow = reports::get_cashflow(conn, None, None)?;
         let flagged = reports::get_flagged(conn)?;
+
+        // Top expenses: rolling 3 months
+        let three_months_ago = now - chrono::Duration::days(90);
+        let expense_from = format!("{}", three_months_ago.format("%Y-%m-01"));
+        let expense_to = format!("{}", now.format("%Y-%m-%d"));
+        let recent_pnl =
+            reports::get_pnl(conn, None, None, Some(&expense_from), Some(&expense_to))?;
 
         let txn_count: i64 =
             conn.query_row("SELECT COUNT(*) FROM transactions", [], |row| row.get(0))?;
@@ -179,8 +188,14 @@ impl Dashboard {
             .map(|a| (a.name.clone(), a.balance))
             .collect();
 
-        let cashflow_labels: Vec<String> = cashflow
-            .months
+        // Rolling 12 months: take the most recent 12 entries
+        let recent_months = if cashflow.months.len() > 12 {
+            &cashflow.months[cashflow.months.len() - 12..]
+        } else {
+            &cashflow.months
+        };
+
+        let cashflow_labels: Vec<String> = recent_months
             .iter()
             .map(|m| {
                 let parts: Vec<&str> = m.month.split('-').collect();
@@ -207,20 +222,34 @@ impl Dashboard {
             })
             .collect();
 
-        let cashflow_income: Vec<u64> = cashflow
-            .months
+        let cashflow_income: Vec<u64> = recent_months
             .iter()
             .map(|m| m.inflows.max(Decimal::ZERO).to_u64().unwrap_or(0))
             .collect();
 
-        let cashflow_expenses: Vec<u64> = cashflow
-            .months
+        let cashflow_expenses: Vec<u64> = recent_months
             .iter()
             .map(|m| m.outflows.abs().to_u64().unwrap_or(0))
             .collect();
 
-        // Top 5 expense categories (pnl.expenses is sorted by total ASC, most negative first)
-        let top_expenses: Vec<(String, Decimal)> = pnl
+        // Derive year range from first/last cashflow months (e.g. "2025 - 26")
+        let cashflow_year_range = if let (Some(first), Some(last)) =
+            (recent_months.first(), recent_months.last())
+        {
+            let first_year = &first.month[..4];
+            let last_year = &last.month[..4];
+            if first_year == last_year {
+                first_year.to_string()
+            } else {
+                // Short form: "2025 - 26"
+                format!("{} - {}", first_year, &last_year[2..])
+            }
+        } else {
+            String::new()
+        };
+
+        // Top 5 expense categories from rolling 3-month window
+        let top_expenses: Vec<(String, Decimal)> = recent_pnl
             .expenses
             .iter()
             .take(5)
@@ -237,6 +266,7 @@ impl Dashboard {
             cashflow_labels,
             cashflow_income,
             cashflow_expenses,
+            cashflow_year_range,
             top_expenses,
         });
         Ok(())
@@ -381,6 +411,27 @@ impl Dashboard {
                 let income_style = Style::default().fg(crate::tui::GREEN);
                 let expense_style = Style::default().fg(Color::Red);
 
+                // Split: title row, gap, then chart
+                let [chart_title_area, _chart_gap, chart_body] = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Fill(1),
+                ])
+                .areas(chart_left);
+
+                let chart_title = if data.cashflow_year_range.is_empty() {
+                    " Monthly Cash Flow".to_string()
+                } else {
+                    format!(" Monthly Cash Flow {}", data.cashflow_year_range)
+                };
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        chart_title,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )),
+                    chart_title_area,
+                );
+
                 // Pick round y-axis tick values based on max data value
                 let max_val = data
                     .cashflow_income
@@ -400,13 +451,12 @@ impl Dashboard {
                     Constraint::Length(y_label_width),
                     Constraint::Fill(1),
                 ])
-                .areas(chart_left);
+                .areas(chart_body);
 
                 // Y-axis labels: top tick near top, mid tick at middle
-                let inner_height = bar_area.height.saturating_sub(2); // title + month labels
+                let inner_height = bar_area.height.saturating_sub(1); // month labels
                 let mid_row = inner_height / 2;
                 let mut y_lines: Vec<Line> = Vec::new();
-                y_lines.push(Line::from("")); // title row
                 for row in 0..inner_height {
                     if row == 0 {
                         y_lines.push(Line::from(Span::styled(
@@ -441,13 +491,7 @@ impl Dashboard {
                     })
                     .collect();
 
-                let block = Block::default()
-                    .title("Monthly Cash Flow")
-                    .title_style(Style::default().add_modifier(Modifier::BOLD))
-                    .borders(Borders::NONE);
-
                 let mut chart = BarChart::default()
-                    .block(block)
                     .bar_width(2)
                     .bar_gap(0)
                     .group_gap(1);
@@ -467,7 +511,7 @@ impl Dashboard {
                     .unwrap_or(10);
 
                 let mut lines = vec![Line::from(Span::styled(
-                    " Top Expenses",
+                    " Top Expenses (3 months)",
                     Style::default().add_modifier(Modifier::BOLD),
                 ))];
                 for (name, val) in &data.top_expenses {
