@@ -151,6 +151,20 @@ pub fn open_connection(db_path: &Path, password: Option<&str>) -> Result<Connect
     Ok(conn)
 }
 
+/// Check whether a database file is encrypted (requires a password to open).
+/// Returns false for nonexistent files (they will be created fresh).
+pub fn is_encrypted(db_path: &Path) -> Result<bool> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let conn = Connection::open(db_path)?;
+    match conn.execute_batch("SELECT count(*) FROM sqlite_master;") {
+        Ok(_) => Ok(false),
+        Err(e) if e.to_string().contains("not a database") => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn init_db(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
 
@@ -287,6 +301,36 @@ mod tests {
             .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
             .unwrap();
         assert!(result > 0);
+    }
+
+    #[test]
+    fn test_is_encrypted_returns_false_for_plain_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("plain.db");
+        set_db_password(None);
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        assert!(!is_encrypted(&db_path).unwrap());
+    }
+
+    #[test]
+    fn test_is_encrypted_returns_true_for_encrypted_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        assert!(is_encrypted(&db_path).unwrap());
+    }
+
+    #[test]
+    fn test_is_encrypted_returns_false_for_nonexistent_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("nope.db");
+        assert!(!is_encrypted(&db_path).unwrap());
     }
 
     #[test]
