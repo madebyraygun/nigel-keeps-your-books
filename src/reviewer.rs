@@ -107,11 +107,7 @@ pub fn apply_review(
     Ok(rule_id)
 }
 
-pub fn undo_review(
-    conn: &Connection,
-    transaction_id: i64,
-    rule_id: Option<i64>,
-) -> Result<()> {
+pub fn undo_review(conn: &Connection, transaction_id: i64, rule_id: Option<i64>) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "UPDATE transactions SET category_id = NULL, vendor = NULL, is_flagged = 1, flag_reason = 'Uncategorized' WHERE id = ?1",
@@ -175,8 +171,10 @@ mod tests {
 
     fn add_flagged_txn(conn: &Connection) -> i64 {
         conn.execute(
-            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')", [],
-        ).unwrap();
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
         let acct = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) \
@@ -219,15 +217,22 @@ mod tests {
     fn test_apply_review_categorizes() {
         let (_dir, conn) = test_db();
         let txn_id = add_flagged_txn(&conn);
-        let cat_id: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
-        ).unwrap();
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         let rule_id = apply_review(&conn, txn_id, cat_id, Some("Adobe"), false, None).unwrap();
         assert!(rule_id.is_none());
-        let (is_flagged, vendor): (i32, Option<String>) = conn.query_row(
-            "SELECT is_flagged, vendor FROM transactions WHERE id = ?1", [txn_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
+        let (is_flagged, vendor): (i32, Option<String>) = conn
+            .query_row(
+                "SELECT is_flagged, vendor FROM transactions WHERE id = ?1",
+                [txn_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
         assert_eq!(is_flagged, 0);
         assert_eq!(vendor.as_deref(), Some("Adobe"));
     }
@@ -236,16 +241,23 @@ mod tests {
     fn test_apply_review_creates_rule() {
         let (_dir, conn) = test_db();
         let txn_id = add_flagged_txn(&conn);
-        let cat_id: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
-        ).unwrap();
-        let rule_id = apply_review(&conn, txn_id, cat_id, Some("Adobe"), true, Some("ADOBE")).unwrap();
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rule_id =
+            apply_review(&conn, txn_id, cat_id, Some("Adobe"), true, Some("ADOBE")).unwrap();
         assert!(rule_id.is_some());
-        let count: i64 = conn.query_row("SELECT count(*) FROM rules", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM rules", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
-        let pattern: String = conn.query_row(
-            "SELECT pattern FROM rules LIMIT 1", [], |r| r.get(0),
-        ).unwrap();
+        let pattern: String = conn
+            .query_row("SELECT pattern FROM rules LIMIT 1", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(pattern, "ADOBE");
     }
 
@@ -253,23 +265,33 @@ mod tests {
     fn test_undo_review() {
         let (_dir, conn) = test_db();
         let txn_id = add_flagged_txn(&conn);
-        let cat_id: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
-        ).unwrap();
-        let rule_id = apply_review(&conn, txn_id, cat_id, Some("Adobe"), true, Some("ADOBE")).unwrap();
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rule_id =
+            apply_review(&conn, txn_id, cat_id, Some("Adobe"), true, Some("ADOBE")).unwrap();
         assert!(rule_id.is_some());
 
         undo_review(&conn, txn_id, rule_id).unwrap();
 
-        let (is_flagged, category_id, vendor): (i32, Option<i64>, Option<String>) = conn.query_row(
-            "SELECT is_flagged, category_id, vendor FROM transactions WHERE id = ?1", [txn_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        ).unwrap();
+        let (is_flagged, category_id, vendor): (i32, Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT is_flagged, category_id, vendor FROM transactions WHERE id = ?1",
+                [txn_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
         assert_eq!(is_flagged, 1);
         assert!(category_id.is_none());
         assert!(vendor.is_none());
 
-        let count: i64 = conn.query_row("SELECT count(*) FROM rules", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM rules", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -277,19 +299,26 @@ mod tests {
     fn test_undo_review_without_rule() {
         let (_dir, conn) = test_db();
         let txn_id = add_flagged_txn(&conn);
-        let cat_id: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
-        ).unwrap();
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         // Categorize without creating a rule
         let rule_id = apply_review(&conn, txn_id, cat_id, Some("Adobe"), false, None).unwrap();
         assert!(rule_id.is_none());
 
         undo_review(&conn, txn_id, None).unwrap();
 
-        let (is_flagged, category_id): (i32, Option<i64>) = conn.query_row(
-            "SELECT is_flagged, category_id FROM transactions WHERE id = ?1", [txn_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
+        let (is_flagged, category_id): (i32, Option<i64>) = conn
+            .query_row(
+                "SELECT is_flagged, category_id FROM transactions WHERE id = ?1",
+                [txn_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
         assert_eq!(is_flagged, 1);
         assert!(category_id.is_none());
     }
@@ -298,15 +327,23 @@ mod tests {
     fn test_update_transaction_category() {
         let (_dir, conn) = test_db();
         let txn_id = add_flagged_txn(&conn);
-        let cat_id: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
-        ).unwrap();
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
 
         update_transaction_category(&conn, txn_id, cat_id).unwrap();
 
-        let stored: Option<i64> = conn.query_row(
-            "SELECT category_id FROM transactions WHERE id = ?1", [txn_id], |r| r.get(0),
-        ).unwrap();
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT category_id FROM transactions WHERE id = ?1",
+                [txn_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(stored, Some(cat_id));
     }
 
@@ -317,16 +354,24 @@ mod tests {
 
         update_transaction_vendor(&conn, txn_id, Some("Adobe")).unwrap();
 
-        let vendor: Option<String> = conn.query_row(
-            "SELECT vendor FROM transactions WHERE id = ?1", [txn_id], |r| r.get(0),
-        ).unwrap();
+        let vendor: Option<String> = conn
+            .query_row(
+                "SELECT vendor FROM transactions WHERE id = ?1",
+                [txn_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(vendor.as_deref(), Some("Adobe"));
 
         // Clear vendor
         update_transaction_vendor(&conn, txn_id, None).unwrap();
-        let vendor2: Option<String> = conn.query_row(
-            "SELECT vendor FROM transactions WHERE id = ?1", [txn_id], |r| r.get(0),
-        ).unwrap();
+        let vendor2: Option<String> = conn
+            .query_row(
+                "SELECT vendor FROM transactions WHERE id = ?1",
+                [txn_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(vendor2.is_none());
     }
 

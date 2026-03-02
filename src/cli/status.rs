@@ -1,6 +1,7 @@
 use crate::db::{get_connection, get_metadata};
 use crate::error::Result;
 use crate::fmt::format_bytes;
+use crate::migrations::{get_schema_version, LATEST_VERSION};
 use crate::settings::load_settings;
 
 pub fn run() -> Result<()> {
@@ -8,7 +9,14 @@ pub fn run() -> Result<()> {
     let data_dir = std::path::PathBuf::from(&settings.data_dir);
     let db_path = data_dir.join("nigel.db");
 
-    println!("User:       {}", if settings.user_name.is_empty() { "(not set)" } else { &settings.user_name });
+    println!(
+        "User:       {}",
+        if settings.user_name.is_empty() {
+            "(not set)"
+        } else {
+            &settings.user_name
+        }
+    );
     println!("Data dir:   {}", data_dir.display());
     println!("Database:   {}", db_path.display());
 
@@ -21,8 +29,12 @@ pub fn run() -> Result<()> {
         let company = get_metadata(&conn, "company_name");
         println!("Company:    {}", company.as_deref().unwrap_or("(not set)"));
 
+        let schema_v = get_schema_version(&conn).unwrap_or(0);
+        println!("Schema:     v{schema_v} (latest: v{LATEST_VERSION})");
+
         let accounts: i64 = conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
-        let transactions: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))?;
+        let transactions: i64 =
+            conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))?;
         let flagged: i64 = conn.query_row(
             "SELECT count(*) FROM transactions WHERE is_flagged = 1",
             [],

@@ -202,9 +202,7 @@ impl PasswordManager {
             Phase::InputCurrent => {
                 self.draw_input(frame, centered, "Current password:", &self.current_pw)
             }
-            Phase::InputNew => {
-                self.draw_input(frame, centered, "New password:", &self.new_pw)
-            }
+            Phase::InputNew => self.draw_input(frame, centered, "New password:", &self.new_pw),
             Phase::InputConfirm => {
                 self.draw_input(frame, centered, "Confirm password:", &self.confirm_pw)
             }
@@ -321,25 +319,23 @@ impl PasswordManager {
                 self.reset();
                 return PasswordAction::Continue;
             }
-            KeyCode::Enter => {
-                match (&self.phase, &self.chosen_action) {
-                    (Phase::InputCurrent, Some(Action::Change)) => {
-                        self.phase = Phase::InputNew;
-                        self.cursor = 0;
-                    }
-                    (Phase::InputCurrent, Some(Action::Remove)) => {
-                        self.execute();
-                    }
-                    (Phase::InputNew, _) => {
-                        self.phase = Phase::InputConfirm;
-                        self.cursor = 0;
-                    }
-                    (Phase::InputConfirm, _) => {
-                        self.execute();
-                    }
-                    _ => {}
+            KeyCode::Enter => match (&self.phase, &self.chosen_action) {
+                (Phase::InputCurrent, Some(Action::Change)) => {
+                    self.phase = Phase::InputNew;
+                    self.cursor = 0;
                 }
-            }
+                (Phase::InputCurrent, Some(Action::Remove)) => {
+                    self.execute();
+                }
+                (Phase::InputNew, _) => {
+                    self.phase = Phase::InputConfirm;
+                    self.cursor = 0;
+                }
+                (Phase::InputConfirm, _) => {
+                    self.execute();
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 self.active_input_mut().push(c);
                 self.cursor += 1;

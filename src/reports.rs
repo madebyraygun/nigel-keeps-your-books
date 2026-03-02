@@ -3,6 +3,13 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
+    params
+        .iter()
+        .map(|p| p as &dyn rusqlite::types::ToSql)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Date filter helper
 // ---------------------------------------------------------------------------
@@ -95,10 +102,7 @@ fn query_category_totals(
          GROUP BY c.name ORDER BY {order}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(params);
     let rows = stmt.query_map(param_values.as_slice(), |row| {
         Ok(PnlItem {
             name: row.get(0)?,
@@ -147,12 +151,11 @@ pub fn get_expense_breakdown(
          GROUP BY c.name ORDER BY total ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let raw: Vec<(String, f64, i64)> = stmt
-        .query_map(param_values.as_slice(), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .query_map(param_values.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total: f64 = raw.iter().map(|(_, t, _)| t).sum();
@@ -216,10 +219,7 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
          ORDER BY c.category_type DESC, c.tax_line"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let items: Vec<TaxItem> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok(TaxItem {
@@ -250,7 +250,11 @@ pub struct CashflowReport {
     pub months: Vec<CashflowMonth>,
 }
 
-pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) -> Result<CashflowReport> {
+pub fn get_cashflow(
+    conn: &Connection,
+    year: Option<i32>,
+    month: Option<u32>,
+) -> Result<CashflowReport> {
     let (clause, params) = date_filter(year, month, None, None)?;
 
     let sql = format!(
@@ -261,12 +265,11 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
          GROUP BY substr(t.date, 1, 7) ORDER BY month"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let raw: Vec<(String, f64, f64)> = stmt
-        .query_map(param_values.as_slice(), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .query_map(param_values.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut months = Vec::new();
@@ -316,8 +319,8 @@ pub fn get_register(
 ) -> Result<RegisterReport> {
     let (clause, mut params) = date_filter(year, month, from_date, to_date)?;
 
-    let account_clause = if account.is_some() {
-        params.push(account.unwrap().to_string());
+    let account_clause = if let Some(acc) = account {
+        params.push(acc.to_string());
         format!(" AND a.name = ?{}", params.len())
     } else {
         String::new()
@@ -332,10 +335,7 @@ pub fn get_register(
          ORDER BY t.date, t.id"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let rows: Vec<RegisterRow> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok(RegisterRow {
@@ -486,8 +486,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
          GROUP BY c.form_line, c.name ORDER BY c.form_line"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
+    let param_values = to_sql_params(&params);
     let rows: Vec<(String, String, f64)> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -595,30 +594,43 @@ mod tests {
 
     fn seed_transactions(conn: &Connection) {
         conn.execute(
-            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')", [],
-        ).unwrap();
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
         let acct = conn.last_insert_rowid();
-        let income_cat: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Client Services'", [], |r| r.get(0),
-        ).unwrap();
-        let expense_cat: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Software & Subscriptions'", [], |r| r.get(0),
-        ).unwrap();
+        let income_cat: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Client Services'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let expense_cat: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
              VALUES (?1, '2025-01-15', 'Client payment', 1000.0, ?2)",
             rusqlite::params![acct, income_cat],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
              VALUES (?1, '2025-01-20', 'Adobe CC', -50.0, ?2)",
             rusqlite::params![acct, expense_cat],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
              VALUES (?1, '2025-02-10', 'GitHub', -10.0, ?2)",
             rusqlite::params![acct, expense_cat],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
@@ -669,18 +681,25 @@ mod tests {
     fn test_register_default_returns_all_years() {
         let (_dir, conn) = test_db();
         seed_transactions(&conn); // 2025 transactions
-        // Add a transaction in a different year
-        let acct: i64 = conn.query_row(
-            "SELECT id FROM accounts WHERE name = 'Test'", [], |r| r.get(0),
-        ).unwrap();
-        let cat: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Client Services'", [], |r| r.get(0),
-        ).unwrap();
+                                  // Add a transaction in a different year
+        let acct: i64 = conn
+            .query_row("SELECT id FROM accounts WHERE name = 'Test'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let cat: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Client Services'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
              VALUES (?1, '2024-06-15', 'Old payment', 500.0, ?2)",
             rusqlite::params![acct, cat],
-        ).unwrap();
+        )
+        .unwrap();
         // No date filters — should return all 4 transactions across both years
         let report = get_register(&conn, None, None, None, None, None).unwrap();
         assert_eq!(report.rows.len(), 4);
@@ -711,8 +730,7 @@ mod tests {
     fn test_register_account_filter() {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
-        let report =
-            get_register(&conn, Some(2025), None, None, None, Some("Test")).unwrap();
+        let report = get_register(&conn, Some(2025), None, None, None, Some("Test")).unwrap();
         assert_eq!(report.rows.len(), 3);
         let report =
             get_register(&conn, Some(2025), None, None, None, Some("Nonexistent")).unwrap();
@@ -729,8 +747,14 @@ mod tests {
         assert!(report.gross_receipts >= 0.0);
         assert!(report.total_deductions >= 0.0);
         // Software & Subscriptions → 1120S-19 → should appear in deduction_lines
-        let sw = report.deduction_lines.iter().find(|d| d.category_name == "Software & Subscriptions");
-        assert!(sw.is_some(), "Software & Subscriptions should appear in deduction_lines");
+        let sw = report
+            .deduction_lines
+            .iter()
+            .find(|d| d.category_name == "Software & Subscriptions");
+        assert!(
+            sw.is_some(),
+            "Software & Subscriptions should appear in deduction_lines"
+        );
         assert_eq!(sw.unwrap().total, 60.0); // abs of -60
         assert_eq!(report.validation.uncategorized_count, 0);
     }
@@ -767,19 +791,27 @@ mod tests {
     fn test_k1_meals_50_pct() {
         let (_dir, conn) = test_db();
         conn.execute(
-            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')", [],
-        ).unwrap();
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
         let acct = conn.last_insert_rowid();
-        let meals_cat: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = 'Meals'", [], |r| r.get(0),
-        ).unwrap();
+        let meals_cat: i64 = conn
+            .query_row("SELECT id FROM categories WHERE name = 'Meals'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
              VALUES (?1, '2025-03-15', 'Business lunch', -100.0, ?2)",
             rusqlite::params![acct, meals_cat],
-        ).unwrap();
+        )
+        .unwrap();
         let report = get_k1_prep(&conn, Some(2025)).unwrap();
-        let meals = report.other_deductions.iter().find(|d| d.category_name == "Meals");
+        let meals = report
+            .other_deductions
+            .iter()
+            .find(|d| d.category_name == "Meals");
         assert!(meals.is_some(), "Meals should appear in other_deductions");
         let m = meals.unwrap();
         assert_eq!(m.total, 100.0);

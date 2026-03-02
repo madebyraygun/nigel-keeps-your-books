@@ -44,7 +44,10 @@ struct FormField {
 
 enum FieldKind {
     Text,
-    Selector { options: Vec<String>, selected: usize },
+    Selector {
+        options: Vec<String>,
+        selected: usize,
+    },
 }
 
 impl AccountForm {
@@ -89,7 +92,6 @@ impl AccountForm {
             focused: 0,
         }
     }
-
 }
 
 pub struct AccountManager {
@@ -225,8 +227,7 @@ impl AccountManager {
             );
         } else {
             frame.render_widget(
-                Paragraph::new(" a=add  r=rename  d=delete  Esc=back  q=quit")
-                    .style(FOOTER_STYLE),
+                Paragraph::new(" a=add  r=rename  d=delete  Esc=back  q=quit").style(FOOTER_STYLE),
                 hints_area,
             );
         }
@@ -285,7 +286,11 @@ impl AccountManager {
                     ]));
                 }
                 FieldKind::Selector { options, selected } => {
-                    let arrows = if is_focused { ("< ", " >") } else { ("  ", "  ") };
+                    let arrows = if is_focused {
+                        ("< ", " >")
+                    } else {
+                        ("  ", "  ")
+                    };
                     lines.push(Line::from(vec![
                         Span::styled(format!("   {:<14} ", field.label), label_style),
                         Span::styled(
@@ -372,7 +377,11 @@ impl AccountManager {
                     if let Some(account) = self.accounts.get(self.selection) {
                         match accounts::transaction_count(conn, account.id) {
                             Ok(count) if count > 0 => {
-                                let noun = if count == 1 { "transaction" } else { "transactions" };
+                                let noun = if count == 1 {
+                                    "transaction"
+                                } else {
+                                    "transactions"
+                                };
                                 self.set_status(format!(
                                     "Cannot delete: account has {count} {noun}"
                                 ));
@@ -423,7 +432,9 @@ impl AccountManager {
                 };
             }
             Left => {
-                if let FieldKind::Selector { options, selected } = &mut form.fields[form.focused].kind {
+                if let FieldKind::Selector { options, selected } =
+                    &mut form.fields[form.focused].kind
+                {
                     *selected = if *selected == 0 {
                         options.len() - 1
                     } else {
@@ -433,7 +444,9 @@ impl AccountManager {
                 }
             }
             Right => {
-                if let FieldKind::Selector { options, selected } = &mut form.fields[form.focused].kind {
+                if let FieldKind::Selector { options, selected } =
+                    &mut form.fields[form.focused].kind
+                {
                     *selected = (*selected + 1) % options.len();
                     form.fields[form.focused].value = options[*selected].clone();
                 }
@@ -448,64 +461,66 @@ impl AccountManager {
                     form.fields[form.focused].value.pop();
                 }
             }
-            Enter => {
-                match mode {
-                    FormMode::Add => {
-                        let name = form.fields[NAME_IDX].value.trim().to_string();
-                        if name.is_empty() {
-                            self.set_status("Name is required".into());
-                            return AccountAction::Continue;
+            Enter => match mode {
+                FormMode::Add => {
+                    let name = form.fields[NAME_IDX].value.trim().to_string();
+                    if name.is_empty() {
+                        self.set_status("Name is required".into());
+                        return AccountAction::Continue;
+                    }
+                    let acct_type = form.fields[TYPE_IDX].value.clone();
+                    let institution = {
+                        let v = form.fields[INST_IDX].value.trim().to_string();
+                        if v.is_empty() {
+                            None
+                        } else {
+                            Some(v)
                         }
-                        let acct_type = form.fields[TYPE_IDX].value.clone();
-                        let institution = {
-                            let v = form.fields[INST_IDX].value.trim().to_string();
-                            if v.is_empty() { None } else { Some(v) }
-                        };
-                        let last_four = {
-                            let v = form.fields[LAST_IDX].value.trim().to_string();
-                            if v.is_empty() {
-                                None
-                            } else if !v.chars().all(|c| c.is_ascii_digit()) || v.len() != 4 {
-                                self.set_status("Last four must be exactly 4 digits".into());
-                                return AccountAction::Continue;
-                            } else {
-                                Some(v)
-                            }
-                        };
-                        match accounts::add_account(
-                            conn,
-                            &name,
-                            &acct_type,
-                            institution.as_deref(),
-                            last_four.as_deref(),
-                        ) {
+                    };
+                    let last_four = {
+                        let v = form.fields[LAST_IDX].value.trim().to_string();
+                        if v.is_empty() {
+                            None
+                        } else if !v.chars().all(|c| c.is_ascii_digit()) || v.len() != 4 {
+                            self.set_status("Last four must be exactly 4 digits".into());
+                            return AccountAction::Continue;
+                        } else {
+                            Some(v)
+                        }
+                    };
+                    match accounts::add_account(
+                        conn,
+                        &name,
+                        &acct_type,
+                        institution.as_deref(),
+                        last_four.as_deref(),
+                    ) {
+                        Ok(()) => {
+                            self.reload(conn);
+                            self.screen = Screen::List;
+                            self.set_status(format!("Added account: {name}"));
+                        }
+                        Err(e) => {
+                            self.set_status(e.to_string());
+                        }
+                    }
+                }
+                FormMode::Rename => {
+                    let new_name = form.fields[NAME_IDX].value.trim().to_string();
+                    if let Some(account) = self.accounts.get(self.selection) {
+                        match accounts::rename_account(conn, account.id, &new_name) {
                             Ok(()) => {
                                 self.reload(conn);
                                 self.screen = Screen::List;
-                                self.set_status(format!("Added account: {name}"));
+                                self.set_status(format!("Renamed to: {new_name}"));
                             }
                             Err(e) => {
                                 self.set_status(e.to_string());
                             }
                         }
                     }
-                    FormMode::Rename => {
-                        let new_name = form.fields[NAME_IDX].value.trim().to_string();
-                        if let Some(account) = self.accounts.get(self.selection) {
-                            match accounts::rename_account(conn, account.id, &new_name) {
-                                Ok(()) => {
-                                    self.reload(conn);
-                                    self.screen = Screen::List;
-                                    self.set_status(format!("Renamed to: {new_name}"));
-                                }
-                                Err(e) => {
-                                    self.set_status(e.to_string());
-                                }
-                            }
-                        }
-                    }
                 }
-            }
+            },
             _ => {}
         }
         AccountAction::Continue

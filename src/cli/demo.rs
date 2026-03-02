@@ -24,12 +24,36 @@ struct RecurringTxn {
 }
 
 const RECURRING: &[RecurringTxn] = &[
-    RecurringTxn { day: 5, description: "ADOBE CREATIVE CLOUD", amount: -54.99 },
-    RecurringTxn { day: 5, description: "GITHUB INC", amount: -21.00 },
-    RecurringTxn { day: 5, description: "SLACK TECHNOLOGIES", amount: -12.50 },
-    RecurringTxn { day: 5, description: "GOOGLE WORKSPACE", amount: -14.40 },
-    RecurringTxn { day: 8, description: "AMAZON WEB SERVICES", amount: -189.00 },
-    RecurringTxn { day: 8, description: "FLYWHEEL HOSTING", amount: -89.00 },
+    RecurringTxn {
+        day: 5,
+        description: "ADOBE CREATIVE CLOUD",
+        amount: -54.99,
+    },
+    RecurringTxn {
+        day: 5,
+        description: "GITHUB INC",
+        amount: -21.00,
+    },
+    RecurringTxn {
+        day: 5,
+        description: "SLACK TECHNOLOGIES",
+        amount: -12.50,
+    },
+    RecurringTxn {
+        day: 5,
+        description: "GOOGLE WORKSPACE",
+        amount: -14.40,
+    },
+    RecurringTxn {
+        day: 8,
+        description: "AMAZON WEB SERVICES",
+        amount: -189.00,
+    },
+    RecurringTxn {
+        day: 8,
+        description: "FLYWHEEL HOSTING",
+        amount: -89.00,
+    },
 ];
 
 /// Rotating one-off expenses — each month picks a subset based on index.
@@ -40,16 +64,56 @@ struct RotatingTxn {
 }
 
 const ROTATING: &[RotatingTxn] = &[
-    RotatingTxn { day: 15, description: "CHECK 1042", amount: -2400.00 },
-    RotatingTxn { day: 20, description: "VENMO PAYMENT", amount: -150.00 },
-    RotatingTxn { day: 25, description: "COMCAST BUSINESS", amount: -129.99 },
-    RotatingTxn { day: 28, description: "STAPLES OFFICE SUPPLY", amount: -67.23 },
-    RotatingTxn { day: 7, description: "WEWORK MEMBERSHIP", amount: -450.00 },
-    RotatingTxn { day: 12, description: "ZOOM VIDEO COMMUNICATIONS", amount: -14.99 },
-    RotatingTxn { day: 19, description: "COSTCO WHOLESALE", amount: -29.33 },
-    RotatingTxn { day: 25, description: "FEDEX SHIPPING", amount: -18.75 },
-    RotatingTxn { day: 14, description: "DROPBOX BUSINESS", amount: -19.99 },
-    RotatingTxn { day: 18, description: "TARGET STORE", amount: -43.67 },
+    RotatingTxn {
+        day: 15,
+        description: "CHECK 1042",
+        amount: -2400.00,
+    },
+    RotatingTxn {
+        day: 20,
+        description: "VENMO PAYMENT",
+        amount: -150.00,
+    },
+    RotatingTxn {
+        day: 25,
+        description: "COMCAST BUSINESS",
+        amount: -129.99,
+    },
+    RotatingTxn {
+        day: 28,
+        description: "STAPLES OFFICE SUPPLY",
+        amount: -67.23,
+    },
+    RotatingTxn {
+        day: 7,
+        description: "WEWORK MEMBERSHIP",
+        amount: -450.00,
+    },
+    RotatingTxn {
+        day: 12,
+        description: "ZOOM VIDEO COMMUNICATIONS",
+        amount: -14.99,
+    },
+    RotatingTxn {
+        day: 19,
+        description: "COSTCO WHOLESALE",
+        amount: -29.33,
+    },
+    RotatingTxn {
+        day: 25,
+        description: "FEDEX SHIPPING",
+        amount: -18.75,
+    },
+    RotatingTxn {
+        day: 14,
+        description: "DROPBOX BUSINESS",
+        amount: -19.99,
+    },
+    RotatingTxn {
+        day: 18,
+        description: "TARGET STORE",
+        amount: -43.67,
+    },
 ];
 
 /// Meal delivery vendors rotated across months.
@@ -183,15 +247,51 @@ struct DemoRule {
 }
 
 const RULES: &[DemoRule] = &[
-    DemoRule { pattern: "STRIPE TRANSFER", category: "Client Services", vendor: "Stripe" },
-    DemoRule { pattern: "ADOBE", category: "Software & Subscriptions", vendor: "Adobe" },
-    DemoRule { pattern: "GITHUB", category: "Software & Subscriptions", vendor: "GitHub" },
-    DemoRule { pattern: "SLACK", category: "Software & Subscriptions", vendor: "Slack" },
-    DemoRule { pattern: "GOOGLE WORKSPACE", category: "Software & Subscriptions", vendor: "Google" },
-    DemoRule { pattern: "AMAZON WEB SERVICES", category: "Hosting & Infrastructure", vendor: "AWS" },
-    DemoRule { pattern: "FLYWHEEL", category: "Hosting & Infrastructure", vendor: "Flywheel" },
-    DemoRule { pattern: "UBER EATS", category: "Meals", vendor: "Uber Eats" },
-    DemoRule { pattern: "GRUBHUB", category: "Meals", vendor: "Grubhub" },
+    DemoRule {
+        pattern: "STRIPE TRANSFER",
+        category: "Client Services",
+        vendor: "Stripe",
+    },
+    DemoRule {
+        pattern: "ADOBE",
+        category: "Software & Subscriptions",
+        vendor: "Adobe",
+    },
+    DemoRule {
+        pattern: "GITHUB",
+        category: "Software & Subscriptions",
+        vendor: "GitHub",
+    },
+    DemoRule {
+        pattern: "SLACK",
+        category: "Software & Subscriptions",
+        vendor: "Slack",
+    },
+    DemoRule {
+        pattern: "GOOGLE WORKSPACE",
+        category: "Software & Subscriptions",
+        vendor: "Google",
+    },
+    DemoRule {
+        pattern: "AMAZON WEB SERVICES",
+        category: "Hosting & Infrastructure",
+        vendor: "AWS",
+    },
+    DemoRule {
+        pattern: "FLYWHEEL",
+        category: "Hosting & Infrastructure",
+        vendor: "Flywheel",
+    },
+    DemoRule {
+        pattern: "UBER EATS",
+        category: "Meals",
+        vendor: "Uber Eats",
+    },
+    DemoRule {
+        pattern: "GRUBHUB",
+        category: "Meals",
+        vendor: "Grubhub",
+    },
 ];
 
 fn insert_demo_data(conn: &Connection) -> Result<usize> {
@@ -250,7 +350,10 @@ pub fn run() -> Result<()> {
         |r| r.get(0),
     )?;
     if exists {
-        println!("Demo data already loaded (account '{}' exists).", ACCOUNT_NAME);
+        println!(
+            "Demo data already loaded (account '{}' exists).",
+            ACCOUNT_NAME
+        );
         return Ok(());
     }
 
@@ -331,8 +434,14 @@ mod tests {
         let txns = generate_transactions();
         let current_year = Local::now().date_naive().year();
         let year_prefix = format!("{current_year}-");
-        let in_current_year = txns.iter().filter(|t| t.date.starts_with(&year_prefix)).count();
-        assert!(in_current_year > 0, "should have transactions in the current year");
+        let in_current_year = txns
+            .iter()
+            .filter(|t| t.date.starts_with(&year_prefix))
+            .count();
+        assert!(
+            in_current_year > 0,
+            "should have transactions in the current year"
+        );
     }
 
     #[test]
@@ -344,9 +453,12 @@ mod tests {
             .collect();
         let min_date = dates.iter().min().unwrap();
         let max_date = dates.iter().max().unwrap();
-        let span_months =
-            (max_date.year() - min_date.year()) * 12 + max_date.month() as i32 - min_date.month() as i32;
-        assert!(span_months >= 17, "transactions should span at least 17 months, got {span_months}");
+        let span_months = (max_date.year() - min_date.year()) * 12 + max_date.month() as i32
+            - min_date.month() as i32;
+        assert!(
+            span_months >= 17,
+            "transactions should span at least 17 months, got {span_months}"
+        );
     }
 
     #[test]
@@ -355,17 +467,23 @@ mod tests {
         let txn_count = insert_demo_data(&conn).unwrap();
         let result = categorize_transactions(&conn).unwrap();
 
-        let acct_count: i64 =
-            conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        let db_txn_count: i64 =
-            conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
-        let rule_count: i64 =
-            conn.query_row("SELECT count(*) FROM rules", [], |r| r.get(0)).unwrap();
+        let acct_count: i64 = conn
+            .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))
+            .unwrap();
+        let db_txn_count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        let rule_count: i64 = conn
+            .query_row("SELECT count(*) FROM rules", [], |r| r.get(0))
+            .unwrap();
 
         assert_eq!(acct_count, 1);
         assert_eq!(db_txn_count, txn_count as i64);
         assert_eq!(rule_count, RULES.len() as i64);
-        assert!(result.categorized > 0, "should categorize some transactions");
+        assert!(
+            result.categorized > 0,
+            "should categorize some transactions"
+        );
         assert!(result.still_flagged > 0, "should leave some flagged");
     }
 
@@ -383,7 +501,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(ytd_income > 0.0, "YTD income should be non-zero, got {ytd_income}");
+        assert!(
+            ytd_income > 0.0,
+            "YTD income should be non-zero, got {ytd_income}"
+        );
     }
 
     #[test]
@@ -401,17 +522,22 @@ mod tests {
             .unwrap();
         assert!(exists, "account should exist after first insert");
 
-        let txn_count_before: i64 =
-            conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        let txn_count_before: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
 
         // Simulate what run() does: check guard, skip if exists
         if !exists {
             insert_demo_data(&conn).unwrap();
         }
 
-        let txn_count_after: i64 =
-            conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
-        assert_eq!(txn_count_before, txn_count_after, "no duplicates on second run");
+        let txn_count_after: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            txn_count_before, txn_count_after,
+            "no duplicates on second run"
+        );
     }
 
     #[test]

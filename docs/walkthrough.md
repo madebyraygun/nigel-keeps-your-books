@@ -157,7 +157,7 @@ $ nigel browse register
 
 ![Register](screenshots/register.png)
 
-The register starts at today and scrolls backwards through all transactions. Use arrow keys to navigate, `e` to edit a transaction's category or vendor inline, `f` to toggle flags, `d` to jump to a date, and `/` to search by ID.
+The register starts at today and scrolls backwards through all transactions. Use arrow keys to navigate, `e` to edit a transaction's category or vendor inline, `f` to toggle flags, `d` to jump to a date, `g` to jump to a page, and `/` to search by ID.
 
 Other reports to try:
 

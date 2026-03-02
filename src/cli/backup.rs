@@ -23,6 +23,29 @@ pub fn snapshot(conn: &rusqlite::Connection, dest_path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn run(output: Option<String>) -> Result<()> {
+    let data_dir = get_data_dir();
+    let db_path = data_dir.join("nigel.db");
+    let conn = get_connection(&db_path)?;
+
+    let dest_path = match output {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let backups_dir = data_dir.join("backups");
+            std::fs::create_dir_all(&backups_dir)?;
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+            backups_dir.join(format!("nigel-{stamp}.db"))
+        }
+    };
+
+    snapshot(&conn, &dest_path)?;
+
+    let size = std::fs::metadata(&dest_path)?.len();
+    println!("Backup saved to {}", dest_path.display());
+    println!("Size: {}", format_bytes(size));
+    Ok(())
+}
+
 // Tests mutate the global DB_PASSWORD mutex and must run with --test-threads=1.
 // See also: db::tests, cli::password::tests.
 #[cfg(test)]
@@ -74,27 +97,4 @@ mod tests {
 
         assert!(!is_encrypted(&dst_path).unwrap());
     }
-}
-
-pub fn run(output: Option<String>) -> Result<()> {
-    let data_dir = get_data_dir();
-    let db_path = data_dir.join("nigel.db");
-    let conn = get_connection(&db_path)?;
-
-    let dest_path = match output {
-        Some(p) => PathBuf::from(p),
-        None => {
-            let backups_dir = data_dir.join("backups");
-            std::fs::create_dir_all(&backups_dir)?;
-            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-            backups_dir.join(format!("nigel-{stamp}.db"))
-        }
-    };
-
-    snapshot(&conn, &dest_path)?;
-
-    let size = std::fs::metadata(&dest_path)?.len();
-    println!("Backup saved to {}", dest_path.display());
-    println!("Size: {}", format_bytes(size));
-    Ok(())
 }

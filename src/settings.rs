@@ -58,8 +58,8 @@ pub fn load_settings() -> Settings {
 pub fn save_settings(settings: &Settings) -> Result<()> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir)?;
-    let json = serde_json::to_string_pretty(settings)
-        .map_err(|e| NigelError::Settings(e.to_string()))?;
+    let json =
+        serde_json::to_string_pretty(settings).map_err(|e| NigelError::Settings(e.to_string()))?;
     std::fs::write(settings_path(), format!("{json}\n"))?;
     Ok(())
 }
