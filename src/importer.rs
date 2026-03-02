@@ -222,20 +222,6 @@ pub fn import_file(
 
     let parsed_rows = importer.parse(file_path)?;
 
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for row in &parsed_rows {
-        if is_duplicate_row(conn, account_id, row) {
-            skipped += 1;
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, 1, 'No matching rule')",
-            rusqlite::params![account_id, row.date, row.description, row.amount],
-        )?;
-        imported += 1;
-    }
-
     let dates: Vec<&str> = parsed_rows.iter().map(|r| r.date.as_str()).collect();
     let min_date = dates.iter().min().copied();
     let max_date = dates.iter().max().copied();
@@ -250,6 +236,21 @@ pub fn import_file(
             checksum,
         ],
     )?;
+    let import_id = conn.last_insert_rowid();
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    for row in &parsed_rows {
+        if is_duplicate_row(conn, account_id, row) {
+            skipped += 1;
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, import_id, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, ?5, 1, 'No matching rule')",
+            rusqlite::params![account_id, row.date, row.description, row.amount, import_id],
+        )?;
+        imported += 1;
+    }
 
     if importer.has_post_import() {
         importer.post_import(conn, account_id, &parsed_rows)?;
