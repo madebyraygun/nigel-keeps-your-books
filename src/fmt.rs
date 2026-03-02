@@ -1,8 +1,11 @@
-/// Format a float as a dollar amount with thousands separators: $1,234.56
-pub fn money(val: f64) -> String {
-    let negative = val < 0.0;
+use rust_decimal::Decimal;
+
+/// Format a Decimal as a dollar amount with thousands separators: $1,234.56
+pub fn money(val: Decimal) -> String {
+    let negative = val < Decimal::ZERO;
     let abs = val.abs();
-    let cents = format!("{:.2}", abs);
+    let rounded = abs.round_dp(2);
+    let cents = format!("{:.2}", rounded);
     let parts: Vec<&str> = cents.split('.').collect();
     let int_part = parts[0];
     let dec_part = parts[1];
@@ -63,14 +66,15 @@ pub fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal_macros::dec;
 
     #[test]
     fn test_money_formatting() {
-        assert_eq!(money(1234.56), "$1,234.56");
-        assert_eq!(money(-500.00), "-$500.00");
-        assert_eq!(money(0.0), "$0.00");
-        assert_eq!(money(1000000.99), "$1,000,000.99");
-        assert_eq!(money(42.10), "$42.10");
+        assert_eq!(money(dec!(1234.56)), "$1,234.56");
+        assert_eq!(money(dec!(-500.00)), "-$500.00");
+        assert_eq!(money(dec!(0.0)), "$0.00");
+        assert_eq!(money(dec!(1000000.99)), "$1,000,000.99");
+        assert_eq!(money(dec!(42.10)), "$42.10");
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::Frame;
+use rust_decimal::Decimal;
 
 use crate::error::Result;
 use crate::fmt::money;
@@ -22,8 +23,8 @@ pub const SELECTED_STYLE: Style = Style::new()
 
 /// Format an amount as a colored Span (green for income, red for expense).
 /// Shows absolute value — color conveys the sign.
-pub fn money_span(amount: f64) -> Span<'static> {
-    let style = if amount < 0.0 {
+pub fn money_span(amount: Decimal) -> Span<'static> {
+    let style = if amount < Decimal::ZERO {
         AMOUNT_NEG_STYLE
     } else {
         AMOUNT_POS_STYLE
