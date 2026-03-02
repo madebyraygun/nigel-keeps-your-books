@@ -99,7 +99,7 @@ Do not merge or mark work complete if docs are stale.
 - Bank CSV formats vary by account type (checking, credit_card, line_of_credit) — each has its own variant in `ImporterKind`
 - `ImporterKind::detect()` inspects file headers for format auto-detection; `--format` CLI flag overrides auto-detect
 - Demo data is generated dynamically (18 months of transactions counting back from today) and inserted directly into the DB (no CSV files); idempotency guard checks for existing account
-- Cash amounts are plain `f64` — negative = expense, positive = income
+- Cash amounts use `rust_decimal::Decimal` — negative = expense, positive = income; stored as TEXT in SQLite
 - Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
 - Browse register and reports with no date flags show all transactions (no implicit year filter); the browse view scrolls to today on load
 - Database row deserialization errors are propagated, never silently discarded
