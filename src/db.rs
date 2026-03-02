@@ -165,6 +165,32 @@ pub fn is_encrypted(db_path: &Path) -> Result<bool> {
     }
 }
 
+/// If the database is encrypted, prompt the user for a password (up to 3 attempts).
+/// Sets the global password on success. Returns an error after 3 failures.
+pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
+    if !is_encrypted(db_path)? {
+        return Ok(());
+    }
+    for attempt in 1..=3 {
+        let pw = rpassword::prompt_password("Database password: ")
+            .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+        set_db_password(Some(pw));
+        let conn = get_connection(db_path)?;
+        match conn.execute_batch("SELECT count(*) FROM sqlite_master;") {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                set_db_password(None);
+                if attempt < 3 {
+                    eprintln!("Wrong password. Try again ({attempt}/3).");
+                }
+            }
+        }
+    }
+    Err(crate::error::NigelError::Other(
+        "Failed to unlock database after 3 attempts.".into(),
+    ))
+}
+
 pub fn init_db(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
 

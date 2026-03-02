@@ -41,6 +41,15 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
+    // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
+    if !matches!(command, Commands::Init { .. } | Commands::Demo) {
+        let data_dir = crate::settings::get_data_dir();
+        let db_path = data_dir.join("nigel.db");
+        if db_path.exists() {
+            crate::db::prompt_password_if_needed(&db_path)?;
+        }
+    }
+
     match command {
         Commands::Init { data_dir } => cli::init::run(data_dir),
         Commands::Accounts { command } => match command {
