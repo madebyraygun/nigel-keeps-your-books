@@ -217,6 +217,7 @@ impl RegisterBrowser {
         }
 
         self.visible_count = vis.max(1);
+        self.selected = self.selected.min(self.visible_count.saturating_sub(1));
 
         // Table column constraints
         let widths: Vec<Constraint> = if narrow {
