@@ -16,6 +16,60 @@ const MIGRATIONS: &[Migration] = &[
         description: "baseline — establish schema version tracking",
         up: |_conn| Ok(()),
     },
+    Migration {
+        version: 2,
+        description: "convert monetary columns from REAL to TEXT for rust_decimal",
+        up: |conn| {
+            // SQLite doesn't support ALTER COLUMN, so we recreate tables to change
+            // column affinity from REAL to TEXT. This ensures read_decimal's
+            // row.get::<_, String>() works on existing databases.
+            conn.execute_batch(
+                "ALTER TABLE transactions RENAME TO _transactions_old;
+                 CREATE TABLE transactions (
+                     id INTEGER PRIMARY KEY,
+                     account_id INTEGER NOT NULL,
+                     date TEXT NOT NULL,
+                     description TEXT NOT NULL,
+                     amount TEXT NOT NULL,
+                     category_id INTEGER,
+                     vendor TEXT,
+                     notes TEXT,
+                     is_flagged INTEGER DEFAULT 0,
+                     flag_reason TEXT,
+                     import_id INTEGER,
+                     created_at TEXT DEFAULT (datetime('now')),
+                     FOREIGN KEY (account_id) REFERENCES accounts(id),
+                     FOREIGN KEY (category_id) REFERENCES categories(id),
+                     FOREIGN KEY (import_id) REFERENCES imports(id)
+                 );
+                 INSERT INTO transactions (id, account_id, date, description, amount, category_id, vendor, notes, is_flagged, flag_reason, import_id, created_at)
+                     SELECT id, account_id, date, description, printf('%.2f', amount), category_id, vendor, notes, is_flagged, flag_reason, import_id, created_at
+                     FROM _transactions_old;
+                 DROP TABLE _transactions_old;
+
+                 ALTER TABLE reconciliations RENAME TO _reconciliations_old;
+                 CREATE TABLE reconciliations (
+                     id INTEGER PRIMARY KEY,
+                     account_id INTEGER NOT NULL,
+                     month TEXT NOT NULL,
+                     statement_balance TEXT,
+                     calculated_balance TEXT,
+                     is_reconciled INTEGER DEFAULT 0,
+                     reconciled_at TEXT,
+                     notes TEXT,
+                     FOREIGN KEY (account_id) REFERENCES accounts(id)
+                 );
+                 INSERT INTO reconciliations (id, account_id, month, statement_balance, calculated_balance, is_reconciled, reconciled_at, notes)
+                     SELECT id, account_id, month,
+                         CASE WHEN statement_balance IS NOT NULL THEN printf('%.2f', statement_balance) ELSE NULL END,
+                         CASE WHEN calculated_balance IS NOT NULL THEN printf('%.2f', calculated_balance) ELSE NULL END,
+                         is_reconciled, reconciled_at, notes
+                     FROM _reconciliations_old;
+                 DROP TABLE _reconciliations_old;",
+            )?;
+            Ok(())
+        },
+    },
 ];
 
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
@@ -119,5 +173,52 @@ mod tests {
             )
             .unwrap();
         assert!(!table_exists);
+    }
+
+    #[test]
+    fn test_v2_canonicalizes_real_amounts_to_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = get_connection(&dir.path().join("test.db")).unwrap();
+        // Simulate a pre-Decimal database with REAL columns (old v0.1.x schema)
+        conn.execute_batch(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL, account_type TEXT NOT NULL, institution TEXT, last_four TEXT, created_at TEXT DEFAULT (datetime('now')));
+             CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_id INTEGER, category_type TEXT NOT NULL, tax_line TEXT, form_line TEXT, description TEXT, is_active INTEGER DEFAULT 1);
+             CREATE TABLE transactions (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, date TEXT NOT NULL, description TEXT NOT NULL, amount REAL NOT NULL, category_id INTEGER, vendor TEXT, notes TEXT, is_flagged INTEGER DEFAULT 0, flag_reason TEXT, import_id INTEGER, created_at TEXT DEFAULT (datetime('now')), FOREIGN KEY (account_id) REFERENCES accounts(id), FOREIGN KEY (category_id) REFERENCES categories(id), FOREIGN KEY (import_id) REFERENCES imports(id));
+             CREATE TABLE reconciliations (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, month TEXT NOT NULL, statement_balance REAL, calculated_balance REAL, is_reconciled INTEGER DEFAULT 0, reconciled_at TEXT, notes TEXT, FOREIGN KEY (account_id) REFERENCES accounts(id));
+             CREATE TABLE rules (id INTEGER PRIMARY KEY, pattern TEXT NOT NULL, match_type TEXT DEFAULT 'contains', vendor TEXT, category_id INTEGER NOT NULL, priority INTEGER DEFAULT 0, hit_count INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')), FOREIGN KEY (category_id) REFERENCES categories(id));
+             CREATE TABLE imports (id INTEGER PRIMARY KEY, filename TEXT NOT NULL, account_id INTEGER, import_date TEXT DEFAULT (datetime('now')), record_count INTEGER, date_range_start TEXT, date_range_end TEXT, checksum TEXT, FOREIGN KEY (account_id) REFERENCES accounts(id));
+             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        ).unwrap();
+        set_metadata(&conn, "schema_version", "1");
+
+        // Insert with REAL values (as old f64 code would)
+        conn.execute_batch(
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking');
+             INSERT INTO transactions (account_id, date, description, amount) VALUES (1, '2025-01-15', 'Test txn', 1000.0);
+             INSERT INTO transactions (account_id, date, description, amount) VALUES (1, '2025-01-16', 'Expense', -54.99);
+             INSERT INTO reconciliations (account_id, month, statement_balance, calculated_balance) VALUES (1, '2025-01', 945.01, 945.01);",
+        ).unwrap();
+
+        // Verify amounts stored as REAL
+        let typeof_amount: String = conn
+            .query_row("SELECT typeof(amount) FROM transactions LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(typeof_amount, "real");
+
+        // Run migrations
+        run_migrations(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn), LATEST_VERSION);
+
+        // Verify amounts are now canonical text with 2 decimal places
+        let amounts: Vec<String> = conn
+            .prepare("SELECT amount FROM transactions ORDER BY date").unwrap()
+            .query_map([], |r| r.get(0)).unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        assert_eq!(amounts, vec!["1000.00", "-54.99"]);
+
+        let stmt_bal: String = conn
+            .query_row("SELECT statement_balance FROM reconciliations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stmt_bal, "945.01");
     }
 }

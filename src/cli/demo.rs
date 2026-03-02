@@ -24,6 +24,8 @@ struct RecurringTxn {
     amount: Decimal,
 }
 
+// from_parts(mantissa, 0, 0, is_negative, scale) — required because Decimal::new() is not const.
+// e.g. from_parts(5499, 0, 0, true, 2) = -$54.99
 const RECURRING: &[RecurringTxn] = &[
     RecurringTxn { day: 5, description: "ADOBE CREATIVE CLOUD", amount: Decimal::from_parts(5499, 0, 0, true, 2) },
     RecurringTxn { day: 5, description: "GITHUB INC", amount: Decimal::from_parts(2100, 0, 0, true, 2) },
@@ -382,7 +384,7 @@ mod tests {
         let current_year = Local::now().date_naive().year();
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM transactions WHERE CAST(amount AS REAL) > 0 AND date LIKE ?1",
+                "SELECT COUNT(*) FROM transactions WHERE amount NOT LIKE '-%' AND CAST(amount AS REAL) > 0 AND date LIKE ?1",
                 [format!("{current_year}%")],
                 |r| r.get(0),
             )
