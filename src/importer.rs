@@ -335,6 +335,8 @@ fn detect_bofa_credit_card(file_path: &Path) -> bool {
         return false;
     };
     let reader = std::io::BufReader::new(file);
+    // BofA credit card CSVs put the "CardHolder Name" header in the first
+    // 1-3 rows, so scanning the first 5 lines is sufficient for detection.
     for line in reader.lines().take(5) {
         let Ok(line) = line else { break };
         if line.contains("CardHolder Name") {
@@ -843,6 +845,21 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak
         assert_eq!(rows[1].amount, -30.0);
         assert_eq!(rows[2].description, "STORE REFUND");
         assert_eq!(rows[2].amount, 100.0);
+    }
+
+    #[test]
+    fn test_import_skips_malformed_amount_rows() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
+            ("01/15/2025", "VALID PAYMENT", "-100.00"),
+            ("01/16/2025", "BAD AMOUNT ROW", "not_a_number"),
+            ("01/17/2025", "ANOTHER VALID", "250.00"),
+        ]);
+        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        assert_eq!(result.imported, 2, "malformed amount row should be skipped");
+        let count: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]
