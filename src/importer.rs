@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -126,6 +127,7 @@ impl ImporterKind {
             Self::BofaCreditCard => parse_bofa_credit_card(file_path),
             Self::BofaLineOfCredit => parse_bofa_line_of_credit(file_path),
             #[cfg(feature = "gusto")]
+            // Gusto extracts aggregate totals only; per-row malformed tracking is not applicable.
             Self::GustoPayroll => parse_gusto_payroll(file_path).map(|rows| (rows, 0)),
         }
     }
@@ -335,7 +337,6 @@ fn parse_bofa_checking(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
 // ---------------------------------------------------------------------------
 
 fn detect_bofa_credit_card(file_path: &Path) -> bool {
-    use std::io::BufRead;
     let Ok(file) = std::fs::File::open(file_path) else {
         return false;
     };
@@ -423,6 +424,8 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<(Ve
             continue;
         }
         let amount_str = record[adj_amount].trim();
+        // Pre-validation catches obviously non-numeric strings (e.g. text fields);
+        // parse_amount catches edge cases that pass character filtering but fail f64 parsing (e.g. ".").
         if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
             malformed += 1;
             continue;
@@ -905,5 +908,23 @@ JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seat
             .query_row("SELECT import_id FROM transactions LIMIT 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tx_import_id, import_id);
+    }
+
+    #[test]
+    fn test_bofa_credit_card_malformed_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cc.csv");
+        let content = "\
+CardHolder Name,Account Number,Transaction Date,Posting Date,Amount,Category,Payee,Address,City/State,Reference Number,Type
+RAYGUN DESIGN LLC,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON PURCHASE,123 Main St,Seattle WA,REF001,D
+RAYGUN DESIGN LLC,1234,01/16/2025,01/16/2025,NOT_A_NUMBER,Food,RESTAURANT,456 Elm St,Portland OR,REF002,D
+RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oak Ave,City ST,REF003,D
+";
+        std::fs::write(&path, content).unwrap();
+        let (rows, malformed) = ImporterKind::BofaCreditCard.parse(&path).unwrap();
+        assert_eq!(rows.len(), 2, "only valid rows should be imported");
+        assert_eq!(malformed, 1, "one row should be counted as malformed");
+        assert_eq!(rows[0].description, "AMAZON PURCHASE");
+        assert_eq!(rows[1].description, "DELTA AIRLINES");
     }
 }
