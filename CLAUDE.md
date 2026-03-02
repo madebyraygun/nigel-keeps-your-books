@@ -23,6 +23,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Effects:** `effects.rs` — shared pastel rainbow gradient palette, `gradient_color()` interpolation, `Particle` struct with `new()`/`seeded()`/`tick()`/`is_dead()`, `pre_seed_particles()`, and `tick_particles()` helpers; used by splash, onboarding, and snake screens
 - **Splash:** `cli/splash.rs` — 1.5-second splash screen shown on app launch (skipped during first-run onboarding); displays Nigel ASCII logo with rainbow gradient text and pre-seeded floating particle background; dismissable by any keypress
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, and text wrapping), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
+- **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
 - **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table.
@@ -103,6 +104,7 @@ Do not merge or mark work complete if docs are stale.
 - Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
 - Browse register and reports with no date flags show all transactions (no implicit year filter); the browse view scrolls to today on load
 - Database row deserialization errors are propagated, never silently discarded
+- Schema migrations run on every `init_db()` call; each migration is transactional (savepoint); to add a migration: append to `MIGRATIONS` array in `migrations.rs`, bump `LATEST_VERSION`, implement `up()` function with SQL statements
 
 ## Project Structure
 
@@ -140,6 +142,7 @@ src/
     backup.rs           # nigel backup (database backup)
     status.rs           # nigel status (show active DB + stats)
   db.rs                 # SQLite schema, connection, category seeding
+  migrations.rs          # Schema migration runner (version tracking, sequential up() functions)
   models.rs             # Structs (Account, Transaction, Rule, ParsedRow, etc.)
   importer.rs           # ImporterKind enum, format detection, CSV/XLSX parsing
   categorizer.rs        # Rules engine (categorize_transactions)

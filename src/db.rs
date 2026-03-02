@@ -3,6 +3,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::error::Result;
+use crate::migrations;
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
@@ -140,6 +141,8 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             )?;
         }
     }
+
+    migrations::run_migrations(conn)?;
     Ok(())
 }
 
@@ -219,5 +222,12 @@ mod tests {
             "SELECT form_line FROM categories WHERE name = 'Payroll — Wages'", [], |r| r.get(0),
         ).unwrap();
         assert_eq!(form_line.as_deref(), Some("1120S-8"));
+    }
+
+    #[test]
+    fn test_init_db_sets_schema_version() {
+        let (_dir, conn) = test_db();
+        let version = crate::migrations::get_schema_version(&conn);
+        assert_eq!(version, crate::migrations::LATEST_VERSION);
     }
 }
