@@ -18,7 +18,7 @@ const MIGRATIONS: &[Migration] = &[
     },
 ];
 
-pub const LATEST_VERSION: u32 = 1;
+pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 pub fn get_schema_version(conn: &Connection) -> u32 {
     get_metadata(conn, "schema_version")
@@ -27,8 +27,12 @@ pub fn get_schema_version(conn: &Connection) -> u32 {
 }
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
+    apply_migrations(conn, MIGRATIONS)
+}
+
+fn apply_migrations(conn: &Connection, migrations: &[Migration]) -> Result<()> {
     let current = get_schema_version(conn);
-    for migration in MIGRATIONS {
+    for migration in migrations {
         if migration.version > current {
             let sp_name = format!("migration_v{}", migration.version);
             conn.execute_batch(&format!("SAVEPOINT {sp_name}"))?;
@@ -90,16 +94,30 @@ mod tests {
 
     #[test]
     fn test_failed_migration_rolls_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = get_connection(&dir.path().join("test.db")).unwrap();
-        conn.execute_batch(crate::db::SCHEMA).unwrap();
+        let (_dir, conn) = test_db();
+        assert_eq!(get_schema_version(&conn), LATEST_VERSION);
 
-        // Savepoint rollback: changes inside a savepoint are undone on rollback
-        let sp_name = "test_rollback";
-        conn.execute_batch(&format!("SAVEPOINT {sp_name}")).unwrap();
-        set_metadata(&conn, "schema_version", "999").unwrap();
-        conn.execute_batch(&format!("ROLLBACK TO {sp_name}; RELEASE {sp_name}")).unwrap();
+        let bad_migrations = &[Migration {
+            version: LATEST_VERSION + 1,
+            description: "failing migration",
+            up: |conn| {
+                conn.execute_batch("CREATE TABLE _test_rollback (id INTEGER)")?;
+                Err(crate::error::NigelError::Other("intentional failure".into()))
+            },
+        }];
 
-        assert_eq!(get_schema_version(&conn), 0);
+        let result = apply_migrations(&conn, bad_migrations);
+        assert!(result.is_err());
+        // Version unchanged
+        assert_eq!(get_schema_version(&conn), LATEST_VERSION);
+        // Table creation rolled back
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name='_test_rollback'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!table_exists);
     }
 }
