@@ -535,7 +535,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
 
     for (form_line, name, total) in &rows {
         match form_line.as_str() {
-            "Gross receipts" => gross_receipts += total.abs(),
+            "Gross receipts" => gross_receipts += total,
             fl if fl.starts_with("K-") => {
                 if fl == "K-16d" {
                     distributions += total.abs();
@@ -571,7 +571,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
                     });
                 }
             }
-            "Other income" => other_income += total.abs(),
+            "Other income" => other_income += total,
             _ => {}
         }
     }
@@ -857,7 +857,6 @@ mod tests {
         )
         .unwrap();
         let acct = conn.last_insert_rowid();
-        // Create a category with form_line = "Other income" to test sign handling
         conn.execute(
             "INSERT INTO categories (name, category_type, form_line) \
              VALUES ('Test Other Income', 'income', 'Other income')",
@@ -865,24 +864,57 @@ mod tests {
         )
         .unwrap();
         let cat_id = conn.last_insert_rowid();
-        // Positive other income
+        // Refunds exceed income: net is negative
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-10', 'Misc income', 200.0, ?2)",
+             VALUES (?1, '2025-01-10', 'Misc income', 50.0, ?2)",
             rusqlite::params![acct, cat_id],
         )
         .unwrap();
-        // Negative adjustment (refund) coded as other income
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, category_id) \
-             VALUES (?1, '2025-01-15', 'Refund', -50.0, ?2)",
+             VALUES (?1, '2025-01-15', 'Refund', -200.0, ?2)",
             rusqlite::params![acct, cat_id],
         )
         .unwrap();
         let report = get_k1_prep(&conn, Some(2025)).unwrap();
-        // SUM = 200 + (-50) = 150, abs(150) = 150
-        // other_income uses abs() for consistency with deduction handling
-        assert_eq!(report.other_income, 150.0);
+        // SUM = 50 + (-200) = -150 — net negative surfaces as-is
+        assert_eq!(report.other_income, -150.0);
+    }
+
+    #[test]
+    fn test_k1_gross_receipts_sign_handling() {
+        let (_dir, conn) = test_db();
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
+        let acct = conn.last_insert_rowid();
+        // Create a category with form_line = "Gross receipts" (K-1 query uses form_line)
+        conn.execute(
+            "INSERT INTO categories (name, category_type, form_line) \
+             VALUES ('Test Gross Receipts', 'income', 'Gross receipts')",
+            [],
+        )
+        .unwrap();
+        let cat_id = conn.last_insert_rowid();
+        // Refunds exceed income: net is negative
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, '2025-01-10', 'Invoice', 100.0, ?2)",
+            rusqlite::params![acct, cat_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, '2025-01-15', 'Refund', -300.0, ?2)",
+            rusqlite::params![acct, cat_id],
+        )
+        .unwrap();
+        let report = get_k1_prep(&conn, Some(2025)).unwrap();
+        // SUM = 100 + (-300) = -200 — net negative surfaces as-is
+        assert_eq!(report.gross_receipts, -200.0);
     }
 
     #[test]
@@ -916,5 +948,44 @@ mod tests {
         assert_eq!(report.months.len(), 1);
         // Jan starts at 0 — no prior months
         assert_eq!(report.months[0].running_balance, 950.0);
+    }
+
+    #[test]
+    fn test_cashflow_cross_year_boundary() {
+        let (_dir, conn) = test_db();
+        seed_transactions(&conn); // 2025 transactions
+        // Add a 2024 transaction that should NOT affect 2025 prior balance
+        let acct: i64 = conn
+            .query_row("SELECT id FROM accounts WHERE name = 'Test'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let cat: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Client Services'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, '2024-12-15', 'Prior year payment', 5000.0, ?2)",
+            rusqlite::params![acct, cat],
+        )
+        .unwrap();
+        // Feb 2025 prior balance should only include Jan 2025, not Dec 2024
+        let report = get_cashflow(&conn, Some(2025), Some(2)).unwrap();
+        assert_eq!(report.months.len(), 1);
+        assert_eq!(report.months[0].running_balance, 940.0);
+    }
+
+    #[test]
+    fn test_cashflow_unfiltered_starts_at_zero() {
+        let (_dir, conn) = test_db();
+        seed_transactions(&conn);
+        // No year or month filter — running balance starts at 0
+        let report = get_cashflow(&conn, None, None).unwrap();
+        assert!(report.months.len() >= 2);
+        assert_eq!(report.months[0].running_balance, 950.0); // first month net only
     }
 }
