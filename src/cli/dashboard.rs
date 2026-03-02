@@ -679,7 +679,14 @@ impl Dashboard {
     fn enter_browse(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
         match reports::get_register(conn, None, None, None, None, None) {
             Ok(data) => {
-                let categories = get_categories(conn).unwrap_or_default();
+                let categories = match get_categories(conn) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.status_message =
+                            Some(format!("Warning: could not load categories: {e}"));
+                        vec![]
+                    }
+                };
                 self.status_message = None;
                 let mut browser = RegisterBrowser::new(
                     data.rows,

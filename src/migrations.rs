@@ -15,7 +15,6 @@ const MIGRATIONS: &[Migration] = &[Migration {
     up: |_conn| Ok(()),
 }];
 
-#[cfg(test)]
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 /// Returns the current schema version, or 0 if no version has been set.

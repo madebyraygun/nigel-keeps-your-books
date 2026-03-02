@@ -1,6 +1,7 @@
 use crate::db::{get_connection, get_metadata};
 use crate::error::Result;
 use crate::fmt::format_bytes;
+use crate::migrations::{get_schema_version, LATEST_VERSION};
 use crate::settings::load_settings;
 
 pub fn run() -> Result<()> {
@@ -27,6 +28,9 @@ pub fn run() -> Result<()> {
 
         let company = get_metadata(&conn, "company_name");
         println!("Company:    {}", company.as_deref().unwrap_or("(not set)"));
+
+        let schema_v = get_schema_version(&conn).unwrap_or(0);
+        println!("Schema:     v{schema_v} (latest: v{LATEST_VERSION})");
 
         let accounts: i64 = conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
         let transactions: i64 =
