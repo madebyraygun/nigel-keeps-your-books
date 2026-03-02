@@ -75,15 +75,11 @@ fn status_after_demo() {
     let env = TestEnv::new();
     env.init_and_demo();
 
-    env.cmd()
-        .arg("status")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("Transactions:")
-                .and(predicate::str::contains("Accounts:"))
-                .and(predicate::str::contains("Rules:")),
-        );
+    env.cmd().arg("status").assert().success().stdout(
+        predicate::str::contains("Transactions:")
+            .and(predicate::str::contains("Accounts:"))
+            .and(predicate::str::contains("Rules:")),
+    );
 }
 
 #[test]

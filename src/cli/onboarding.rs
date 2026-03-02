@@ -203,13 +203,37 @@ impl Onboarding {
         let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
         let centered_form = Rect::new(form_x, form_area.y, form_width, form_area.height);
 
-        let [name_row, biz_row, pw_row] =
-            Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-                .areas(centered_form);
+        let [name_row, biz_row, pw_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(centered_form);
 
-        self.draw_field(frame, name_row, "Your name:", &self.user_name, FIELD_NAME, false);
-        self.draw_field(frame, biz_row, "Business name:", &self.company_name, FIELD_COMPANY, false);
-        self.draw_field(frame, pw_row, "Set password (optional):", &self.password, FIELD_PASSWORD, true);
+        self.draw_field(
+            frame,
+            name_row,
+            "Your name:",
+            &self.user_name,
+            FIELD_NAME,
+            false,
+        );
+        self.draw_field(
+            frame,
+            biz_row,
+            "Business name:",
+            &self.company_name,
+            FIELD_COMPANY,
+            false,
+        );
+        self.draw_field(
+            frame,
+            pw_row,
+            "Set password (optional):",
+            &self.password,
+            FIELD_PASSWORD,
+            true,
+        );
 
         // Continue button
         let btn_style = if self.active_field == FIELD_BUTTON {
@@ -315,11 +339,9 @@ impl Onboarding {
 
         // Render the masked confirm input inline (reuse draw logic but with confirm state)
         let label_width = 16u16;
-        let [label_area, input_area] = Layout::horizontal([
-            Constraint::Length(label_width),
-            Constraint::Fill(1),
-        ])
-        .areas(centered_field);
+        let [label_area, input_area] =
+            Layout::horizontal([Constraint::Length(label_width), Constraint::Fill(1)])
+                .areas(centered_field);
 
         frame.render_widget(
             Paragraph::new(Span::styled(
@@ -375,11 +397,8 @@ impl Onboarding {
         masked: bool,
     ) {
         let label_width = 26u16;
-        let [label_area, input_area] = Layout::horizontal([
-            Constraint::Length(label_width),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
+        let [label_area, input_area] =
+            Layout::horizontal([Constraint::Length(label_width), Constraint::Fill(1)]).areas(area);
 
         let label_style = if self.active_field == field_idx {
             Style::default().add_modifier(Modifier::BOLD)
@@ -636,7 +655,7 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                 onboarding.screen = Screen::ActionPicker;
                             }
                             Screen::ActionPicker => {}
-                        }
+                        },
                         StepResult::Finish => {
                             let action = match onboarding.action_selection {
                                 0 => PostSetupAction::Demo,

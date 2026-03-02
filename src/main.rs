@@ -8,17 +8,20 @@ mod fmt;
 mod importer;
 mod migrations;
 mod models;
-mod tui;
 #[cfg(feature = "pdf")]
 mod pdf;
 mod reconciler;
 mod reports;
 mod reviewer;
 mod settings;
+mod tui;
 
 use clap::Parser;
 
-use cli::{AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand, RulesCommands};
+use cli::{
+    AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
+    RulesCommands,
+};
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -43,7 +46,10 @@ fn main() {
 
 fn dispatch(command: Commands) -> error::Result<()> {
     // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
-    if !matches!(command, Commands::Init { .. } | Commands::Demo | Commands::Password { .. }) {
+    if !matches!(
+        command,
+        Commands::Init { .. } | Commands::Demo | Commands::Password { .. }
+    ) {
         let data_dir = crate::settings::get_data_dir();
         let db_path = data_dir.join("nigel.db");
         if db_path.exists() {
@@ -59,7 +65,12 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 account_type,
                 institution,
                 last_four,
-            } => cli::accounts::add(&name, &account_type, institution.as_deref(), last_four.as_deref()),
+            } => cli::accounts::add(
+                &name,
+                &account_type,
+                institution.as_deref(),
+                last_four.as_deref(),
+            ),
             AccountsCommands::List => cli::accounts::list(),
         },
         Commands::Categories { command } => match command {
@@ -69,7 +80,12 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 category_type,
                 tax_line,
                 form_line,
-            } => cli::categories::add(&name, &category_type, tax_line.as_deref(), form_line.as_deref()),
+            } => cli::categories::add(
+                &name,
+                &category_type,
+                tax_line.as_deref(),
+                form_line.as_deref(),
+            ),
             CategoriesCommands::Rename { id, name } => cli::categories::rename(id, &name),
             CategoriesCommands::Update {
                 id,
@@ -77,7 +93,13 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 category_type,
                 tax_line,
                 form_line,
-            } => cli::categories::update(id, &name, &category_type, tax_line.as_deref(), form_line.as_deref()),
+            } => cli::categories::update(
+                id,
+                &name,
+                &category_type,
+                tax_line.as_deref(),
+                form_line.as_deref(),
+            ),
             CategoriesCommands::Delete { id } => cli::categories::delete(id),
         },
         Commands::Import {
@@ -94,7 +116,13 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 vendor,
                 match_type,
                 priority,
-            } => cli::rules::add(&pattern, &category, vendor.as_deref(), &match_type, priority),
+            } => cli::rules::add(
+                &pattern,
+                &category,
+                vendor.as_deref(),
+                &match_type,
+                priority,
+            ),
             RulesCommands::List => cli::rules::list(),
             RulesCommands::Update {
                 id,

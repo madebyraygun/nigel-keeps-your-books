@@ -59,7 +59,11 @@ impl RegisterBrowser {
         let cat_labels: Vec<String> = categories
             .iter()
             .map(|c| {
-                let tag = if c.category_type == "income" { "inc" } else { "exp" };
+                let tag = if c.category_type == "income" {
+                    "inc"
+                } else {
+                    "exp"
+                };
                 format!("{} ({})", c.name, tag)
             })
             .collect();
@@ -130,12 +134,12 @@ impl RegisterBrowser {
         };
 
         let areas = Layout::vertical([
-            Constraint::Length(1),      // title
-            Constraint::Length(1),      // separator
-            Constraint::Fill(1),        // table
+            Constraint::Length(1),           // title
+            Constraint::Length(1),           // separator
+            Constraint::Fill(1),             // table
             Constraint::Length(edit_height), // edit panel
-            Constraint::Length(1),      // status
-            Constraint::Length(1),      // keys
+            Constraint::Length(1),           // status
+            Constraint::Length(1),           // keys
         ])
         .split(area);
         let title_area = areas[0];
@@ -164,9 +168,7 @@ impl RegisterBrowser {
             (2 + 6 + 10 + 12 + 28 + 20 + 20, 8)
         };
         let spacing = num_cols - 1;
-        let desc_width = table_area
-            .width
-            .saturating_sub(fixed_cols + spacing) as usize;
+        let desc_width = table_area.width.saturating_sub(fixed_cols + spacing) as usize;
         let desc_width = desc_width.max(10);
 
         // Build only the visible rows (with text wrapping)
@@ -184,7 +186,11 @@ impl RegisterBrowser {
                 break;
             }
 
-            let cat = row_data.category.as_deref().unwrap_or("\u{2014}").to_string();
+            let cat = row_data
+                .category
+                .as_deref()
+                .unwrap_or("\u{2014}")
+                .to_string();
             let amt = tui::money_span(row_data.amount);
             let flag_cell = Cell::from(if row_data.is_flagged { "!" } else { "" });
 
@@ -409,9 +415,8 @@ impl RegisterBrowser {
                 }
                 _ => {}
             },
-            BrowseMode::GotoPage(_)
-            | BrowseMode::GotoDate(_)
-            | BrowseMode::FindId(_) => match code {
+            BrowseMode::GotoPage(_) | BrowseMode::GotoDate(_) | BrowseMode::FindId(_) => match code
+            {
                 KeyCode::Esc => self.mode = BrowseMode::Normal,
                 KeyCode::Enter => self.submit_input(),
                 KeyCode::Backspace => self.input_backspace(),
@@ -522,8 +527,7 @@ impl RegisterBrowser {
                         self.offset = idx;
                         self.selected = 0;
                     } else {
-                        self.status_message =
-                            Some(format!("No transactions on or after {target}"));
+                        self.status_message = Some(format!("No transactions on or after {target}"));
                     }
                 }
             }
@@ -673,7 +677,9 @@ impl RegisterBrowser {
 
     pub fn commit_edit(&mut self, conn: &rusqlite::Connection) -> crate::error::Result<()> {
         let abs_idx = self.offset + self.selected;
-        let row = self.rows.get(abs_idx)
+        let row = self
+            .rows
+            .get(abs_idx)
             .ok_or_else(|| crate::error::NigelError::Other("No row selected".into()))?;
         let txn_id = row.id;
 
@@ -701,7 +707,9 @@ impl RegisterBrowser {
 
     pub fn toggle_flag(&mut self, conn: &rusqlite::Connection) -> crate::error::Result<()> {
         let abs_idx = self.offset + self.selected;
-        let row = self.rows.get(abs_idx)
+        let row = self
+            .rows
+            .get(abs_idx)
             .ok_or_else(|| crate::error::NigelError::Other("No row selected".into()))?;
         let txn_id = row.id;
         let new_state = crate::reviewer::toggle_transaction_flag(conn, txn_id)?;
@@ -736,9 +744,21 @@ mod tests {
 
     fn make_categories() -> Vec<CategoryChoice> {
         vec![
-            CategoryChoice { id: 1, name: "Advertising".to_string(), category_type: "expense".to_string() },
-            CategoryChoice { id: 2, name: "Software & Subscriptions".to_string(), category_type: "expense".to_string() },
-            CategoryChoice { id: 3, name: "Revenue".to_string(), category_type: "income".to_string() },
+            CategoryChoice {
+                id: 1,
+                name: "Advertising".to_string(),
+                category_type: "expense".to_string(),
+            },
+            CategoryChoice {
+                id: 2,
+                name: "Software & Subscriptions".to_string(),
+                category_type: "expense".to_string(),
+            },
+            CategoryChoice {
+                id: 3,
+                name: "Revenue".to_string(),
+                category_type: "income".to_string(),
+            },
         ]
     }
 
@@ -824,7 +844,11 @@ mod tests {
         browser.submit_input();
         assert_eq!(browser.offset, 0); // unchanged
         assert!(browser.status_message.is_some());
-        assert!(browser.status_message.as_ref().unwrap().contains("2026-01-01"));
+        assert!(browser
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("2026-01-01"));
     }
 
     #[test]
@@ -938,7 +962,10 @@ mod tests {
         let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), cats);
 
         // Enter edit, select first category
-        browser.mode = BrowseMode::EditCategory { query: String::new(), selection: 0 };
+        browser.mode = BrowseMode::EditCategory {
+            query: String::new(),
+            selection: 0,
+        };
         browser.handle_key_event(KeyCode::Char('a'));
         browser.handle_key_event(KeyCode::Enter);
 

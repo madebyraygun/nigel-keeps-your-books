@@ -16,9 +16,11 @@ pub fn reconcile(
     statement_balance: f64,
 ) -> Result<ReconcileResult> {
     let account_id: i64 = conn
-        .query_row("SELECT id FROM accounts WHERE name = ?1", [account_name], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT id FROM accounts WHERE name = ?1",
+            [account_name],
+            |row| row.get(0),
+        )
         .map_err(|_| NigelError::UnknownAccount(account_name.to_string()))?;
 
     let calculated: f64 = conn.query_row(
@@ -58,8 +60,10 @@ mod tests {
 
     fn setup_account_with_txns(conn: &Connection, total: f64) {
         conn.execute(
-            "INSERT INTO accounts (name, account_type) VALUES ('Test Checking', 'checking')", [],
-        ).unwrap();
+            "INSERT INTO accounts (name, account_type) VALUES ('Test Checking', 'checking')",
+            [],
+        )
+        .unwrap();
         let acct = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount) VALUES (?1, '2025-01-15', 'Deposit', ?2)",
@@ -90,9 +94,9 @@ mod tests {
         let (_dir, conn) = test_db();
         setup_account_with_txns(&conn, 500.0);
         reconcile(&conn, "Test Checking", "2025-01", 500.0).unwrap();
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM reconciliations", [], |r| r.get(0),
-        ).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM reconciliations", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
     }
 }

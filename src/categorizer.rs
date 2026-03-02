@@ -89,8 +89,10 @@ mod tests {
 
     fn setup_account_and_txns(conn: &Connection, descriptions: &[&str]) {
         conn.execute(
-            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')", [],
-        ).unwrap();
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
         let account_id = conn.last_insert_rowid();
         for desc in descriptions {
             conn.execute(
@@ -101,10 +103,20 @@ mod tests {
         }
     }
 
-    fn add_rule(conn: &Connection, pattern: &str, match_type: &str, category_name: &str, priority: i64) {
-        let cat_id: i64 = conn.query_row(
-            "SELECT id FROM categories WHERE name = ?1", [category_name], |r| r.get(0),
-        ).unwrap();
+    fn add_rule(
+        conn: &Connection,
+        pattern: &str,
+        match_type: &str,
+        category_name: &str,
+        priority: i64,
+    ) {
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = ?1",
+                [category_name],
+                |r| r.get(0),
+            )
+            .unwrap();
         conn.execute(
             "INSERT INTO rules (pattern, match_type, category_id, priority, is_active) VALUES (?1, ?2, ?3, ?4, 1)",
             rusqlite::params![pattern, match_type, cat_id, priority],
@@ -170,9 +182,9 @@ mod tests {
         setup_account_and_txns(&conn, &["ADOBE PHOTOSHOP", "ADOBE ILLUSTRATOR"]);
         add_rule(&conn, "ADOBE", "contains", "Software & Subscriptions", 0);
         categorize_transactions(&conn).unwrap();
-        let hit_count: i64 = conn.query_row(
-            "SELECT hit_count FROM rules LIMIT 1", [], |r| r.get(0),
-        ).unwrap();
+        let hit_count: i64 = conn
+            .query_row("SELECT hit_count FROM rules LIMIT 1", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(hit_count, 2);
     }
 }

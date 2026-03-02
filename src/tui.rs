@@ -6,9 +6,7 @@ use ratatui::Frame;
 use crate::error::Result;
 use crate::fmt::money;
 
-pub const HEADER_STYLE: Style = Style::new()
-    .fg(Color::Yellow)
-    .add_modifier(Modifier::BOLD);
+pub const HEADER_STYLE: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 
 pub const FOOTER_STYLE: Style = Style::new().fg(Color::DarkGray);
 
@@ -87,9 +85,7 @@ pub fn run_report_view(view: &mut dyn ReportView) -> Result<()> {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('c')
-                {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     break Ok(());
                 }
                 match view.handle_key(key.code) {

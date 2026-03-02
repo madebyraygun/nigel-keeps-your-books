@@ -127,16 +127,27 @@ impl PasswordManager {
 
     fn do_encrypt(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
         let pw = self.new_pw.trim();
+        let trimmed = pw.len() != self.new_pw.len();
         super::password::encrypt_database(db_path, pw).map_err(|e| e.to_string())?;
         db::set_db_password(Some(pw.to_string()));
-        Ok("Database encrypted successfully.".into())
+        let mut msg = "Database encrypted successfully.".to_string();
+        if trimmed {
+            msg.push_str(" Note: leading/trailing spaces were removed from password.");
+        }
+        Ok(msg)
     }
 
     fn do_change(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
-        super::password::rekey_database(db_path, self.current_pw.trim(), self.new_pw.trim())
+        let new_pw = self.new_pw.trim();
+        let trimmed = new_pw.len() != self.new_pw.len();
+        super::password::rekey_database(db_path, self.current_pw.trim(), new_pw)
             .map_err(|e| e.to_string())?;
-        db::set_db_password(Some(self.new_pw.trim().to_string()));
-        Ok("Password changed successfully.".into())
+        db::set_db_password(Some(new_pw.to_string()));
+        let mut msg = "Password changed successfully.".to_string();
+        if trimmed {
+            msg.push_str(" Note: leading/trailing spaces were removed from password.");
+        }
+        Ok(msg)
     }
 
     fn do_remove(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
@@ -191,9 +202,7 @@ impl PasswordManager {
             Phase::InputCurrent => {
                 self.draw_input(frame, centered, "Current password:", &self.current_pw)
             }
-            Phase::InputNew => {
-                self.draw_input(frame, centered, "New password:", &self.new_pw)
-            }
+            Phase::InputNew => self.draw_input(frame, centered, "New password:", &self.new_pw),
             Phase::InputConfirm => {
                 self.draw_input(frame, centered, "Confirm password:", &self.confirm_pw)
             }
@@ -310,25 +319,23 @@ impl PasswordManager {
                 self.reset();
                 return PasswordAction::Continue;
             }
-            KeyCode::Enter => {
-                match (&self.phase, &self.chosen_action) {
-                    (Phase::InputCurrent, Some(Action::Change)) => {
-                        self.phase = Phase::InputNew;
-                        self.cursor = 0;
-                    }
-                    (Phase::InputCurrent, Some(Action::Remove)) => {
-                        self.execute();
-                    }
-                    (Phase::InputNew, _) => {
-                        self.phase = Phase::InputConfirm;
-                        self.cursor = 0;
-                    }
-                    (Phase::InputConfirm, _) => {
-                        self.execute();
-                    }
-                    _ => {}
+            KeyCode::Enter => match (&self.phase, &self.chosen_action) {
+                (Phase::InputCurrent, Some(Action::Change)) => {
+                    self.phase = Phase::InputNew;
+                    self.cursor = 0;
                 }
-            }
+                (Phase::InputCurrent, Some(Action::Remove)) => {
+                    self.execute();
+                }
+                (Phase::InputNew, _) => {
+                    self.phase = Phase::InputConfirm;
+                    self.cursor = 0;
+                }
+                (Phase::InputConfirm, _) => {
+                    self.execute();
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 self.active_input_mut().push(c);
                 self.cursor += 1;

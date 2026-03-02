@@ -15,16 +15,16 @@ pub fn dispatch(cmd: ReportCommands) -> Result<()> {
     // Validate --mode and --format values
     if let Some(ref mode) = args.mode {
         if mode != "view" && mode != "export" {
-            return Err(crate::error::NigelError::Other(
-                format!("Unknown --mode '{mode}'. Expected 'view' or 'export'."),
-            ));
+            return Err(crate::error::NigelError::Other(format!(
+                "Unknown --mode '{mode}'. Expected 'view' or 'export'."
+            )));
         }
     }
     if let Some(ref format) = args.format {
         if format != "pdf" && format != "text" {
-            return Err(crate::error::NigelError::Other(
-                format!("Unknown --format '{format}'. Expected 'pdf' or 'text'."),
-            ));
+            return Err(crate::error::NigelError::Other(format!(
+                "Unknown --format '{format}'. Expected 'pdf' or 'text'."
+            )));
         }
     }
 
@@ -51,21 +51,36 @@ fn dispatch_view(cmd: ReportCommands) -> Result<()> {
 
 pub(crate) fn dispatch_text(cmd: &ReportCommands) -> Result<String> {
     match cmd {
-        ReportCommands::Pnl { month, year, from_date, to_date, .. } => {
-            text::pnl(month.clone(), *year, from_date.clone(), to_date.clone())
-        }
+        ReportCommands::Pnl {
+            month,
+            year,
+            from_date,
+            to_date,
+            ..
+        } => text::pnl(month.clone(), *year, from_date.clone(), to_date.clone()),
         ReportCommands::Expenses { month, year, .. } => text::expenses(month.clone(), *year),
         ReportCommands::Tax { year, .. } => text::tax(*year),
         ReportCommands::Cashflow { month, year, .. } => text::cashflow(month.clone(), *year),
-        ReportCommands::Register { month, year, from_date, to_date, account, .. } => {
-            text::register(month.clone(), *year, from_date.clone(), to_date.clone(), account.clone())
-        }
+        ReportCommands::Register {
+            month,
+            year,
+            from_date,
+            to_date,
+            account,
+            ..
+        } => text::register(
+            month.clone(),
+            *year,
+            from_date.clone(),
+            to_date.clone(),
+            account.clone(),
+        ),
         ReportCommands::Flagged { .. } => text::flagged(),
         ReportCommands::Balance { .. } => text::balance(),
         ReportCommands::K1 { year, .. } => text::k1(*year),
-        ReportCommands::All { .. } => {
-            Err(crate::error::NigelError::Other("`report all` is export-only".into()))
-        }
+        ReportCommands::All { .. } => Err(crate::error::NigelError::Other(
+            "`report all` is export-only".into(),
+        )),
     }
 }
 
@@ -81,7 +96,10 @@ fn dispatch_export(cmd: ReportCommands, args: ReportOutputArgs) -> Result<()> {
 }
 
 fn export_text(cmd: ReportCommands, output: Option<String>) -> Result<()> {
-    if let ReportCommands::All { year, output_dir, .. } = cmd {
+    if let ReportCommands::All {
+        year, output_dir, ..
+    } = cmd
+    {
         return export_all_text(year, output_dir);
     }
 
@@ -134,7 +152,8 @@ fn dispatch_pdf_export(cmd: ReportCommands, output: Option<String>) -> Result<()
     {
         let _ = (cmd, output);
         return Err(crate::error::NigelError::Other(
-            "PDF export requires the 'pdf' feature — build with `cargo build --features pdf`".into(),
+            "PDF export requires the 'pdf' feature — build with `cargo build --features pdf`"
+                .into(),
         ));
     }
 

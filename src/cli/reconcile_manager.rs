@@ -86,7 +86,12 @@ impl ReconcileScreen {
         }
     }
 
-    fn draw_form(&self, frame: &mut Frame, content_area: ratatui::layout::Rect, hints_area: ratatui::layout::Rect) {
+    fn draw_form(
+        &self,
+        frame: &mut Frame,
+        content_area: ratatui::layout::Rect,
+        hints_area: ratatui::layout::Rect,
+    ) {
         let mut lines = vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -107,12 +112,20 @@ impl ReconcileScreen {
             } else {
                 Style::default()
             };
-            let arrows = if is_focused { ("< ", " >") } else { ("  ", "  ") };
+            let arrows = if is_focused {
+                ("< ", " >")
+            } else {
+                ("  ", "  ")
+            };
             lines.push(Line::from(vec![
                 Span::styled("   Account        ", label_style),
                 Span::styled(
                     format!("{}{}{}", arrows.0, account_name, arrows.1),
-                    if is_focused { Style::default().fg(Color::Cyan) } else { Style::default() },
+                    if is_focused {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default()
+                    },
                 ),
             ]));
 
@@ -124,12 +137,20 @@ impl ReconcileScreen {
                 Style::default()
             };
             let cursor = if is_focused { "_" } else { "" };
-            let placeholder = if self.month.is_empty() && !is_focused { "YYYY-MM" } else { "" };
+            let placeholder = if self.month.is_empty() && !is_focused {
+                "YYYY-MM"
+            } else {
+                ""
+            };
             lines.push(Line::from(vec![
                 Span::styled("   Month          ", label_style),
                 Span::styled(
                     format!("{}{}{}", self.month, cursor, placeholder),
-                    if is_focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) },
+                    if is_focused {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
                 ),
             ]));
 
@@ -145,7 +166,11 @@ impl ReconcileScreen {
                 Span::styled("   Balance      $ ", label_style),
                 Span::styled(
                     format!("{}{}", self.balance, cursor),
-                    if is_focused { Style::default().fg(Color::Cyan) } else { Style::default() },
+                    if is_focused {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default()
+                    },
                 ),
             ]));
         }
@@ -174,7 +199,11 @@ impl ReconcileScreen {
         hints_area: ratatui::layout::Rect,
         result: &ReconcileResult,
     ) {
-        let account_name = self.accounts.get(self.account_idx).map(|s| s.as_str()).unwrap_or("?");
+        let account_name = self
+            .accounts
+            .get(self.account_idx)
+            .map(|s| s.as_str())
+            .unwrap_or("?");
 
         let mut lines = vec![
             Line::from(""),
@@ -190,7 +219,10 @@ impl ReconcileScreen {
 
         if result.is_reconciled {
             lines.push(Line::from(Span::styled(
-                format!("   Reconciled! Calculated: {}", money(result.calculated_balance)),
+                format!(
+                    "   Reconciled! Calculated: {}",
+                    money(result.calculated_balance)
+                ),
                 Style::default().fg(Color::Green),
             )));
         } else {
@@ -198,8 +230,14 @@ impl ReconcileScreen {
                 "   DISCREPANCY",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )));
-            lines.push(Line::from(format!("   Statement:   {}", money(result.statement_balance))));
-            lines.push(Line::from(format!("   Calculated:  {}", money(result.calculated_balance))));
+            lines.push(Line::from(format!(
+                "   Statement:   {}",
+                money(result.statement_balance)
+            )));
+            lines.push(Line::from(format!(
+                "   Calculated:  {}",
+                money(result.calculated_balance)
+            )));
             lines.push(Line::from(Span::styled(
                 format!("   Difference:  {}", money(result.discrepancy)),
                 Style::default().fg(Color::Red),
@@ -217,12 +255,10 @@ impl ReconcileScreen {
     pub fn handle_key(&mut self, code: KeyCode, conn: &Connection) -> ReconcileAction {
         match &self.screen {
             Screen::Form => self.handle_form_key(code, conn),
-            Screen::Result(_) => {
-                match code {
-                    KeyCode::Esc => ReconcileAction::Close,
-                    _ => ReconcileAction::Continue,
-                }
-            }
+            Screen::Result(_) => match code {
+                KeyCode::Esc => ReconcileAction::Close,
+                _ => ReconcileAction::Continue,
+            },
         }
     }
 
@@ -236,7 +272,11 @@ impl ReconcileScreen {
             }
             KeyCode::BackTab | KeyCode::Up => {
                 if !self.accounts.is_empty() {
-                    self.focused = if self.focused == 0 { 2 } else { self.focused - 1 };
+                    self.focused = if self.focused == 0 {
+                        2
+                    } else {
+                        self.focused - 1
+                    };
                 }
             }
             KeyCode::Left => {
@@ -271,8 +311,12 @@ impl ReconcileScreen {
             }
             KeyCode::Backspace => {
                 match self.focused {
-                    FIELD_MONTH => { self.month.pop(); }
-                    FIELD_BALANCE => { self.balance.pop(); }
+                    FIELD_MONTH => {
+                        self.month.pop();
+                    }
+                    FIELD_BALANCE => {
+                        self.balance.pop();
+                    }
                     _ => {}
                 }
                 self.status_message = None;

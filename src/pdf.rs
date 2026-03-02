@@ -75,8 +75,7 @@ struct PdfWriter {
 
 impl PdfWriter {
     fn new(title: &str) -> Result<Self> {
-        let (doc, page, layer) =
-            PdfDocument::new(title, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
+        let (doc, page, layer) = PdfDocument::new(title, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
         let font = doc
             .add_builtin_font(BuiltinFont::Helvetica)
             .map_err(|e| NigelError::Pdf(format!("{e:?}")))?;
@@ -251,12 +250,12 @@ impl PdfWriter {
         self.y += 5.5;
     }
 
-    fn to_bytes(self) -> Result<Vec<u8>> {
+    fn into_bytes(self) -> Result<Vec<u8>> {
         let mut buf = BufWriter::new(Vec::new());
         self.doc
             .save(&mut buf)
             .map_err(|e| NigelError::Pdf(format!("{e:?}")))?;
-        Ok(buf.into_inner().map_err(|e| NigelError::Pdf(e.to_string()))?)
+        buf.into_inner().map_err(|e| NigelError::Pdf(e.to_string()))
     }
 }
 
@@ -269,8 +268,14 @@ pub fn render_pnl(report: &PnlReport, company: &str, date_range: &str) -> Result
     pdf.header("Profit & Loss", company, date_range);
 
     let cols = &[
-        Col { width: 130.0, align: Align::Left },
-        Col { width: 47.8, align: Align::Right },
+        Col {
+            width: 130.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 47.8,
+            align: Align::Right,
+        },
     ];
     pdf.table_header(cols, &["Category", "Amount"]);
 
@@ -297,11 +302,15 @@ pub fn render_pnl(report: &PnlReport, company: &str, date_range: &str) -> Result
     }
 
     pdf.separator();
-    let label = if report.net >= 0.0 { "NET INCOME" } else { "NET LOSS" };
+    let label = if report.net >= 0.0 {
+        "NET INCOME"
+    } else {
+        "NET LOSS"
+    };
     let net = money(report.net);
     pdf.table_row(cols, &[label, &net], true);
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_expenses(
@@ -313,10 +322,22 @@ pub fn render_expenses(
     pdf.header("Expense Breakdown", company, date_range);
 
     let cols = &[
-        Col { width: 90.0, align: Align::Left },
-        Col { width: 40.0, align: Align::Right },
-        Col { width: 27.8, align: Align::Right },
-        Col { width: 20.0, align: Align::Right },
+        Col {
+            width: 90.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 40.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 27.8,
+            align: Align::Right,
+        },
+        Col {
+            width: 20.0,
+            align: Align::Right,
+        },
     ];
     pdf.table_header(cols, &["Category", "Amount", "%", "Count"]);
 
@@ -334,9 +355,18 @@ pub fn render_expenses(
         pdf.blank_row();
         pdf.section_label("Top Vendors");
         let vcols = &[
-            Col { width: 90.0, align: Align::Left },
-            Col { width: 40.0, align: Align::Right },
-            Col { width: 47.8, align: Align::Right },
+            Col {
+                width: 90.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 40.0,
+                align: Align::Right,
+            },
+            Col {
+                width: 47.8,
+                align: Align::Right,
+            },
         ];
         pdf.table_header(vcols, &["Vendor", "Amount", "Count"]);
         for v in &report.top_vendors {
@@ -346,7 +376,7 @@ pub fn render_expenses(
         }
     }
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_tax(report: &TaxSummary, company: &str, date_range: &str) -> Result<Vec<u8>> {
@@ -354,10 +384,22 @@ pub fn render_tax(report: &TaxSummary, company: &str, date_range: &str) -> Resul
     pdf.header("Tax Summary", company, date_range);
 
     let cols = &[
-        Col { width: 70.0, align: Align::Left },
-        Col { width: 40.0, align: Align::Left },
-        Col { width: 30.0, align: Align::Left },
-        Col { width: 37.8, align: Align::Right },
+        Col {
+            width: 70.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 40.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 30.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 37.8,
+            align: Align::Right,
+        },
     ];
     pdf.table_header(cols, &["Category", "Tax Line", "Type", "Amount"]);
 
@@ -367,7 +409,7 @@ pub fn render_tax(report: &TaxSummary, company: &str, date_range: &str) -> Resul
         pdf.table_row(cols, &[&item.name, tl, &item.category_type, &amt], false);
     }
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_cashflow(
@@ -379,11 +421,26 @@ pub fn render_cashflow(
     pdf.header("Cash Flow", company, date_range);
 
     let cols = &[
-        Col { width: 35.0, align: Align::Left },
-        Col { width: 37.0, align: Align::Right },
-        Col { width: 37.0, align: Align::Right },
-        Col { width: 37.0, align: Align::Right },
-        Col { width: 31.8, align: Align::Right },
+        Col {
+            width: 35.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 37.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 37.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 37.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 31.8,
+            align: Align::Right,
+        },
     ];
     pdf.table_header(cols, &["Month", "Inflows", "Outflows", "Net", "Running"]);
 
@@ -395,7 +452,7 @@ pub fn render_cashflow(
         pdf.table_row(cols, &[&m.month, &inf, &out, &net, &run], false);
     }
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_register(
@@ -411,14 +468,32 @@ pub fn render_register(
     );
 
     let cols = &[
-        Col { width: 20.0, align: Align::Left },
-        Col { width: 62.0, align: Align::Left },
-        Col { width: 22.0, align: Align::Right },
-        Col { width: 42.0, align: Align::Left },
-        Col { width: 31.8, align: Align::Left },
+        Col {
+            width: 20.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 62.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 22.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 42.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 31.8,
+            align: Align::Left,
+        },
     ];
     let font_size = 8.0;
-    pdf.table_header(cols, &["Date", "Description", "Amount", "Category", "Account"]);
+    pdf.table_header(
+        cols,
+        &["Date", "Description", "Amount", "Category", "Account"],
+    );
 
     for r in &report.rows {
         let amt = money(r.amount);
@@ -436,7 +511,7 @@ pub fn render_register(
     let count_label = format!("{} transactions", report.rows.len());
     pdf.table_row(cols, &[&count_label, "", &total, "", ""], true);
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_flagged(rows: &[FlaggedTransaction], company: &str) -> Result<Vec<u8>> {
@@ -448,21 +523,40 @@ pub fn render_flagged(rows: &[FlaggedTransaction], company: &str) -> Result<Vec<
     );
 
     let cols = &[
-        Col { width: 15.0, align: Align::Left },
-        Col { width: 27.0, align: Align::Left },
-        Col { width: 80.0, align: Align::Left },
-        Col { width: 30.0, align: Align::Right },
-        Col { width: 25.8, align: Align::Left },
+        Col {
+            width: 15.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 27.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 80.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 30.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 25.8,
+            align: Align::Left,
+        },
     ];
     pdf.table_header(cols, &["ID", "Date", "Description", "Amount", "Account"]);
 
     for r in rows {
         let id = r.id.to_string();
         let amt = money(r.amount.abs());
-        pdf.table_row(cols, &[&id, &r.date, &r.description, &amt, &r.account_name], false);
+        pdf.table_row(
+            cols,
+            &[&id, &r.date, &r.description, &amt, &r.account_name],
+            false,
+        );
     }
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_balance(report: &BalanceReport, company: &str) -> Result<Vec<u8>> {
@@ -470,9 +564,18 @@ pub fn render_balance(report: &BalanceReport, company: &str) -> Result<Vec<u8>> 
     pdf.header("Cash Position", company, "As of today");
 
     let cols = &[
-        Col { width: 80.0, align: Align::Left },
-        Col { width: 50.0, align: Align::Left },
-        Col { width: 47.8, align: Align::Right },
+        Col {
+            width: 80.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 50.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 47.8,
+            align: Align::Right,
+        },
     ];
     pdf.table_header(cols, &["Account", "Type", "Balance"]);
 
@@ -490,17 +593,27 @@ pub fn render_balance(report: &BalanceReport, company: &str) -> Result<Vec<u8>> 
     let ytd_label = format!("YTD Net Income: {ytd}");
     pdf.text(&ytd_label, MARGIN_LEFT, FONT_SIZE, false);
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Result<Vec<u8>> {
     let mut pdf = PdfWriter::new("K-1 Preparation Worksheet")?;
-    pdf.header("K-1 Preparation Worksheet (Form 1120-S)", company, date_range);
+    pdf.header(
+        "K-1 Preparation Worksheet (Form 1120-S)",
+        company,
+        date_range,
+    );
 
     // Income Summary
     let summary_cols = &[
-        Col { width: 130.0, align: Align::Left },
-        Col { width: 47.8, align: Align::Right },
+        Col {
+            width: 130.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 47.8,
+            align: Align::Right,
+        },
     ];
     pdf.section_label("Income Summary");
     pdf.table_header(summary_cols, &["Item", "Amount"]);
@@ -523,15 +636,28 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     // Deductions by Line
     if !report.deduction_lines.is_empty() {
         let ded_cols = &[
-            Col { width: 30.0, align: Align::Left },
-            Col { width: 100.0, align: Align::Left },
-            Col { width: 47.8, align: Align::Right },
+            Col {
+                width: 30.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 100.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 47.8,
+                align: Align::Right,
+            },
         ];
         pdf.section_label("Deductions by Line");
         pdf.table_header(ded_cols, &["Line", "Category", "Amount"]);
         for item in &report.deduction_lines {
             let amt = money(item.total);
-            pdf.table_row(ded_cols, &[&item.form_line, &item.category_name, &amt], false);
+            pdf.table_row(
+                ded_cols,
+                &[&item.form_line, &item.category_name, &amt],
+                false,
+            );
         }
         pdf.blank_row();
     }
@@ -539,15 +665,28 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     // Schedule K Items
     if !report.schedule_k_items.is_empty() {
         let sk_cols = &[
-            Col { width: 30.0, align: Align::Left },
-            Col { width: 100.0, align: Align::Left },
-            Col { width: 47.8, align: Align::Right },
+            Col {
+                width: 30.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 100.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 47.8,
+                align: Align::Right,
+            },
         ];
         pdf.section_label("Schedule K");
         pdf.table_header(sk_cols, &["Line", "Item", "Amount"]);
         for item in &report.schedule_k_items {
             let amt = money(item.total.abs());
-            pdf.table_row(sk_cols, &[&item.form_line, &item.category_name, &amt], false);
+            pdf.table_row(
+                sk_cols,
+                &[&item.form_line, &item.category_name, &amt],
+                false,
+            );
         }
         pdf.blank_row();
     }
@@ -555,9 +694,18 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     // Line 19 Other Deductions detail
     if !report.other_deductions.is_empty() {
         let od_cols = &[
-            Col { width: 80.0, align: Align::Left },
-            Col { width: 48.9, align: Align::Right },
-            Col { width: 48.9, align: Align::Right },
+            Col {
+                width: 80.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 48.9,
+                align: Align::Right,
+            },
+            Col {
+                width: 48.9,
+                align: Align::Right,
+            },
         ];
         pdf.section_label("Line 19 — Other Deductions");
         pdf.table_header(od_cols, &["Category", "Full Amount", "Deductible"]);
@@ -587,7 +735,7 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
         pdf.y += ROW_H;
     }
 
-    pdf.to_bytes()
+    pdf.into_bytes()
 }
 
 #[cfg(test)]

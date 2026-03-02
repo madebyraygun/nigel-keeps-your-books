@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -276,7 +276,7 @@ impl ImportScreen {
     }
 }
 
-fn run_import(conn: &Connection, file_path: &PathBuf, account_name: &str) -> ImportResult {
+fn run_import(conn: &Connection, file_path: &Path, account_name: &str) -> ImportResult {
     // Snapshot before import
     let data_dir = get_data_dir();
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
@@ -332,4 +332,3 @@ fn run_import(conn: &Connection, file_path: &PathBuf, account_name: &str) -> Imp
         }
     }
 }
-

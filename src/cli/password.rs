@@ -52,8 +52,7 @@ pub fn rekey_database(db_path: &Path, current_password: &str, new_password: &str
 }
 
 fn prompt(msg: &str) -> Result<String> {
-    rpassword::prompt_password(msg)
-        .map_err(|e| crate::error::NigelError::Other(e.to_string()))
+    rpassword::prompt_password(msg).map_err(|e| crate::error::NigelError::Other(e.to_string()))
 }
 
 fn prompt_and_confirm(msg: &str) -> Result<String> {
@@ -64,7 +63,11 @@ fn prompt_and_confirm(msg: &str) -> Result<String> {
             "Passwords do not match.".into(),
         ));
     }
-    Ok(pw1.trim().to_string())
+    let trimmed = pw1.trim();
+    if trimmed.len() != pw1.len() {
+        eprintln!("Note: leading/trailing spaces were removed from password.");
+    }
+    Ok(trimmed.to_string())
 }
 
 pub fn run_set() -> Result<()> {
@@ -115,6 +118,8 @@ pub fn run_remove() -> Result<()> {
     Ok(())
 }
 
+// Tests mutate the global DB_PASSWORD mutex and must run with --test-threads=1.
+// See also: db::tests, cli::backup::tests.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,7 +12,7 @@ use crate::models::ParsedRow;
 // ---------------------------------------------------------------------------
 
 pub fn parse_amount(raw: &str) -> Option<f64> {
-    let s = raw.replace(',', "").replace('"', "").replace('$', "");
+    let s = raw.replace([',', '"', '$'], "");
     let s = s.trim();
     if let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
         return Some(-inner.trim().parse::<f64>().ok()?);
@@ -29,8 +29,7 @@ pub fn parse_date_mdy(raw: &str) -> Option<String> {
     let m: u32 = parts[0].parse().ok()?;
     let d: u32 = parts[1].parse().ok()?;
     let y: i32 = parts[2].parse().ok()?;
-    chrono::NaiveDate::from_ymd_opt(y, m as u32, d as u32)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
+    chrono::NaiveDate::from_ymd_opt(y, m, d).map(|dt| dt.format("%Y-%m-%d").to_string())
 }
 
 #[cfg(any(feature = "gusto", test))]
@@ -62,8 +61,13 @@ fn is_duplicate_row(conn: &Connection, account_id: i64, row: &ParsedRow) -> bool
             "SELECT 1 FROM transactions WHERE account_id = ?1 AND date = ?2 AND amount = ?3 AND description = ?4",
         )
         .unwrap();
-    stmt.exists(rusqlite::params![account_id, row.date, row.amount, row.description])
-        .unwrap_or(false)
+    stmt.exists(rusqlite::params![
+        account_id,
+        row.date,
+        row.amount,
+        row.description
+    ])
+    .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +145,12 @@ impl ImporterKind {
     }
 
     #[allow(unused_variables)]
-    pub fn post_import(&self, conn: &Connection, account_id: i64, rows: &[ParsedRow]) -> Result<()> {
+    pub fn post_import(
+        &self,
+        conn: &Connection,
+        account_id: i64,
+        rows: &[ParsedRow],
+    ) -> Result<()> {
         match self {
             #[cfg(feature = "gusto")]
             Self::GustoPayroll => auto_categorize_payroll(conn, account_id, rows),
@@ -196,12 +205,11 @@ pub fn import_file(
 ) -> Result<ImportResult> {
     let (account_id, account_type) = {
         let mut stmt = conn.prepare("SELECT id, account_type FROM accounts WHERE name = ?1")?;
-        let row = stmt
-            .query_row([account_name], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|_| NigelError::UnknownAccount(account_name.to_string()))?;
-        row
+
+        stmt.query_row([account_name], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|_| NigelError::UnknownAccount(account_name.to_string()))?
     };
 
     let checksum = compute_checksum(file_path)?;
@@ -282,10 +290,7 @@ fn detect_bofa_checking(file_path: &Path) -> bool {
         .from_reader(std::io::BufReader::new(file));
     for result in rdr.records() {
         let Ok(record) = result else { continue };
-        if record.len() >= 4
-            && record[0].trim() == "Date"
-            && record[1].contains("Description")
-        {
+        if record.len() >= 4 && record[0].trim() == "Date" && record[1].contains("Description") {
             return true;
         }
     }
@@ -301,9 +306,7 @@ fn parse_bofa_checking(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     for result in rdr.records() {
         let Ok(record) = result else { continue };
         if !found_header {
-            if record.len() >= 4
-                && record[0].trim() == "Date"
-                && record[1].contains("Description")
+            if record.len() >= 4 && record[0].trim() == "Date" && record[1].contains("Description")
             {
                 found_header = true;
             }
@@ -367,7 +370,10 @@ fn parse_bofa_line_of_credit(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)
 /// Shared parser for BofA Credit Card and Line of Credit CSV formats.
 /// - `has_type_column: true`  → Credit Card (D/C sign logic)
 /// - `has_type_column: false` → Line of Credit (always negate)
-fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<(Vec<ParsedRow>, usize)> {
+fn parse_bofa_card_format(
+    file_path: &Path,
+    has_type_column: bool,
+) -> Result<(Vec<ParsedRow>, usize)> {
     let mut rdr = create_csv_reader(file_path)?;
     let mut rows = Vec::new();
     let mut found_header = false;
@@ -382,10 +388,18 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<(Ve
                 header_field_count = record.len();
                 for (i, field) in record.iter().enumerate() {
                     let f = field.trim();
-                    if f == "Posting Date" { idx_date = i; }
-                    if f == "Payee" { idx_desc = i; }
-                    if f == "Amount" { idx_amount = i; }
-                    if has_type_column && f == "Type" { idx_type = i; }
+                    if f == "Posting Date" {
+                        idx_date = i;
+                    }
+                    if f == "Payee" {
+                        idx_desc = i;
+                    }
+                    if f == "Amount" {
+                        idx_amount = i;
+                    }
+                    if has_type_column && f == "Type" {
+                        idx_type = i;
+                    }
                 }
                 found_header = true;
             }
@@ -407,9 +421,17 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<(Ve
         let adj_amount = idx_amount + offset;
         let adj_type = idx_type + offset;
         let min_cols = if has_type_column {
-            [adj_date, adj_desc, adj_amount, adj_type].into_iter().max().unwrap_or(0) + 1
+            [adj_date, adj_desc, adj_amount, adj_type]
+                .into_iter()
+                .max()
+                .unwrap_or(0)
+                + 1
         } else {
-            [adj_date, adj_desc, adj_amount].into_iter().max().unwrap_or(0) + 1
+            [adj_date, adj_desc, adj_amount]
+                .into_iter()
+                .max()
+                .unwrap_or(0)
+                + 1
         };
         if record.len() < min_cols {
             continue;
@@ -426,7 +448,12 @@ fn parse_bofa_card_format(file_path: &Path, has_type_column: bool) -> Result<(Ve
         let amount_str = record[adj_amount].trim();
         // Pre-validation catches obviously non-numeric strings (e.g. text fields);
         // parse_amount catches edge cases that pass character filtering but fail f64 parsing (e.g. ".").
-        if amount_str.is_empty() || amount_str.replace(['-', '.', ',', '$', ' '], "").chars().any(|c| !c.is_ascii_digit()) {
+        if amount_str.is_empty()
+            || amount_str
+                .replace(['-', '.', ',', '$', ' '], "")
+                .chars()
+                .any(|c| !c.is_ascii_digit())
+        {
             malformed += 1;
             continue;
         }
@@ -462,7 +489,7 @@ fn detect_gusto_payroll(file_path: &Path) -> bool {
     use calamine::Reader;
     if !file_path
         .extension()
-        .map_or(false, |e| e.eq_ignore_ascii_case("xlsx"))
+        .is_some_and(|e| e.eq_ignore_ascii_case("xlsx"))
     {
         return false;
     }
@@ -559,10 +586,11 @@ fn auto_categorize_payroll(conn: &Connection, account_id: i64, rows: &[ParsedRow
         "Payroll \u{2014} Taxes",
         "Payroll \u{2014} Benefits",
     ] {
-        let id: std::result::Result<i64, _> =
-            conn.query_row("SELECT id FROM categories WHERE name = ?1", [cat_name], |r| {
-                r.get(0)
-            });
+        let id: std::result::Result<i64, _> = conn.query_row(
+            "SELECT id FROM categories WHERE name = ?1",
+            [cat_name],
+            |r| r.get(0),
+        );
         if let Ok(id) = id {
             payroll_categories.insert(*cat_name, id);
         }
@@ -604,8 +632,10 @@ mod tests {
 
     fn add_test_account(conn: &Connection) {
         conn.execute(
-            "INSERT INTO accounts (name, account_type) VALUES ('Test Checking', 'checking')", [],
-        ).unwrap();
+            "INSERT INTO accounts (name, account_type) VALUES ('Test Checking', 'checking')",
+            [],
+        )
+        .unwrap();
     }
 
     fn write_bofa_csv(dir: &Path, name: &str, rows: &[(&str, &str, &str)]) -> std::path::PathBuf {
@@ -664,15 +694,21 @@ mod tests {
     fn test_import_file_inserts_transactions() {
         let (dir, conn) = test_db();
         add_test_account(&conn);
-        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
-            ("01/15/2025", "PAYMENT ONE", "-100.00"),
-            ("01/16/2025", "PAYMENT TWO", "-250.00"),
-            ("01/17/2025", "DEPOSIT", "500.00"),
-        ]);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[
+                ("01/15/2025", "PAYMENT ONE", "-100.00"),
+                ("01/16/2025", "PAYMENT TWO", "-250.00"),
+                ("01/17/2025", "DEPOSIT", "500.00"),
+            ],
+        );
         let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
         assert_eq!(result.imported, 3);
         assert!(!result.duplicate_file);
-        let count: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 3);
     }
 
@@ -680,9 +716,11 @@ mod tests {
     fn test_import_file_detects_file_duplicate() {
         let (dir, conn) = test_db();
         add_test_account(&conn);
-        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
-            ("01/15/2025", "PAYMENT ONE", "-100.00"),
-        ]);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[("01/15/2025", "PAYMENT ONE", "-100.00")],
+        );
         let r1 = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
         assert_eq!(r1.imported, 1);
         let r2 = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
@@ -694,15 +732,23 @@ mod tests {
     fn test_import_file_detects_row_duplicates() {
         let (dir, conn) = test_db();
         add_test_account(&conn);
-        let csv1 = write_bofa_csv(dir.path(), "stmt1.csv", &[
-            ("01/15/2025", "PAYMENT ONE", "-100.00"),
-            ("01/16/2025", "PAYMENT TWO", "-200.00"),
-        ]);
+        let csv1 = write_bofa_csv(
+            dir.path(),
+            "stmt1.csv",
+            &[
+                ("01/15/2025", "PAYMENT ONE", "-100.00"),
+                ("01/16/2025", "PAYMENT TWO", "-200.00"),
+            ],
+        );
         import_file(&conn, &csv1, "Test Checking", Some("bofa_checking")).unwrap();
-        let csv2 = write_bofa_csv(dir.path(), "stmt2.csv", &[
-            ("01/16/2025", "PAYMENT TWO", "-200.00"),
-            ("01/18/2025", "PAYMENT THREE", "-300.00"),
-        ]);
+        let csv2 = write_bofa_csv(
+            dir.path(),
+            "stmt2.csv",
+            &[
+                ("01/16/2025", "PAYMENT TWO", "-200.00"),
+                ("01/18/2025", "PAYMENT THREE", "-300.00"),
+            ],
+        );
         let r2 = import_file(&conn, &csv2, "Test Checking", Some("bofa_checking")).unwrap();
         assert_eq!(r2.imported, 1);
         assert_eq!(r2.skipped, 1);
@@ -712,15 +758,19 @@ mod tests {
     fn test_import_file_records_batch() {
         let (dir, conn) = test_db();
         add_test_account(&conn);
-        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
-            ("01/15/2025", "PAYMENT ONE", "-100.00"),
-        ]);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[("01/15/2025", "PAYMENT ONE", "-100.00")],
+        );
         import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
-        let count: i64 = conn.query_row("SELECT count(*) FROM imports", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM imports", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
-        let record_count: i64 = conn.query_row(
-            "SELECT record_count FROM imports LIMIT 1", [], |r| r.get(0),
-        ).unwrap();
+        let record_count: i64 = conn
+            .query_row("SELECT record_count FROM imports LIMIT 1", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(record_count, 1);
     }
 
@@ -862,15 +912,24 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak
     fn test_import_skips_malformed_amount_rows() {
         let (dir, conn) = test_db();
         add_test_account(&conn);
-        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
-            ("01/15/2025", "VALID PAYMENT", "-100.00"),
-            ("01/16/2025", "BAD AMOUNT ROW", "not_a_number"),
-            ("01/17/2025", "ANOTHER VALID", "250.00"),
-        ]);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[
+                ("01/15/2025", "VALID PAYMENT", "-100.00"),
+                ("01/16/2025", "BAD AMOUNT ROW", "not_a_number"),
+                ("01/17/2025", "ANOTHER VALID", "250.00"),
+            ],
+        );
         let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
         assert_eq!(result.imported, 2, "malformed amount row should be skipped");
-        assert_eq!(result.malformed, 1, "one row should be counted as malformed");
-        let count: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            result.malformed, 1,
+            "one row should be counted as malformed"
+        );
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 2);
     }
 
@@ -899,13 +958,19 @@ JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seat
     fn test_import_file_links_transactions_to_import_batch() {
         let (dir, conn) = test_db();
         add_test_account(&conn);
-        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &[
-            ("01/15/2025", "PAYMENT ONE", "-100.00"),
-        ]);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[("01/15/2025", "PAYMENT ONE", "-100.00")],
+        );
         import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
-        let import_id: i64 = conn.query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0)).unwrap();
+        let import_id: i64 = conn
+            .query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0))
+            .unwrap();
         let tx_import_id: i64 = conn
-            .query_row("SELECT import_id FROM transactions LIMIT 1", [], |r| r.get(0))
+            .query_row("SELECT import_id FROM transactions LIMIT 1", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(tx_import_id, import_id);
     }

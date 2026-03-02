@@ -167,6 +167,7 @@ src/
   fmt.rs                # Number formatting helpers
   error.rs              # Error types
 docs/
+  importers.md          # Importer format specifications and authoring guide
   walkthrough.md        # Guided tour using demo data
   skills.md             # Claude skills documentation
 ```

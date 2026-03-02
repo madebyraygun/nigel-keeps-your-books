@@ -2,8 +2,8 @@ pub mod account_manager;
 pub mod accounts;
 pub mod backup;
 pub mod browse;
-pub mod categorize;
 pub mod categories;
+pub mod categorize;
 pub mod category_manager;
 pub mod dashboard;
 pub mod demo;
@@ -41,7 +41,10 @@ pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u3
 }
 
 #[derive(Parser)]
-#[command(name = "nigel", about = "Cash-basis bookkeeping CLI for small consultancies.")]
+#[command(
+    name = "nigel",
+    about = "Cash-basis bookkeeping CLI for small consultancies."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,

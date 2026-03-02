@@ -3,6 +3,13 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
+    params
+        .iter()
+        .map(|p| p as &dyn rusqlite::types::ToSql)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Date filter helper
 // ---------------------------------------------------------------------------
@@ -95,10 +102,7 @@ fn query_category_totals(
          GROUP BY c.name ORDER BY {order}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(params);
     let rows = stmt.query_map(param_values.as_slice(), |row| {
         Ok(PnlItem {
             name: row.get(0)?,
@@ -147,10 +151,7 @@ pub fn get_expense_breakdown(
          GROUP BY c.name ORDER BY total ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let raw: Vec<(String, f64, i64)> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -218,10 +219,7 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
          ORDER BY c.category_type DESC, c.tax_line"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let items: Vec<TaxItem> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok(TaxItem {
@@ -267,10 +265,7 @@ pub fn get_cashflow(
          GROUP BY substr(t.date, 1, 7) ORDER BY month"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let raw: Vec<(String, f64, f64)> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -343,8 +338,8 @@ pub fn get_register(
 ) -> Result<RegisterReport> {
     let (clause, mut params) = date_filter(year, month, from_date, to_date)?;
 
-    let account_clause = if account.is_some() {
-        params.push(account.unwrap().to_string());
+    let account_clause = if let Some(acc) = account {
+        params.push(acc.to_string());
         format!(" AND a.name = ?{}", params.len())
     } else {
         String::new()
@@ -359,10 +354,7 @@ pub fn get_register(
          ORDER BY t.date, t.id"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let rows: Vec<RegisterRow> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok(RegisterRow {
@@ -513,10 +505,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
          GROUP BY c.form_line, c.name ORDER BY c.form_line"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let param_values: Vec<&dyn rusqlite::types::ToSql> = params
-        .iter()
-        .map(|p| p as &dyn rusqlite::types::ToSql)
-        .collect();
+    let param_values = to_sql_params(&params);
     let rows: Vec<(String, String, f64)> = stmt
         .query_map(param_values.as_slice(), |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))

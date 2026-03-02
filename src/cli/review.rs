@@ -100,7 +100,7 @@ impl TransactionReviewer {
         // Compute category chart rows dynamically
         let col_width = self.labels.iter().map(|e| e.len()).max().unwrap_or(20) + 2;
         let cols = (area.width as usize / col_width).max(1);
-        let chart_rows = ((self.labels.len() + cols - 1) / cols) as u16 + 1; // +1 for "Categories" header
+        let chart_rows = self.labels.len().div_ceil(cols) as u16 + 1; // +1 for "Categories" header
 
         let [header_area, sep_area, chart_area, progress_area, detail_area, interaction_area, hints_area] =
             Layout::vertical([
@@ -131,7 +131,7 @@ impl TransactionReviewer {
             "Categories",
             Style::default().fg(Color::DarkGray),
         ))];
-        let rows = ((self.labels.len() + cols - 1) / cols).max(1);
+        let rows = self.labels.len().div_ceil(cols).max(1);
         for row in 0..rows {
             let mut spans = Vec::new();
             for col in 0..cols {
@@ -162,10 +162,7 @@ impl TransactionReviewer {
             Line::from(""),
             Line::from(format!("  Date:        {}", txn.date)),
             Line::from(format!("  Description: {}", txn.description)),
-            Line::from(vec![
-                Span::raw("  Amount:      "),
-                money_span(txn.amount),
-            ]),
+            Line::from(vec![Span::raw("  Amount:      "), money_span(txn.amount)]),
             Line::from(format!("  Account:     {}", txn.account_name)),
             Line::from(""),
         ];
@@ -494,9 +491,7 @@ pub fn run(id: Option<i64>) -> Result<()> {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('c')
-                {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     interrupted = true;
                     break Ok(());
                 }

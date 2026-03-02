@@ -31,7 +31,10 @@ pub fn run(file: &str, account: &str, format: Option<&str>) -> Result<()> {
             result.imported, result.skipped, result.malformed
         );
     } else {
-        println!("{} imported, {} skipped (duplicates)", result.imported, result.skipped);
+        println!(
+            "{} imported, {} skipped (duplicates)",
+            result.imported, result.skipped
+        );
     }
 
     let cat_result = categorize_transactions(&conn)?;
