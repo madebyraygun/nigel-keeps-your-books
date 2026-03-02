@@ -1,3 +1,5 @@
+use rust_decimal::Decimal;
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -28,7 +30,7 @@ pub struct Transaction {
     pub account_id: i64,
     pub date: String,
     pub description: String,
-    pub amount: f64,
+    pub amount: Decimal,
     pub category_id: Option<i64>,
     pub vendor: Option<String>,
     pub notes: Option<String>,
@@ -67,5 +69,5 @@ pub struct ImportRecord {
 pub struct ParsedRow {
     pub date: String,
     pub description: String,
-    pub amount: f64,
+    pub amount: Decimal,
 }

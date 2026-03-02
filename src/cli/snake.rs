@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use rust_decimal::Decimal;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -44,8 +45,8 @@ pub struct SnakeGame {
     direction: Direction,
     next_direction: Direction,
     pub food: (u16, u16),
-    pub food_value: f64,
-    pub score: f64,
+    pub food_value: Decimal,
+    pub score: Decimal,
     pub game_over: bool,
     last_tick: Instant,
     pub board_width: u16,
@@ -77,7 +78,7 @@ impl SnakeGame {
             next_direction: Direction::Right,
             food,
             food_value,
-            score: 0.0,
+            score: Decimal::ZERO,
             game_over: false,
             last_tick: Instant::now(),
             board_width,
@@ -107,9 +108,9 @@ impl SnakeGame {
         }
     }
 
-    fn random_food_value(rng: &mut rand::rngs::ThreadRng) -> f64 {
+    fn random_food_value(rng: &mut rand::rngs::ThreadRng) -> Decimal {
         let cents = rng.gen_range(100..=999);
-        cents as f64 / 100.0
+        Decimal::new(cents, 2)
     }
 
     fn spawn_food(&mut self) {
@@ -378,7 +379,7 @@ mod tests {
     fn new_game_starts_correctly() {
         let game = SnakeGame::new();
         assert_eq!(game.body.len(), 3);
-        assert_eq!(game.score, 0.0);
+        assert_eq!(game.score, Decimal::ZERO);
         assert!(!game.game_over);
         assert_eq!(game.direction, Direction::Right);
     }
@@ -434,11 +435,11 @@ mod tests {
         // Place food directly ahead
         let head = game.body[0];
         game.food = (head.0 + 1, head.1);
-        game.food_value = 5.0;
+        game.food_value = Decimal::new(500, 2);
         let len_before = game.body.len();
         game.tick();
         assert_eq!(game.body.len(), len_before + 1);
-        assert_eq!(game.score, 5.0);
+        assert_eq!(game.score, Decimal::new(500, 2));
     }
 
     #[test]
@@ -446,7 +447,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..100 {
             let val = SnakeGame::random_food_value(&mut rng);
-            assert!(val >= 1.0 && val <= 9.99);
+            assert!(val >= Decimal::new(100, 2) && val <= Decimal::new(999, 2));
         }
     }
 
@@ -461,10 +462,10 @@ mod tests {
     fn restart_resets_game() {
         let mut game = SnakeGame::new();
         game.game_over = true;
-        game.score = 42.0;
+        game.score = Decimal::new(4200, 2);
         game.handle_key(KeyCode::Char('r'));
         assert!(!game.game_over);
-        assert_eq!(game.score, 0.0);
+        assert_eq!(game.score, Decimal::ZERO);
         assert_eq!(game.body.len(), 3);
     }
 
@@ -496,7 +497,7 @@ mod tests {
         game.body.push_back((0, 0));
         game.body.push_back((1, 0));
         game.food = (2, 0); // will be eaten but can't place nothing
-        game.food_value = 1.0;
+        game.food_value = Decimal::new(100, 2);
         game.direction = Direction::Left;
         game.next_direction = Direction::Left;
         // Move left wraps to wall collision, so set up rightward instead
@@ -506,12 +507,12 @@ mod tests {
         game.direction = Direction::Right;
         game.next_direction = Direction::Right;
         game.food = (2, 0);
-        game.food_value = 1.0;
+        game.food_value = Decimal::new(100, 2);
         game.tick();
         // Snake ate food and now fills all 3 cells — game over (win)
         assert_eq!(game.body.len(), 3);
         assert!(game.game_over);
-        assert_eq!(game.score, 1.0);
+        assert_eq!(game.score, Decimal::new(100, 2));
     }
 
     #[test]

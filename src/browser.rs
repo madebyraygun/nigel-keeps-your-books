@@ -10,6 +10,8 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 
+use rust_decimal::Decimal;
+
 use crate::fmt::money;
 use crate::reports::RegisterRow;
 use crate::reviewer::CategoryChoice;
@@ -35,7 +37,7 @@ pub enum BrowseAction {
 
 pub struct RegisterBrowser {
     rows: Vec<RegisterRow>,
-    total: f64,
+    total: Decimal,
     filters_desc: String,
     offset: usize,
     visible_count: usize,
@@ -52,7 +54,7 @@ pub struct RegisterBrowser {
 impl RegisterBrowser {
     pub fn new(
         rows: Vec<RegisterRow>,
-        total: f64,
+        total: Decimal,
         filters_desc: String,
         categories: Vec<CategoryChoice>,
     ) -> Self {
@@ -722,7 +724,7 @@ mod tests {
                 id: (i + 1) as i64,
                 date: format!("2025-01-{:02}", (i % 28) + 1),
                 description: format!("Transaction {}", i + 1),
-                amount: if i % 2 == 0 { 100.0 } else { -50.0 },
+                amount: if i % 2 == 0 { Decimal::new(10000, 2) } else { Decimal::new(-5000, 2) },
                 category: Some("Test Category".to_string()),
                 category_id: Some(1),
                 vendor: None,
@@ -743,7 +745,7 @@ mod tests {
     #[test]
     fn test_scroll_down() {
         let rows = make_rows(50);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         assert_eq!(browser.offset, 0);
 
         browser.scroll_down();
@@ -756,7 +758,7 @@ mod tests {
     #[test]
     fn test_scroll_down_stops_at_end() {
         let rows = make_rows(10);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         browser.scroll_down(); // 10 < PAGE_SIZE, so offset stays
         assert_eq!(browser.offset, 0);
     }
@@ -764,7 +766,7 @@ mod tests {
     #[test]
     fn test_scroll_up() {
         let rows = make_rows(50);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         browser.offset = PAGE_SIZE * 2;
 
         browser.scroll_up();
@@ -780,7 +782,7 @@ mod tests {
     #[test]
     fn test_scroll_to_end() {
         let rows = make_rows(50);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         browser.scroll_to_end();
         assert_eq!(browser.offset, 50 - PAGE_SIZE);
     }
@@ -788,7 +790,7 @@ mod tests {
     #[test]
     fn test_scroll_to_end_small_dataset() {
         let rows = make_rows(5);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         browser.scroll_to_end();
         assert_eq!(browser.offset, 0); // 5 < PAGE_SIZE, stays at 0
     }
@@ -796,7 +798,7 @@ mod tests {
     #[test]
     fn test_goto_page() {
         let rows = make_rows(100);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
 
         browser.mode = BrowseMode::GotoPage("3".to_string());
         browser.submit_input();
@@ -806,7 +808,7 @@ mod tests {
     #[test]
     fn test_goto_date_found() {
         let rows = make_rows(30);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
 
         browser.mode = BrowseMode::GotoDate("2025-01-15".to_string());
         browser.submit_input();
@@ -816,7 +818,7 @@ mod tests {
     #[test]
     fn test_goto_date_not_found() {
         let rows = make_rows(5);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
 
         browser.mode = BrowseMode::GotoDate("2026-01-01".to_string());
         browser.submit_input();
@@ -828,7 +830,7 @@ mod tests {
     #[test]
     fn test_find_id_found() {
         let rows = make_rows(30);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
 
         browser.mode = BrowseMode::FindId("25".to_string());
         browser.submit_input();
@@ -838,7 +840,7 @@ mod tests {
     #[test]
     fn test_find_id_not_found() {
         let rows = make_rows(5);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
 
         browser.mode = BrowseMode::FindId("999".to_string());
         browser.submit_input();
@@ -850,7 +852,7 @@ mod tests {
     #[test]
     fn test_handle_key_returns_close_on_q() {
         let rows = make_rows(5);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         let action = browser.handle_key_event(KeyCode::Char('q'));
         assert!(matches!(action, BrowseAction::Close));
     }
@@ -858,7 +860,7 @@ mod tests {
     #[test]
     fn test_handle_key_returns_continue_on_nav() {
         let rows = make_rows(50);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         let action = browser.handle_key_event(KeyCode::Char('n'));
         assert!(matches!(action, BrowseAction::Continue));
     }
@@ -866,7 +868,7 @@ mod tests {
     #[test]
     fn test_selected_row_up_down() {
         let rows = make_rows(50);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         assert_eq!(browser.selected, 0);
 
         browser.handle_key_event(KeyCode::Down);
@@ -889,7 +891,7 @@ mod tests {
     #[test]
     fn test_page_navigation_resets_selected() {
         let rows = make_rows(50);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         browser.selected = 5;
 
         browser.handle_key_event(KeyCode::Char('n'));
@@ -900,7 +902,7 @@ mod tests {
     fn test_enter_edit_mode() {
         let rows = make_rows(5);
         let cats = make_categories();
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), cats);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), cats);
 
         browser.handle_key_event(KeyCode::Char('e'));
         assert!(matches!(browser.mode, BrowseMode::EditCategory { .. }));
@@ -910,7 +912,7 @@ mod tests {
     fn test_edit_category_filter_and_select() {
         let rows = make_rows(5);
         let cats = make_categories();
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), cats);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), cats);
 
         browser.handle_key_event(KeyCode::Char('e'));
         // Type "adv" to filter
@@ -933,7 +935,7 @@ mod tests {
     fn test_edit_vendor_and_commit() {
         let rows = make_rows(5);
         let cats = make_categories();
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), cats);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), cats);
 
         // Enter edit, select first category
         browser.mode = BrowseMode::EditCategory { query: String::new(), selection: 0 };
@@ -953,7 +955,7 @@ mod tests {
     fn test_esc_cancels_edit() {
         let rows = make_rows(5);
         let cats = make_categories();
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), cats);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), cats);
 
         browser.handle_key_event(KeyCode::Char('e'));
         browser.handle_key_event(KeyCode::Esc);
@@ -964,7 +966,7 @@ mod tests {
     fn test_commit_edit_updates_row() {
         let rows = make_rows(5);
         let cats = make_categories();
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), cats);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), cats);
 
         browser.pending_category_idx = Some(0); // "Advertising"
         browser.pending_vendor = Some("TestVendor".to_string());
@@ -979,7 +981,7 @@ mod tests {
     #[test]
     fn test_toggle_flag_updates_row() {
         let rows = make_rows(5);
-        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        let mut browser = RegisterBrowser::new(rows, Decimal::ZERO, String::new(), vec![]);
         assert!(!browser.rows[0].is_flagged);
 
         browser.apply_flag_toggle_to_local_row(true);

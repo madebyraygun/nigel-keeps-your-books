@@ -1,5 +1,6 @@
 use colored::Colorize;
 use comfy_table::{Cell, Table};
+use rust_decimal::Decimal;
 
 use crate::cli::parse_month_opt;
 use crate::db::{get_connection, get_metadata};
@@ -135,7 +136,7 @@ pub fn format_pnl(pnl: &reports::PnlReport) -> String {
         table.add_row(vec![Cell::new(""), Cell::new("")]);
     }
 
-    let net_label = if pnl.net >= 0.0 {
+    let net_label = if pnl.net >= Decimal::ZERO {
         "NET".green().bold()
     } else {
         "NET".red().bold()
@@ -197,7 +198,7 @@ pub fn format_cashflow(data: &reports::CashflowReport) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Month", "Inflows", "Outflows", "Net", "Running"]);
     for m in &data.months {
-        let net_str = if m.net >= 0.0 {
+        let net_str = if m.net >= Decimal::ZERO {
             money(m.net).green().to_string()
         } else {
             money(m.net).red().to_string()
@@ -221,7 +222,7 @@ pub fn format_register(data: &reports::RegisterReport) -> String {
     let mut table = Table::new();
     table.set_header(vec!["ID", "Date", "Description", "Amount", "Category", "Vendor", "Account"]);
     for r in &data.rows {
-        let amt = if r.amount < 0.0 {
+        let amt = if r.amount < Decimal::ZERO {
             money(r.amount.abs()).red().to_string()
         } else {
             money(r.amount).green().to_string()
@@ -253,7 +254,7 @@ pub fn format_flagged(rows: &[reports::FlaggedTransaction]) -> String {
     let mut table = Table::new();
     table.set_header(vec!["ID", "Date", "Description", "Amount", "Account"]);
     for r in rows {
-        let amt = if r.amount < 0.0 {
+        let amt = if r.amount < Decimal::ZERO {
             money(r.amount.abs()).red().to_string()
         } else {
             money(r.amount.abs()).green().to_string()
@@ -273,7 +274,7 @@ pub fn format_balance(data: &reports::BalanceReport) -> String {
     let mut table = Table::new();
     table.set_header(vec!["Account", "Type", "Balance"]);
     for a in &data.accounts {
-        let bal = if a.balance >= 0.0 {
+        let bal = if a.balance >= Decimal::ZERO {
             money(a.balance).green().to_string()
         } else {
             money(a.balance).red().to_string()
@@ -301,7 +302,7 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
     summary.add_row(vec![Cell::new("Gross Receipts"), Cell::new(money(data.gross_receipts))]);
     summary.add_row(vec![Cell::new("Other Income"), Cell::new(money(data.other_income))]);
     summary.add_row(vec![Cell::new("Total Deductions"), Cell::new(money(data.total_deductions))]);
-    let obi_label = if data.ordinary_business_income >= 0.0 {
+    let obi_label = if data.ordinary_business_income >= Decimal::ZERO {
         "Ordinary Business Income".green().bold().to_string()
     } else {
         "Ordinary Business Loss".red().bold().to_string()
@@ -369,7 +370,7 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
         ));
     }
     if let Some(ratio) = data.validation.comp_dist_ratio {
-        if ratio < 1.0 {
+        if ratio < Decimal::ONE {
             out.push_str(&format!(
                 "\n{}",
                 format!(

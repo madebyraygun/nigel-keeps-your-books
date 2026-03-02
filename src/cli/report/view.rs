@@ -8,6 +8,8 @@ use ratatui::{
 
 use crossterm::event::KeyCode;
 
+use rust_decimal::Decimal;
+
 use crate::cli::{parse_month_opt, ReportCommands};
 use crate::db::get_connection;
 use crate::error::Result;
@@ -336,7 +338,7 @@ impl ReportView for TableReportView {
 // Helper: create cells with consistent styling
 // ---------------------------------------------------------------------------
 
-fn money_cell(amount: f64) -> Cell<'static> {
+fn money_cell(amount: Decimal) -> Cell<'static> {
     Cell::from(money_span(amount))
 }
 
@@ -712,7 +714,7 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         money_cell(data.total_deductions),
     ]));
 
-    let obi_label = if data.ordinary_business_income >= 0.0 {
+    let obi_label = if data.ordinary_business_income >= Decimal::ZERO {
         "  Ordinary Business Income"
     } else {
         "  Ordinary Business Loss"
@@ -804,7 +806,7 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         ]));
     }
     if let Some(ratio) = data.validation.comp_dist_ratio {
-        if ratio < 1.0 {
+        if ratio < Decimal::ONE {
             let warn_style = Style::default().fg(Color::Yellow);
             rows.push(Row::new([
                 Cell::from(Span::styled(

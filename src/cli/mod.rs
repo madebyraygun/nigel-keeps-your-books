@@ -25,6 +25,7 @@ pub mod splash;
 pub mod status;
 
 use clap::{Args, Parser, Subcommand};
+use rust_decimal::Decimal;
 
 pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
     if let Some(m) = month {
@@ -103,7 +104,7 @@ pub enum Commands {
         month: String,
         /// Statement ending balance
         #[arg(long)]
-        balance: f64,
+        balance: Decimal,
     },
     /// Switch to an existing Nigel data directory.
     Load {

@@ -6,6 +6,7 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use rust_decimal::Decimal;
 use rusqlite::Connection;
 
 use crate::cli::accounts;
@@ -25,9 +26,9 @@ enum Screen {
 
 struct ReconcileResult {
     is_reconciled: bool,
-    statement_balance: f64,
-    calculated_balance: f64,
-    discrepancy: f64,
+    statement_balance: Decimal,
+    calculated_balance: Decimal,
+    discrepancy: Decimal,
 }
 
 const FIELD_ACCOUNT: usize = 0;
@@ -289,7 +290,7 @@ impl ReconcileScreen {
                     self.status_message = Some("Balance is required".into());
                     return ReconcileAction::Continue;
                 }
-                let balance: f64 = match self.balance.replace(',', "").parse() {
+                let balance: Decimal = match self.balance.replace(',', "").parse() {
                     Ok(b) => b,
                     Err(_) => {
                         self.status_message = Some("Invalid balance amount".into());

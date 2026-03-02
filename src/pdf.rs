@@ -2,6 +2,8 @@ use std::io::BufWriter;
 
 use printpdf::*;
 
+use rust_decimal::Decimal;
+
 use crate::error::{NigelError, Result};
 use crate::fmt::money;
 use crate::reports::*;
@@ -297,7 +299,7 @@ pub fn render_pnl(report: &PnlReport, company: &str, date_range: &str) -> Result
     }
 
     pdf.separator();
-    let label = if report.net >= 0.0 { "NET INCOME" } else { "NET LOSS" };
+    let label = if report.net >= Decimal::ZERO { "NET INCOME" } else { "NET LOSS" };
     let net = money(report.net);
     pdf.table_row(cols, &[label, &net], true);
 
@@ -511,7 +513,7 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     let td = money(report.total_deductions);
     pdf.table_row(summary_cols, &["Total Deductions", &td], false);
     pdf.separator();
-    let label = if report.ordinary_business_income >= 0.0 {
+    let label = if report.ordinary_business_income >= Decimal::ZERO {
         "Ordinary Business Income"
     } else {
         "Ordinary Business Loss"

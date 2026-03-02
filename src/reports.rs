@@ -1,7 +1,24 @@
+use std::str::FromStr;
+
 use chrono::Datelike;
+use rust_decimal::Decimal;
 use rusqlite::Connection;
 
 use crate::error::Result;
+
+fn read_decimal(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
+    let s: String = row.get(idx)?;
+    Decimal::from_str(&s).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+        idx, rusqlite::types::Type::Text, Box::new(e),
+    ))
+}
+
+fn read_decimal_sum(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
+    let f: f64 = row.get(idx)?;
+    Decimal::from_str(&format!("{:.2}", f)).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+        idx, rusqlite::types::Type::Real, Box::new(e),
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // Date filter helper
@@ -46,15 +63,15 @@ fn date_filter(
 
 pub struct PnlItem {
     pub name: String,
-    pub total: f64,
+    pub total: Decimal,
 }
 
 pub struct PnlReport {
     pub income: Vec<PnlItem>,
     pub expenses: Vec<PnlItem>,
-    pub total_income: f64,
-    pub total_expenses: f64,
-    pub net: f64,
+    pub total_income: Decimal,
+    pub total_expenses: Decimal,
+    pub net: Decimal,
 }
 
 pub fn get_pnl(
@@ -69,8 +86,8 @@ pub fn get_pnl(
     let income = query_category_totals(conn, &clause, &params, "income", "total DESC")?;
     let expenses = query_category_totals(conn, &clause, &params, "expense", "total ASC")?;
 
-    let total_income: f64 = income.iter().map(|i| i.total).sum();
-    let total_expenses: f64 = expenses.iter().map(|i| i.total).sum();
+    let total_income: Decimal = income.iter().map(|i| i.total).sum();
+    let total_expenses: Decimal = expenses.iter().map(|i| i.total).sum();
 
     Ok(PnlReport {
         income,
@@ -102,7 +119,7 @@ fn query_category_totals(
     let rows = stmt.query_map(param_values.as_slice(), |row| {
         Ok(PnlItem {
             name: row.get(0)?,
-            total: row.get(1)?,
+            total: read_decimal_sum(row, 1)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -114,20 +131,20 @@ fn query_category_totals(
 
 pub struct ExpenseItem {
     pub name: String,
-    pub total: f64,
+    pub total: Decimal,
     pub count: i64,
-    pub pct: f64,
+    pub pct: Decimal,
 }
 
 pub struct VendorItem {
     pub vendor: String,
-    pub total: f64,
+    pub total: Decimal,
     pub count: i64,
 }
 
 pub struct ExpenseBreakdown {
     pub categories: Vec<ExpenseItem>,
-    pub total: f64,
+    pub total: Decimal,
     pub top_vendors: Vec<VendorItem>,
 }
 
@@ -147,18 +164,18 @@ pub fn get_expense_breakdown(
          GROUP BY c.name ORDER BY total ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let raw: Vec<(String, f64, i64)> = stmt
-        .query_map([&params[0]], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+    let raw: Vec<(String, Decimal, i64)> = stmt
+        .query_map([&params[0]], |row| Ok((row.get(0)?, read_decimal_sum(row, 1)?, row.get(2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let total: f64 = raw.iter().map(|(_, t, _)| t).sum();
+    let total: Decimal = raw.iter().map(|(_, t, _)| *t).sum();
     let categories = raw
         .iter()
         .map(|(name, t, c)| ExpenseItem {
             name: name.clone(),
             total: *t,
             count: *c,
-            pct: if total != 0.0 { t / total * 100.0 } else { 0.0 },
+            pct: if total != Decimal::ZERO { *t / total * Decimal::from(100) } else { Decimal::ZERO },
         })
         .collect();
 
@@ -173,7 +190,7 @@ pub fn get_expense_breakdown(
         .query_map([&params[0]], |row| {
             Ok(VendorItem {
                 vendor: row.get(0)?,
-                total: row.get(1)?,
+                total: read_decimal_sum(row, 1)?,
                 count: row.get(2)?,
             })
         })?
@@ -194,7 +211,7 @@ pub struct TaxItem {
     pub name: String,
     pub tax_line: Option<String>,
     pub category_type: String,
-    pub total: f64,
+    pub total: Decimal,
 }
 
 pub struct TaxSummary {
@@ -218,7 +235,7 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
                 name: row.get(0)?,
                 tax_line: row.get(1)?,
                 category_type: row.get(2)?,
-                total: row.get(3)?,
+                total: read_decimal_sum(row, 3)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -232,10 +249,10 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
 
 pub struct CashflowMonth {
     pub month: String,
-    pub inflows: f64,
-    pub outflows: f64,
-    pub net: f64,
-    pub running_balance: f64,
+    pub inflows: Decimal,
+    pub outflows: Decimal,
+    pub net: Decimal,
+    pub running_balance: Decimal,
 }
 
 pub struct CashflowReport {
@@ -253,12 +270,12 @@ pub fn get_cashflow(conn: &Connection, year: Option<i32>, month: Option<u32>) ->
          GROUP BY substr(t.date, 1, 7) ORDER BY month"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let raw: Vec<(String, f64, f64)> = stmt
-        .query_map([&params[0]], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+    let raw: Vec<(String, Decimal, Decimal)> = stmt
+        .query_map([&params[0]], |row| Ok((row.get(0)?, read_decimal_sum(row, 1)?, read_decimal_sum(row, 2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut months = Vec::new();
-    let mut running = 0.0f64;
+    let mut running = Decimal::ZERO;
     for (m, inflows, outflows) in raw {
         running += inflows + outflows;
         months.push(CashflowMonth {
@@ -281,7 +298,7 @@ pub struct RegisterRow {
     pub id: i64,
     pub date: String,
     pub description: String,
-    pub amount: f64,
+    pub amount: Decimal,
     pub category: Option<String>,
     pub category_id: Option<i64>,
     pub vendor: Option<String>,
@@ -291,7 +308,7 @@ pub struct RegisterRow {
 
 pub struct RegisterReport {
     pub rows: Vec<RegisterRow>,
-    pub total: f64,
+    pub total: Decimal,
 }
 
 pub fn get_register(
@@ -330,7 +347,7 @@ pub fn get_register(
                 id: row.get(0)?,
                 date: row.get(1)?,
                 description: row.get(2)?,
-                amount: row.get(3)?,
+                amount: read_decimal(row, 3)?,
                 category: row.get(4)?,
                 category_id: row.get(5)?,
                 vendor: row.get(6)?,
@@ -340,7 +357,7 @@ pub fn get_register(
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let total: f64 = rows.iter().map(|r| r.amount).sum();
+    let total: Decimal = rows.iter().map(|r| r.amount).sum();
     Ok(RegisterReport { rows, total })
 }
 
@@ -352,7 +369,7 @@ pub struct FlaggedTransaction {
     pub id: i64,
     pub date: String,
     pub description: String,
-    pub amount: f64,
+    pub amount: Decimal,
     pub account_name: String,
 }
 
@@ -368,7 +385,7 @@ pub fn get_flagged(conn: &Connection) -> Result<Vec<FlaggedTransaction>> {
                 id: row.get(0)?,
                 date: row.get(1)?,
                 description: row.get(2)?,
-                amount: row.get(3)?,
+                amount: read_decimal(row, 3)?,
                 account_name: row.get(4)?,
             })
         })?
@@ -383,13 +400,13 @@ pub fn get_flagged(conn: &Connection) -> Result<Vec<FlaggedTransaction>> {
 pub struct AccountBalance {
     pub name: String,
     pub account_type: String,
-    pub balance: f64,
+    pub balance: Decimal,
 }
 
 pub struct BalanceReport {
     pub accounts: Vec<AccountBalance>,
-    pub total: f64,
-    pub ytd_net_income: f64,
+    pub total: Decimal,
+    pub ytd_net_income: Decimal,
 }
 
 pub fn get_balance(conn: &Connection) -> Result<BalanceReport> {
@@ -403,18 +420,18 @@ pub fn get_balance(conn: &Connection) -> Result<BalanceReport> {
             Ok(AccountBalance {
                 name: row.get(1)?,
                 account_type: row.get(2)?,
-                balance: row.get(3)?,
+                balance: read_decimal_sum(row, 3)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let total: f64 = accounts.iter().map(|a| a.balance).sum();
+    let total: Decimal = accounts.iter().map(|a| a.balance).sum();
 
     let current_year = chrono::Local::now().year();
-    let ytd_net_income: f64 = conn.query_row(
+    let ytd_net_income: Decimal = conn.query_row(
         "SELECT COALESCE(SUM(amount), 0) as net FROM transactions WHERE date LIKE ?1",
         [format!("{current_year}%")],
-        |row| row.get(0),
+        |row| read_decimal_sum(row, 0),
     )?;
 
     Ok(BalanceReport {
@@ -432,34 +449,34 @@ pub fn get_balance(conn: &Connection) -> Result<BalanceReport> {
 pub struct K1LineItem {
     pub form_line: String,
     pub category_name: String,
-    pub total: f64,
+    pub total: Decimal,
 }
 
 #[allow(dead_code)]
 pub struct K1OtherDeduction {
     pub category_name: String,
-    pub total: f64,
-    pub deductible: f64,
+    pub total: Decimal,
+    pub deductible: Decimal,
 }
 
 #[allow(dead_code)]
 pub struct K1Validation {
     pub uncategorized_count: i64,
-    pub officer_comp: f64,
-    pub distributions: f64,
-    pub comp_dist_ratio: Option<f64>,
+    pub officer_comp: Decimal,
+    pub distributions: Decimal,
+    pub comp_dist_ratio: Option<Decimal>,
 }
 
 #[allow(dead_code)]
 pub struct K1PrepReport {
-    pub gross_receipts: f64,
-    pub other_income: f64,
-    pub total_deductions: f64,
-    pub ordinary_business_income: f64,
+    pub gross_receipts: Decimal,
+    pub other_income: Decimal,
+    pub total_deductions: Decimal,
+    pub ordinary_business_income: Decimal,
     pub deduction_lines: Vec<K1LineItem>,
     pub schedule_k_items: Vec<K1LineItem>,
     pub other_deductions: Vec<K1OtherDeduction>,
-    pub other_deductions_total: f64,
+    pub other_deductions_total: Decimal,
     pub validation: K1Validation,
 }
 
@@ -476,21 +493,21 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
     let mut stmt = conn.prepare(&sql)?;
     let param_values: Vec<&dyn rusqlite::types::ToSql> =
         params.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
-    let rows: Vec<(String, String, f64)> = stmt
+    let rows: Vec<(String, String, Decimal)> = stmt
         .query_map(param_values.as_slice(), |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok((row.get(0)?, row.get(1)?, read_decimal_sum(row, 2)?))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut gross_receipts = 0.0f64;
-    let mut other_income = 0.0f64;
-    let mut total_deductions = 0.0f64;
+    let mut gross_receipts = Decimal::ZERO;
+    let mut other_income = Decimal::ZERO;
+    let mut total_deductions = Decimal::ZERO;
     let mut deduction_lines = Vec::new();
     let mut schedule_k_items = Vec::new();
     let mut other_deductions = Vec::new();
-    let mut other_deductions_total = 0.0f64;
-    let mut officer_comp = 0.0f64;
-    let mut distributions = 0.0f64;
+    let mut other_deductions_total = Decimal::ZERO;
+    let mut officer_comp = Decimal::ZERO;
+    let mut distributions = Decimal::ZERO;
 
     for (form_line, name, total) in &rows {
         match form_line.as_str() {
@@ -521,7 +538,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
 
                 if fl == "1120S-19" {
                     let is_meals = name.to_lowercase().contains("meal");
-                    let deductible = if is_meals { abs_total * 0.5 } else { abs_total };
+                    let deductible = if is_meals { abs_total / Decimal::from(2) } else { abs_total };
                     other_deductions_total += deductible;
                     other_deductions.push(K1OtherDeduction {
                         category_name: name.clone(),
@@ -545,7 +562,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
     let mut ustmt = conn.prepare(&uncategorized_sql)?;
     let uncategorized_count: i64 = ustmt.query_row(param_values.as_slice(), |row| row.get(0))?;
 
-    let comp_dist_ratio = if distributions > 0.0 {
+    let comp_dist_ratio = if distributions > Decimal::ZERO {
         Some(officer_comp / distributions)
     } else {
         None
@@ -573,6 +590,7 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
 mod tests {
     use super::*;
     use crate::db::{get_connection, init_db};
+    use rust_decimal_macros::dec;
 
     fn test_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -615,9 +633,9 @@ mod tests {
         seed_transactions(&conn);
         let report = get_pnl(&conn, Some(2025), None, None, None).unwrap();
         // seed_transactions: 1×1000.0 income, 2 expenses (−50.0 + −10.0 = −60.0)
-        assert_eq!(report.total_income, 1000.0);
-        assert_eq!(report.total_expenses, -60.0);
-        assert_eq!(report.net, 940.0);
+        assert_eq!(report.total_income, dec!(1000.0));
+        assert_eq!(report.total_expenses, dec!(-60.0));
+        assert_eq!(report.net, dec!(940.0));
     }
 
     #[test]
@@ -626,9 +644,9 @@ mod tests {
         seed_transactions(&conn);
         let report = get_pnl(&conn, Some(2025), Some(1), None, None).unwrap();
         // seed_transactions Jan only: 1×1000.0 income, 1×−50.0 expense (GitHub −10.0 is Feb)
-        assert_eq!(report.total_income, 1000.0);
-        assert_eq!(report.total_expenses, -50.0);
-        assert_eq!(report.net, 950.0);
+        assert_eq!(report.total_income, dec!(1000.0));
+        assert_eq!(report.total_expenses, dec!(-50.0));
+        assert_eq!(report.net, dec!(950.0));
     }
 
     #[test]
@@ -640,7 +658,7 @@ mod tests {
         assert_eq!(breakdown.categories.len(), 1);
         assert_eq!(breakdown.categories[0].name, "Software & Subscriptions");
         assert_eq!(breakdown.categories[0].count, 2);
-        assert_eq!(breakdown.total, -60.0);
+        assert_eq!(breakdown.total, dec!(-60.0));
     }
 
     #[test]
@@ -714,12 +732,12 @@ mod tests {
         let report = get_k1_prep(&conn, Some(2025)).unwrap();
         // Client Services has form_line "Gross receipts" (but stored as NULL — check actual seed)
         // Software & Subscriptions has form_line "1120S-19"
-        assert!(report.gross_receipts >= 0.0);
-        assert!(report.total_deductions >= 0.0);
+        assert!(report.gross_receipts >= Decimal::ZERO);
+        assert!(report.total_deductions >= Decimal::ZERO);
         // Software & Subscriptions → 1120S-19 → should appear in deduction_lines
         let sw = report.deduction_lines.iter().find(|d| d.category_name == "Software & Subscriptions");
         assert!(sw.is_some(), "Software & Subscriptions should appear in deduction_lines");
-        assert_eq!(sw.unwrap().total, 60.0); // abs of -60
+        assert_eq!(sw.unwrap().total, dec!(60.0)); // abs of -60
         assert_eq!(report.validation.uncategorized_count, 0);
     }
 
@@ -747,8 +765,8 @@ mod tests {
         seed_transactions(&conn);
         // Jan range captures: 1×1000.0 income, 1×−50.0 expense (GitHub −10.0 is Feb)
         let report = get_pnl(&conn, None, None, Some("2025-01-01"), Some("2025-01-31")).unwrap();
-        assert_eq!(report.total_income, 1000.0);
-        assert_eq!(report.total_expenses, -50.0);
+        assert_eq!(report.total_income, dec!(1000.0));
+        assert_eq!(report.total_expenses, dec!(-50.0));
     }
 
     #[test]
@@ -770,7 +788,7 @@ mod tests {
         let meals = report.other_deductions.iter().find(|d| d.category_name == "Meals");
         assert!(meals.is_some(), "Meals should appear in other_deductions");
         let m = meals.unwrap();
-        assert_eq!(m.total, 100.0);
-        assert_eq!(m.deductible, 50.0); // 50% deductible
+        assert_eq!(m.total, dec!(100.0));
+        assert_eq!(m.deductible, dec!(50.0)); // 50% deductible
     }
 }

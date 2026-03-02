@@ -1,5 +1,8 @@
 use std::path::Path;
+#[cfg(feature = "gusto")]
+use std::str::FromStr;
 
+use rust_decimal::Decimal;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
@@ -10,13 +13,13 @@ use crate::models::ParsedRow;
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub fn parse_amount(raw: &str) -> f64 {
+pub fn parse_amount(raw: &str) -> Decimal {
     let s = raw.replace(',', "").replace('"', "").replace('$', "");
     let s = s.trim();
     if let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
-        return -inner.trim().parse::<f64>().unwrap_or(0.0);
+        return -inner.trim().parse::<Decimal>().unwrap_or(Decimal::ZERO);
     }
-    s.parse().unwrap_or(0.0)
+    s.parse::<Decimal>().unwrap_or(Decimal::ZERO)
 }
 
 pub fn parse_date_mdy(raw: &str) -> Option<String> {
@@ -61,7 +64,7 @@ fn is_duplicate_row(conn: &Connection, account_id: i64, row: &ParsedRow) -> bool
             "SELECT 1 FROM transactions WHERE account_id = ?1 AND date = ?2 AND amount = ?3 AND description = ?4",
         )
         .unwrap();
-    stmt.exists(rusqlite::params![account_id, row.date, row.amount, row.description])
+    stmt.exists(rusqlite::params![account_id, row.date, row.amount.to_string(), row.description])
         .unwrap_or(false)
 }
 
@@ -231,7 +234,7 @@ pub fn import_file(
         }
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, 1, 'No matching rule')",
-            rusqlite::params![account_id, row.date, row.description, row.amount],
+            rusqlite::params![account_id, row.date, row.description, row.amount.to_string()],
         )?;
         imported += 1;
     }
@@ -454,7 +457,7 @@ fn parse_gusto_payroll(file_path: &Path) -> Result<Vec<ParsedRow>> {
         .map_err(|e| NigelError::Other(format!("Failed to open XLSX: {e}")))?;
 
     // Parse payrolls sheet — aggregate wages by check date
-    let mut wages_by_date: BTreeMap<String, f64> = BTreeMap::new();
+    let mut wages_by_date: BTreeMap<String, Decimal> = BTreeMap::new();
     if let Ok(range) = workbook.worksheet_range("payrolls") {
         for row in range.rows().skip(1) {
             // col 3 = check_date, col 7 = gross
@@ -468,16 +471,16 @@ fn parse_gusto_payroll(file_path: &Path) -> Result<Vec<ParsedRow>> {
                 _ => continue,
             };
             let gross = match &row[7] {
-                Data::Float(f) => *f,
-                Data::Int(i) => *i as f64,
+                Data::Float(f) => Decimal::from_str(&f.to_string()).unwrap_or(Decimal::ZERO),
+                Data::Int(i) => Decimal::from(*i as i64),
                 _ => continue,
             };
-            *wages_by_date.entry(check_date).or_default() += gross;
+            *wages_by_date.entry(check_date).or_insert(Decimal::ZERO) += gross;
         }
     }
 
     // Parse taxes sheet — aggregate employer taxes by check date
-    let mut taxes_by_date: BTreeMap<String, f64> = BTreeMap::new();
+    let mut taxes_by_date: BTreeMap<String, Decimal> = BTreeMap::new();
     if let Ok(range) = workbook.worksheet_range("taxes") {
         for row in range.rows().skip(1) {
             if row.len() < 8 {
@@ -498,11 +501,11 @@ fn parse_gusto_payroll(file_path: &Path) -> Result<Vec<ParsedRow>> {
                 _ => continue,
             };
             let amount = match &row[7] {
-                Data::Float(f) => *f,
-                Data::Int(i) => *i as f64,
+                Data::Float(f) => Decimal::from_str(&f.to_string()).unwrap_or(Decimal::ZERO),
+                Data::Int(i) => Decimal::from(*i as i64),
                 _ => continue,
             };
-            *taxes_by_date.entry(check_date).or_default() += amount;
+            *taxes_by_date.entry(check_date).or_insert(Decimal::ZERO) += amount;
         }
     }
 
@@ -556,7 +559,7 @@ fn auto_categorize_payroll(conn: &Connection, account_id: i64, rows: &[ParsedRow
             conn.execute(
                 "UPDATE transactions SET category_id = ?1, is_flagged = 0, flag_reason = NULL \
                  WHERE account_id = ?2 AND date = ?3 AND amount = ?4 AND description = ?5",
-                rusqlite::params![cat_id, account_id, row.date, row.amount, row.description],
+                rusqlite::params![cat_id, account_id, row.date, row.amount.to_string(), row.description],
             )?;
         }
     }
@@ -567,6 +570,7 @@ fn auto_categorize_payroll(conn: &Connection, account_id: i64, rows: &[ParsedRow
 mod tests {
     use super::*;
     use crate::db::{get_connection, init_db};
+    use rust_decimal_macros::dec;
 
     fn test_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -593,24 +597,24 @@ mod tests {
 
     #[test]
     fn test_parse_amount() {
-        assert_eq!(parse_amount("1,234.56"), 1234.56);
-        assert_eq!(parse_amount("\"500.00\""), 500.0);
-        assert_eq!(parse_amount("  -42.50  "), -42.5);
-        assert_eq!(parse_amount("0"), 0.0);
-        assert_eq!(parse_amount("not_a_number"), 0.0);
+        assert_eq!(parse_amount("1,234.56"), dec!(1234.56));
+        assert_eq!(parse_amount("\"500.00\""), dec!(500.0));
+        assert_eq!(parse_amount("  -42.50  "), dec!(-42.5));
+        assert_eq!(parse_amount("0"), dec!(0));
+        assert_eq!(parse_amount("not_a_number"), dec!(0));
     }
 
     #[test]
     fn test_parse_amount_parenthesized_negatives() {
-        assert_eq!(parse_amount("(500.00)"), -500.0);
-        assert_eq!(parse_amount("(1,234.56)"), -1234.56);
-        assert_eq!(parse_amount("\"(50.00)\""), -50.0);
+        assert_eq!(parse_amount("(500.00)"), dec!(-500.0));
+        assert_eq!(parse_amount("(1,234.56)"), dec!(-1234.56));
+        assert_eq!(parse_amount("\"(50.00)\""), dec!(-50.0));
     }
 
     #[test]
     fn test_parse_amount_currency_symbol() {
-        assert_eq!(parse_amount("$1,234.56"), 1234.56);
-        assert_eq!(parse_amount("-$50.00"), -50.0);
+        assert_eq!(parse_amount("$1,234.56"), dec!(1234.56));
+        assert_eq!(parse_amount("-$50.00"), dec!(-50.0));
     }
 
     #[test]
@@ -710,7 +714,7 @@ Date,Description,Amount,Running Bal.
         std::fs::write(&path, content).unwrap();
         let rows = ImporterKind::BofaChecking.parse(&path).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].amount, 2000.0);
+        assert_eq!(rows[0].amount, dec!(2000.0));
     }
 
     #[test]
@@ -730,9 +734,9 @@ Date,Description,Amount,Running Bal.
         let rows = ImporterKind::BofaChecking.parse(&path).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].description, "ADOBE CREATIVE");
-        assert_eq!(rows[0].amount, -50.0);
+        assert_eq!(rows[0].amount, dec!(-50.0));
         assert_eq!(rows[1].description, "STRIPE PAYOUT");
-        assert_eq!(rows[1].amount, 2500.0);
+        assert_eq!(rows[1].amount, dec!(2500.0));
     }
 
     #[test]
@@ -751,11 +755,11 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,200.00,Refund,STORE REFUND,789 Oak
         assert_eq!(rows.len(), 3, "all 3 rows should be parsed");
         assert_eq!(rows[0].date, "2025-01-15");
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
-        assert_eq!(rows[0].amount, -50.0); // D = debit
+        assert_eq!(rows[0].amount, dec!(-50.0)); // D = debit
         assert_eq!(rows[1].description, "DELTA AIRLINES");
-        assert_eq!(rows[1].amount, -75.5);
+        assert_eq!(rows[1].amount, dec!(-75.5));
         assert_eq!(rows[2].description, "STORE REFUND");
-        assert_eq!(rows[2].amount, 200.0); // C = credit
+        assert_eq!(rows[2].amount, dec!(200.0)); // C = credit
     }
 
     #[test]
@@ -771,7 +775,7 @@ RAYGUN DESIGN LLC,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON PURCHASE,123
         let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
-        assert_eq!(rows[0].amount, -50.0);
+        assert_eq!(rows[0].amount, dec!(-50.0));
     }
 
     #[test]
@@ -788,9 +792,9 @@ RAYGUN DESIGN, LLC,5678,02/05/2025,02/05/2025,500.00,Payment,LOC PAYMENT,100 Ban
         assert_eq!(rows.len(), 2, "all 2 rows should be parsed");
         assert_eq!(rows[0].date, "2025-02-01");
         assert_eq!(rows[0].description, "LINE OF CREDIT DRAW");
-        assert_eq!(rows[0].amount, 1000.0); // LOC negates the amount
+        assert_eq!(rows[0].amount, dec!(1000.0)); // LOC negates the amount
         assert_eq!(rows[1].description, "LOC PAYMENT");
-        assert_eq!(rows[1].amount, -500.0);
+        assert_eq!(rows[1].amount, dec!(-500.0));
     }
 
     #[test]
@@ -806,7 +810,7 @@ SMITH, JONES, AND ASSOCIATES,1234,01/15/2025,01/15/2025,-99.00,Office,STAPLES,10
         let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].description, "STAPLES");
-        assert_eq!(rows[0].amount, -99.0);
+        assert_eq!(rows[0].amount, dec!(-99.0));
     }
 
     #[test]
@@ -824,11 +828,11 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak
         let rows = ImporterKind::BofaCreditCard.parse(&path).unwrap();
         assert_eq!(rows.len(), 3, "all 3 rows should be parsed");
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
-        assert_eq!(rows[0].amount, -50.0);
+        assert_eq!(rows[0].amount, dec!(-50.0));
         assert_eq!(rows[1].description, "RESTAURANT");
-        assert_eq!(rows[1].amount, -30.0);
+        assert_eq!(rows[1].amount, dec!(-30.0));
         assert_eq!(rows[2].description, "STORE REFUND");
-        assert_eq!(rows[2].amount, 100.0);
+        assert_eq!(rows[2].amount, dec!(100.0));
     }
 
     #[test]

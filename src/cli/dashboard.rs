@@ -18,6 +18,9 @@ use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::cli::rules_manager::{RulesAction, RulesManager};
 use crate::cli::snake::{SnakeAction, SnakeGame};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::number;
@@ -105,16 +108,16 @@ enum DashboardScreen {
 }
 
 struct HomeData {
-    total_income: f64,
-    total_expenses: f64,
-    net: f64,
+    total_income: Decimal,
+    total_expenses: Decimal,
+    net: Decimal,
     txn_count: i64,
     flagged_count: usize,
-    balances: Vec<(String, f64)>,
+    balances: Vec<(String, Decimal)>,
     cashflow_labels: Vec<String>,
     cashflow_income: Vec<u64>,
     cashflow_expenses: Vec<u64>,
-    top_expenses: Vec<(String, f64)>,
+    top_expenses: Vec<(String, Decimal)>,
 }
 
 struct Dashboard {
@@ -170,7 +173,7 @@ impl Dashboard {
         let txn_count: i64 =
             conn.query_row("SELECT COUNT(*) FROM transactions", [], |row| row.get(0))?;
 
-        let balances: Vec<(String, f64)> = balance
+        let balances: Vec<(String, Decimal)> = balance
             .accounts
             .iter()
             .map(|a| (a.name.clone(), a.balance))
@@ -207,17 +210,17 @@ impl Dashboard {
         let cashflow_income: Vec<u64> = cashflow
             .months
             .iter()
-            .map(|m| m.inflows.max(0.0) as u64)
+            .map(|m| m.inflows.max(Decimal::ZERO).to_u64().unwrap_or(0))
             .collect();
 
         let cashflow_expenses: Vec<u64> = cashflow
             .months
             .iter()
-            .map(|m| m.outflows.abs().max(0.0) as u64)
+            .map(|m| m.outflows.abs().to_u64().unwrap_or(0))
             .collect();
 
         // Top 5 expense categories (pnl.expenses is sorted by total ASC, most negative first)
-        let top_expenses: Vec<(String, f64)> = pnl
+        let top_expenses: Vec<(String, Decimal)> = pnl
             .expenses
             .iter()
             .take(5)
@@ -470,7 +473,7 @@ impl Dashboard {
                 for (name, val) in &data.top_expenses {
                     lines.push(Line::from(vec![
                         Span::raw(format!(" {:<width$}  ", name, width = name_width)),
-                        money_span(-val), // negative to show as expense (red)
+                        money_span(-*val), // negative to show as expense (red)
                     ]));
                 }
                 frame.render_widget(Paragraph::new(lines), chart_right);

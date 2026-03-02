@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use chrono::{Datelike, Local, NaiveDate};
+use rust_decimal::Decimal;
 use rusqlite::Connection;
 
 use crate::categorizer::categorize_transactions;
@@ -13,43 +14,43 @@ const ACCOUNT_NAME: &str = "BofA Checking";
 struct DemoTxn {
     date: String,
     description: &'static str,
-    amount: f64,
+    amount: Decimal,
 }
 
 /// Recurring transactions generated every month.
 struct RecurringTxn {
     day: u32,
     description: &'static str,
-    amount: f64,
+    amount: Decimal,
 }
 
 const RECURRING: &[RecurringTxn] = &[
-    RecurringTxn { day: 5, description: "ADOBE CREATIVE CLOUD", amount: -54.99 },
-    RecurringTxn { day: 5, description: "GITHUB INC", amount: -21.00 },
-    RecurringTxn { day: 5, description: "SLACK TECHNOLOGIES", amount: -12.50 },
-    RecurringTxn { day: 5, description: "GOOGLE WORKSPACE", amount: -14.40 },
-    RecurringTxn { day: 8, description: "AMAZON WEB SERVICES", amount: -189.00 },
-    RecurringTxn { day: 8, description: "FLYWHEEL HOSTING", amount: -89.00 },
+    RecurringTxn { day: 5, description: "ADOBE CREATIVE CLOUD", amount: Decimal::from_parts(5499, 0, 0, true, 2) },
+    RecurringTxn { day: 5, description: "GITHUB INC", amount: Decimal::from_parts(2100, 0, 0, true, 2) },
+    RecurringTxn { day: 5, description: "SLACK TECHNOLOGIES", amount: Decimal::from_parts(1250, 0, 0, true, 2) },
+    RecurringTxn { day: 5, description: "GOOGLE WORKSPACE", amount: Decimal::from_parts(1440, 0, 0, true, 2) },
+    RecurringTxn { day: 8, description: "AMAZON WEB SERVICES", amount: Decimal::from_parts(18900, 0, 0, true, 2) },
+    RecurringTxn { day: 8, description: "FLYWHEEL HOSTING", amount: Decimal::from_parts(8900, 0, 0, true, 2) },
 ];
 
 /// Rotating one-off expenses — each month picks a subset based on index.
 struct RotatingTxn {
     day: u32,
     description: &'static str,
-    amount: f64,
+    amount: Decimal,
 }
 
 const ROTATING: &[RotatingTxn] = &[
-    RotatingTxn { day: 15, description: "CHECK 1042", amount: -2400.00 },
-    RotatingTxn { day: 20, description: "VENMO PAYMENT", amount: -150.00 },
-    RotatingTxn { day: 25, description: "COMCAST BUSINESS", amount: -129.99 },
-    RotatingTxn { day: 28, description: "STAPLES OFFICE SUPPLY", amount: -67.23 },
-    RotatingTxn { day: 7, description: "WEWORK MEMBERSHIP", amount: -450.00 },
-    RotatingTxn { day: 12, description: "ZOOM VIDEO COMMUNICATIONS", amount: -14.99 },
-    RotatingTxn { day: 19, description: "COSTCO WHOLESALE", amount: -29.33 },
-    RotatingTxn { day: 25, description: "FEDEX SHIPPING", amount: -18.75 },
-    RotatingTxn { day: 14, description: "DROPBOX BUSINESS", amount: -19.99 },
-    RotatingTxn { day: 18, description: "TARGET STORE", amount: -43.67 },
+    RotatingTxn { day: 15, description: "CHECK 1042", amount: Decimal::from_parts(240000, 0, 0, true, 2) },
+    RotatingTxn { day: 20, description: "VENMO PAYMENT", amount: Decimal::from_parts(15000, 0, 0, true, 2) },
+    RotatingTxn { day: 25, description: "COMCAST BUSINESS", amount: Decimal::from_parts(12999, 0, 0, true, 2) },
+    RotatingTxn { day: 28, description: "STAPLES OFFICE SUPPLY", amount: Decimal::from_parts(6723, 0, 0, true, 2) },
+    RotatingTxn { day: 7, description: "WEWORK MEMBERSHIP", amount: Decimal::from_parts(45000, 0, 0, true, 2) },
+    RotatingTxn { day: 12, description: "ZOOM VIDEO COMMUNICATIONS", amount: Decimal::from_parts(1499, 0, 0, true, 2) },
+    RotatingTxn { day: 19, description: "COSTCO WHOLESALE", amount: Decimal::from_parts(2933, 0, 0, true, 2) },
+    RotatingTxn { day: 25, description: "FEDEX SHIPPING", amount: Decimal::from_parts(1875, 0, 0, true, 2) },
+    RotatingTxn { day: 14, description: "DROPBOX BUSINESS", amount: Decimal::from_parts(1999, 0, 0, true, 2) },
+    RotatingTxn { day: 18, description: "TARGET STORE", amount: Decimal::from_parts(4367, 0, 0, true, 2) },
 ];
 
 /// Meal delivery vendors rotated across months.
@@ -60,23 +61,23 @@ const MEALS: &[(&str, &str)] = &[
 ];
 
 /// Base income amounts for the two monthly Stripe transfers.
-const INCOME_BASES: &[(f64, f64)] = &[
-    (12000.0, 8500.0),
-    (15000.0, 9200.0),
-    (11500.0, 13800.0),
-    (10200.0, 11000.0),
-    (14500.0, 7800.0),
-    (13000.0, 9500.0),
+const INCOME_BASES: &[(i64, i64)] = &[
+    (1200000, 850000),
+    (1500000, 920000),
+    (1150000, 1380000),
+    (1020000, 1100000),
+    (1450000, 780000),
+    (1300000, 950000),
 ];
 
 /// Base meal amounts cycled per month.
-const MEAL_AMOUNTS: &[(f64, f64)] = &[
-    (-32.18, -28.45),
-    (-41.50, -35.72),
-    (-27.90, -33.10),
-    (-38.25, -24.60),
-    (-29.99, -31.40),
-    (-44.15, -26.80),
+const MEAL_AMOUNTS: &[(i64, i64)] = &[
+    (-3218, -2845),
+    (-4150, -3572),
+    (-2790, -3310),
+    (-3825, -2460),
+    (-2999, -3140),
+    (-4415, -2680),
 ];
 
 /// Clamp a day to the last valid day of the given year/month.
@@ -110,25 +111,27 @@ fn generate_transactions() -> Vec<DemoTxn> {
         // — Income: two Stripe transfers per month —
         let (base1, base2) = INCOME_BASES[idx % INCOME_BASES.len()];
         // Small deterministic variation: +/- up to ~3% based on month index
-        let vary = 1.0 + ((idx % 7) as f64 - 3.0) * 0.01;
+        // vary = 100 + ((idx % 7) - 3) => multiply by this and divide by 100
+        let vary_pct = 100i64 + ((idx % 7) as i64 - 3);
+        let amt1 = Decimal::new(base1, 2) * Decimal::new(vary_pct, 2);
+        let amt2 = Decimal::new(base2, 2) * Decimal::new(vary_pct, 2);
         txns.push(DemoTxn {
             date: make_date(year, month, 3),
             description: "STRIPE TRANSFER",
-            amount: (base1 * vary * 100.0).round() / 100.0,
+            amount: amt1.round_dp(2),
         });
         txns.push(DemoTxn {
             date: make_date(year, month, 17),
             description: "STRIPE TRANSFER",
-            amount: (base2 * vary * 100.0).round() / 100.0,
+            amount: amt2.round_dp(2),
         });
 
         // — Recurring subscriptions & hosting —
         for r in RECURRING {
             // AWS varies slightly each month
             let amt = if r.description == "AMAZON WEB SERVICES" {
-                let base = r.amount;
-                let delta = ((idx % 5) as f64 - 2.0) * 3.5;
-                ((base + delta) * 100.0).round() / 100.0
+                let delta = Decimal::new(((idx % 5) as i64 - 2) * 350, 2);
+                (r.amount + delta).round_dp(2)
             } else {
                 r.amount
             };
@@ -141,16 +144,16 @@ fn generate_transactions() -> Vec<DemoTxn> {
 
         // — Meals: two per month, rotating vendors —
         let (meal1_desc, meal2_desc) = MEALS[idx % MEALS.len()];
-        let (meal1_amt, meal2_amt) = MEAL_AMOUNTS[idx % MEAL_AMOUNTS.len()];
+        let (meal1_cents, meal2_cents) = MEAL_AMOUNTS[idx % MEAL_AMOUNTS.len()];
         txns.push(DemoTxn {
             date: make_date(year, month, 12),
             description: meal1_desc,
-            amount: meal1_amt,
+            amount: Decimal::new(meal1_cents, 2),
         });
         txns.push(DemoTxn {
             date: make_date(year, month, 22),
             description: meal2_desc,
-            amount: meal2_amt,
+            amount: Decimal::new(meal2_cents, 2),
         });
 
         // — Rotating extras: pick 3 per month from the pool —
@@ -165,11 +168,12 @@ fn generate_transactions() -> Vec<DemoTxn> {
         }
 
         // — Interest payment on last day of month —
-        let interest = 1.50 + (idx % 5) as f64 * 0.25;
+        // 1.50 + (idx % 5) * 0.25  →  150 + (idx % 5) * 25  cents
+        let interest_cents = 150i64 + (idx % 5) as i64 * 25;
         txns.push(DemoTxn {
             date: make_date(year, month, 31),
             description: "INTEREST PAYMENT",
-            amount: (interest * 100.0).round() / 100.0,
+            amount: Decimal::new(interest_cents, 2),
         });
     }
 
@@ -210,7 +214,7 @@ fn insert_demo_data(conn: &Connection) -> Result<usize> {
         conn.execute(
             "INSERT INTO transactions (account_id, date, description, amount, is_flagged, flag_reason) \
              VALUES (?1, ?2, ?3, ?4, 1, 'No matching rule')",
-            rusqlite::params![account_id, txn.date, txn.description, txn.amount],
+            rusqlite::params![account_id, txn.date, txn.description, txn.amount.to_string()],
         )?;
     }
 

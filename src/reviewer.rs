@@ -1,3 +1,6 @@
+use std::str::FromStr;
+
+use rust_decimal::Decimal;
 use rusqlite::Connection;
 
 use crate::error::{NigelError, Result};
@@ -7,8 +10,15 @@ pub struct FlaggedTxn {
     pub id: i64,
     pub date: String,
     pub description: String,
-    pub amount: f64,
+    pub amount: Decimal,
     pub account_name: String,
+}
+
+fn read_decimal(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Decimal> {
+    let s: String = row.get(idx)?;
+    Decimal::from_str(&s).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+        idx, rusqlite::types::Type::Text, Box::new(e),
+    ))
 }
 
 pub struct CategoryChoice {
@@ -29,7 +39,7 @@ pub fn get_flagged_transactions(conn: &Connection) -> Result<Vec<FlaggedTxn>> {
                 id: row.get(0)?,
                 date: row.get(1)?,
                 description: row.get(2)?,
-                amount: row.get(3)?,
+                amount: read_decimal(row, 3)?,
                 account_name: row.get(4)?,
             })
         })?
@@ -48,7 +58,7 @@ pub fn get_transaction_by_id(conn: &Connection, id: i64) -> Result<FlaggedTxn> {
                 id: row.get(0)?,
                 date: row.get(1)?,
                 description: row.get(2)?,
-                amount: row.get(3)?,
+                amount: read_decimal(row, 3)?,
                 account_name: row.get(4)?,
             })
         },
@@ -212,7 +222,7 @@ mod tests {
         let flagged = get_flagged_transactions(&conn).unwrap();
         assert_eq!(flagged.len(), 1);
         assert_eq!(flagged[0].description, "ADOBE CREATIVE");
-        assert!(flagged[0].amount < 0.0);
+        assert!(flagged[0].amount < Decimal::ZERO);
     }
 
     #[test]
