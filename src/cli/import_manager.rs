@@ -301,10 +301,17 @@ fn run_import(conn: &Connection, file_path: &PathBuf, account_name: &str) -> Imp
                 };
             }
 
-            let mut msg = format!(
-                "{} imported, {} skipped (duplicates)",
-                result.imported, result.skipped
-            );
+            let mut msg = if result.malformed > 0 {
+                format!(
+                    "{} imported, {} skipped (duplicates), {} skipped (malformed data)",
+                    result.imported, result.skipped, result.malformed
+                )
+            } else {
+                format!(
+                    "{} imported, {} skipped (duplicates)",
+                    result.imported, result.skipped
+                )
+            };
 
             match categorize_transactions(conn) {
                 Ok(cat) => {
