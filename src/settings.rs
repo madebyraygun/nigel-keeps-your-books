@@ -9,12 +9,6 @@ pub struct Settings {
     pub data_dir: String,
     #[serde(default)]
     pub user_name: String,
-    #[serde(default = "default_fiscal_year_start")]
-    pub fiscal_year_start: String,
-}
-
-fn default_fiscal_year_start() -> String {
-    "01".to_string()
 }
 
 impl Default for Settings {
@@ -22,7 +16,6 @@ impl Default for Settings {
         Self {
             data_dir: default_data_dir().to_string_lossy().to_string(),
             user_name: String::new(),
-            fiscal_year_start: default_fiscal_year_start(),
         }
     }
 }
@@ -58,8 +51,8 @@ pub fn load_settings() -> Settings {
 pub fn save_settings(settings: &Settings) -> Result<()> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir)?;
-    let json = serde_json::to_string_pretty(settings)
-        .map_err(|e| NigelError::Settings(e.to_string()))?;
+    let json =
+        serde_json::to_string_pretty(settings).map_err(|e| NigelError::Settings(e.to_string()))?;
     std::fs::write(settings_path(), format!("{json}\n"))?;
     Ok(())
 }
@@ -113,7 +106,6 @@ mod tests {
         let settings = Settings {
             data_dir: "/tmp/test".to_string(),
             user_name: "Alice".to_string(),
-            fiscal_year_start: "07".to_string(),
         };
         let json = serde_json::to_string_pretty(&settings).unwrap();
         std::fs::write(&path, &json).unwrap();
@@ -121,14 +113,12 @@ mod tests {
         let loaded: Settings = serde_json::from_str(&content).unwrap();
         assert_eq!(loaded.user_name, "Alice");
         assert_eq!(loaded.data_dir, "/tmp/test");
-        assert_eq!(loaded.fiscal_year_start, "07");
     }
 
     #[test]
     fn test_load_returns_defaults_when_missing() {
         let s = Settings::default();
         assert!(s.user_name.is_empty());
-        assert_eq!(s.fiscal_year_start, "01");
         assert!(!s.data_dir.is_empty());
     }
 
@@ -136,7 +126,13 @@ mod tests {
     fn test_load_merges_with_defaults() {
         let json = r#"{"data_dir": "/tmp/test", "user_name": "Bob"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
-        assert_eq!(s.fiscal_year_start, "01");
+        assert_eq!(s.user_name, "Bob");
+    }
+
+    #[test]
+    fn test_ignores_unknown_fields_from_older_versions() {
+        let json = r#"{"data_dir": "/tmp/test", "user_name": "Bob", "fiscal_year_start": "07"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.user_name, "Bob");
     }
 
