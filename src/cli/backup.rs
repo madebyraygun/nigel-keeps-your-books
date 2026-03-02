@@ -23,6 +23,8 @@ pub fn snapshot(conn: &rusqlite::Connection, dest_path: &Path) -> Result<()> {
     Ok(())
 }
 
+// Tests mutate the global DB_PASSWORD mutex and must run with --test-threads=1.
+// See also: db::tests, cli::password::tests.
 #[cfg(test)]
 mod tests {
     use super::*;
