@@ -1,9 +1,22 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use rusqlite::Connection;
 
 use crate::error::Result;
 use crate::migrations;
+
+static DB_PASSWORD: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set the global database password. Call before `get_connection()`.
+pub fn set_db_password(password: Option<String>) {
+    *DB_PASSWORD.lock().unwrap() = password;
+}
+
+/// Read the current global database password.
+pub fn get_db_password() -> Option<String> {
+    DB_PASSWORD.lock().unwrap().clone()
+}
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
@@ -124,10 +137,66 @@ const DEFAULT_CATEGORIES: &[(&str, Option<i64>, &str, Option<&str>, Option<&str>
 ];
 
 pub fn get_connection(db_path: &Path) -> Result<Connection> {
+    let password = get_db_password();
+    open_connection(db_path, password.as_deref())
+}
+
+/// Open a connection with an explicit password (bypasses global state).
+/// Used by backup, password management, and tests.
+pub fn open_connection(db_path: &Path, password: Option<&str>) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
+    if let Some(pw) = password {
+        conn.pragma_update(None, "key", pw)?;
+    }
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     Ok(conn)
+}
+
+/// Check whether a database file is encrypted (requires a password to open).
+/// Returns false for nonexistent files (they will be created fresh).
+/// Detection uses the SQLite magic header: plaintext databases always start
+/// with "SQLite format 3\0". Anything else is encrypted or corrupt.
+pub fn is_encrypted(db_path: &Path) -> Result<bool> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let mut buf = [0u8; 16];
+    let mut file = std::fs::File::open(db_path)?;
+    use std::io::Read;
+    let n = file.read(&mut buf)?;
+    if n < 16 {
+        return Ok(false); // too small to be a valid DB
+    }
+    Ok(&buf != b"SQLite format 3\0")
+}
+
+/// If the database is encrypted, prompt the user for a password (up to 3 attempts).
+/// Sets the global password on success. Returns an error after 3 failures.
+pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
+    if !is_encrypted(db_path)? {
+        return Ok(());
+    }
+    for attempt in 1..=3 {
+        let pw = rpassword::prompt_password("Database password: ")
+            .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+        set_db_password(Some(pw));
+        // get_connection runs PRAGMAs that read the DB header, so it will fail
+        // on a wrong password. Match on the result instead of using ? to avoid
+        // short-circuiting the retry loop.
+        match get_connection(db_path) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                set_db_password(None);
+                if attempt < 3 {
+                    eprintln!("Wrong password. Try again ({attempt}/3).");
+                }
+            }
+        }
+    }
+    Err(crate::error::NigelError::Other(
+        "Failed to unlock database after 3 attempts.".into(),
+    ))
 }
 
 pub fn init_db(conn: &Connection) -> Result<()> {
@@ -214,6 +283,90 @@ mod tests {
         ).unwrap();
         assert!(income >= 5, "expected >= 5 income categories, got {income}");
         assert!(expense >= 20, "expected >= 20 expense categories, got {expense}");
+    }
+
+    #[test]
+    fn test_encrypted_db_cannot_open_without_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+
+        // Create encrypted DB
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+
+        // Try opening without password — should fail
+        set_db_password(None);
+        let result = get_connection(&db_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_db_opens_with_correct_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+
+        // Reopen with same password
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        let result: i64 = conn
+            .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert!(result > 0);
+    }
+
+    #[test]
+    fn test_unencrypted_db_works_without_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("plain.db");
+
+        set_db_password(None);
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+
+        set_db_password(None);
+        let conn = get_connection(&db_path).unwrap();
+        let result: i64 = conn
+            .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert!(result > 0);
+    }
+
+    #[test]
+    fn test_is_encrypted_returns_false_for_plain_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("plain.db");
+        set_db_password(None);
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        assert!(!is_encrypted(&db_path).unwrap());
+    }
+
+    #[test]
+    fn test_is_encrypted_returns_true_for_encrypted_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        assert!(is_encrypted(&db_path).unwrap());
+    }
+
+    #[test]
+    fn test_is_encrypted_returns_false_for_nonexistent_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("nope.db");
+        assert!(!is_encrypted(&db_path).unwrap());
     }
 
     #[test]

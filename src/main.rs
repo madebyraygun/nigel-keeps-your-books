@@ -18,7 +18,7 @@ mod settings;
 
 use clap::Parser;
 
-use cli::{AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, RulesCommands};
+use cli::{AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand, RulesCommands};
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -42,6 +42,15 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
+    // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
+    if !matches!(command, Commands::Init { .. } | Commands::Demo | Commands::Password { .. }) {
+        let data_dir = crate::settings::get_data_dir();
+        let db_path = data_dir.join("nigel.db");
+        if db_path.exists() {
+            crate::db::prompt_password_if_needed(&db_path)?;
+        }
+    }
+
     match command {
         Commands::Init { data_dir } => cli::init::run(data_dir),
         Commands::Accounts { command } => match command {
@@ -116,5 +125,10 @@ fn dispatch(command: Commands) -> error::Result<()> {
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
         Commands::Status => cli::status::run(),
+        Commands::Password { command } => match command {
+            PasswordCommand::Set => cli::password::run_set(),
+            PasswordCommand::Change => cli::password::run_change(),
+            PasswordCommand::Remove => cli::password::run_remove(),
+        },
     }
 }

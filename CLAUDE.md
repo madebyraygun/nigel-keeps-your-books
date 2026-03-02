@@ -8,11 +8,11 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, status
-- **Database:** SQLite via rusqlite in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name)
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, status, password
+- **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `prompt_password_if_needed()` prompts via rpassword with 3 retries
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
-- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu with single-key shortcuts (b=Browse, i=Import, r=Review, c=Reconcile, a=Accounts, t=caTegorize, u=rUles, v=View report, e=Export report, l=Load, s=Snake); all commands render as inline TUI screens; outer loop only re-initializes when Load changes the data directory. F5 refreshes dashboard data.
+- **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu with single-key shortcuts (b=Browse, i=Import, r=Review, c=Reconcile, a=Accounts, t=caTegorize, u=rUles, v=View report, e=Export report, l=Load, p=Password, s=Snake); all commands render as inline TUI screens; outer loop only re-initializes when Load changes the data directory. F5 refreshes dashboard data.
 - **Account Manager:** `cli/account_manager.rs` — inline TUI screen for managing accounts (list, add, rename, delete); uses form sub-screens for add/rename with text input and type selector; delete blocks if account has transactions
 - **Category Manager:** `cli/category_manager.rs` — inline TUI screen for managing the chart of accounts (categories); list/add/edit/delete with form sub-screens for name, type (income/expense selector), tax line, and form line; soft-delete blocked if category has transactions or active rules; data layer in `cli/categories.rs`
 - **Rules Manager:** `cli/rules_manager.rs` — inline TUI screen for viewing and deleting categorization rules; scrollable list with soft-delete confirmation
@@ -26,7 +26,8 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
-- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table.
+- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `fiscal_year_start`; `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table. Database password is runtime-only (never persisted to disk).
+- **Password Manager:** `cli/password_manager.rs` — inline TUI screen for managing database encryption; detects current encryption state and shows set/change/remove options; masked password input with confirmation; uses `sqlcipher_export` for encrypt/decrypt and `PRAGMA rekey` for password changes
 - **Onboarding:** `cli/onboarding.rs` — full-screen TUI shown on first launch (when settings.json doesn't exist); collects user name, business name, and optional password (masked input), then offers demo/fresh/load options
 - **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`; switch with `nigel load <path>`. Contains `backups/` (manual backups) and `snapshots/` (automatic pre-import snapshots)
 - **Demo:** `nigel demo` dynamically generates 18 months of sample transactions (counting backwards from the current date) + 9 rules directly into the DB (no CSV files), then runs categorization; dates are computed at runtime so reports always show current-year data
@@ -79,6 +80,9 @@ nigel status                                      # Show active DB and summary s
 nigel load ~/other-books                          # Switch to a different data directory
 nigel backup                                      # Back up DB to <data_dir>/backups/
 nigel backup --output /tmp/nigel-backup.db        # Back up to custom path
+nigel password set                                # Encrypt an unencrypted database
+nigel password change                             # Change password on encrypted database
+nigel password remove                             # Decrypt database (remove password)
 ```
 
 ## Documentation Policy
@@ -104,6 +108,10 @@ Do not merge or mark work complete if docs are stale.
 - Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
 - Browse register and reports with no date flags show all transactions (no implicit year filter); the browse view scrolls to today on load
 - Database row deserialization errors are propagated, never silently discarded
+- Database password is never persisted to disk — stored only in runtime `Mutex<Option<String>>` and prompted via rpassword on each launch
+- Demo databases are always unencrypted; `init` and `demo` subcommands skip password detection
+- Backups and snapshots preserve the encryption state of the source database
+- Cross-encryption-state operations (encrypt/decrypt) use `sqlcipher_export` via ATTACH DATABASE; same-encryption operations (backup, rekey) use SQLite backup API or `PRAGMA rekey`
 - Schema migrations run on every `init_db()` call; each migration is transactional (savepoint); to add a migration: append to `MIGRATIONS` array in `migrations.rs`, bump `LATEST_VERSION`, implement `up()` function with SQL statements
 
 ## Project Structure
@@ -126,6 +134,8 @@ src/
     categorize.rs       # nigel categorize
     rules.rs            # nigel rules add/list
     rules_manager.rs    # TUI rules screen (scrollable list + delete)
+    password.rs         # nigel password set/change/remove (encrypt/decrypt/rekey)
+    password_manager.rs # TUI password management screen (set/change/remove via dashboard)
     reconcile_manager.rs # TUI reconcile screen (account/month/balance form + result)
     load_manager.rs     # TUI load screen (data directory switcher with reload)
     review.rs           # nigel review

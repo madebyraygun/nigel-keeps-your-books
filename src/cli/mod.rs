@@ -14,6 +14,8 @@ pub mod init;
 pub mod load;
 pub mod load_manager;
 pub mod onboarding;
+pub mod password;
+pub mod password_manager;
 pub mod reconcile;
 pub mod reconcile_manager;
 pub mod report;
@@ -123,6 +125,21 @@ pub enum Commands {
     },
     /// Show current database and summary statistics.
     Status,
+    /// Manage database password (encrypt, change, or remove).
+    Password {
+        #[command(subcommand)]
+        command: PasswordCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PasswordCommand {
+    /// Set a password on an unencrypted database.
+    Set,
+    /// Change the password on an encrypted database.
+    Change,
+    /// Remove the password (decrypt the database).
+    Remove,
 }
 
 #[derive(Subcommand)]

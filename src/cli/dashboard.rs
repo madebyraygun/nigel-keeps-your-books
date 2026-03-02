@@ -54,6 +54,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
     ("[l] Load a different data file", 'l'),
+    ("[p] Password management", 'p'),
     ("[s] Snake", 's'),
 ];
 
@@ -101,6 +102,7 @@ enum DashboardScreen {
     Load(LoadScreen),
     ReportPicker { selection: usize, mode: ReportPickerMode },
     ReportView(Box<dyn ReportView>),
+    Password(super::password_manager::PasswordManager),
     Snake(SnakeGame),
 }
 
@@ -312,6 +314,10 @@ impl Dashboard {
                 ReportPickerMode::Export => ("Select a report to export", EXPORT_TYPES as &[&str]),
             };
             self.draw_picker(frame, title, items, selection);
+            return;
+        }
+        if let DashboardScreen::Password(ref mgr) = self.screen {
+            mgr.draw(frame);
             return;
         }
         if let DashboardScreen::Snake(ref mut game) = self.screen {
@@ -649,7 +655,13 @@ impl Dashboard {
             7 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::View },
             8 => self.screen = DashboardScreen::ReportPicker { selection: 0, mode: ReportPickerMode::Export },
             9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            10 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            10 => {
+                match super::password_manager::PasswordManager::new(&self.greeting) {
+                    Ok(mgr) => self.screen = DashboardScreen::Password(mgr),
+                    Err(e) => self.status_message = Some(format!("Error: {e}")),
+                }
+            }
+            11 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -851,6 +863,10 @@ pub fn run() -> Result<()> {
                 onboarding_company = Some(result.company_name);
             }
             post_setup_action = Some(result.action);
+
+            if let Some(ref pw) = result.password {
+                crate::db::set_db_password(Some(pw.clone()));
+            }
         }
     }
 
@@ -861,6 +877,12 @@ pub fn run() -> Result<()> {
     std::fs::create_dir_all(data_dir.join("exports"))?;
     std::fs::create_dir_all(data_dir.join("snapshots"))?;
     std::fs::create_dir_all(data_dir.join("backups"))?;
+    if !is_first_run {
+        let db_path = data_dir.join("nigel.db");
+        if db_path.exists() {
+            crate::db::prompt_password_if_needed(&db_path)?;
+        }
+    }
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
     crate::db::init_db(&conn)?;
 
@@ -1097,6 +1119,15 @@ pub fn run() -> Result<()> {
                                 _ => {}
                             }
                             key.code == KeyCode::Char('q')
+                        }
+                        DashboardScreen::Password(ref mut mgr) => {
+                            match mgr.handle_key(key.code) {
+                                super::password_manager::PasswordAction::Close => {
+                                    return_home = true;
+                                }
+                                super::password_manager::PasswordAction::Continue => {}
+                            }
+                            false
                         }
                         DashboardScreen::Snake(ref mut game) => {
                             match game.handle_key(key.code) {
