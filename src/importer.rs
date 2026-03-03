@@ -186,6 +186,116 @@ pub fn get_for_file(account_type: &str, file_path: &Path) -> Option<ImporterKind
 }
 
 // ---------------------------------------------------------------------------
+// Generic CSV config + helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct GenericCsvConfig {
+    pub date_col: usize,
+    pub desc_col: usize,
+    pub amount_col: usize,
+    pub date_format: String,
+}
+
+pub fn save_csv_profile(conn: &Connection, name: &str, config: &GenericCsvConfig) -> Result<()> {
+    if get_by_key(name).is_some() {
+        return Err(NigelError::Other(format!(
+            "'{name}' conflicts with a built-in importer; choose a different profile name"
+        )));
+    }
+    conn.execute(
+        "INSERT INTO csv_profiles (name, date_col, desc_col, amount_col, date_format)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(name) DO UPDATE SET
+            date_col = excluded.date_col,
+            desc_col = excluded.desc_col,
+            amount_col = excluded.amount_col,
+            date_format = excluded.date_format",
+        rusqlite::params![
+            name,
+            config.date_col as i64,
+            config.desc_col as i64,
+            config.amount_col as i64,
+            config.date_format,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn load_csv_profile(conn: &Connection, name: &str) -> Result<Option<GenericCsvConfig>> {
+    let mut stmt = conn.prepare(
+        "SELECT date_col, desc_col, amount_col, date_format FROM csv_profiles WHERE name = ?1",
+    )?;
+    let result = stmt.query_row([name], |row| {
+        Ok(GenericCsvConfig {
+            date_col: row.get::<_, i64>(0)? as usize,
+            desc_col: row.get::<_, i64>(1)? as usize,
+            amount_col: row.get::<_, i64>(2)? as usize,
+            date_format: row.get(3)?,
+        })
+    });
+    match result {
+        Ok(config) => Ok(Some(config)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn parse_generic_csv(
+    file_path: &Path,
+    config: &GenericCsvConfig,
+) -> Result<(Vec<ParsedRow>, usize)> {
+    let mut rdr = create_csv_reader(file_path)?;
+    let mut rows = Vec::new();
+    let mut malformed = 0usize;
+    let mut first = true;
+    let min_cols = [config.date_col, config.desc_col, config.amount_col]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    for result in rdr.records() {
+        let Ok(record) = result else {
+            malformed += 1;
+            continue;
+        };
+        // Skip header row
+        if first {
+            first = false;
+            continue;
+        }
+        if record.len() < min_cols {
+            malformed += 1;
+            continue;
+        }
+        let raw_date = record[config.date_col].trim();
+        let date = match chrono::NaiveDate::parse_from_str(raw_date, &config.date_format) {
+            Ok(d) => d.format("%Y-%m-%d").to_string(),
+            Err(_) => {
+                malformed += 1;
+                continue;
+            }
+        };
+        let description = record[config.desc_col].trim().to_string();
+        if description.is_empty() {
+            malformed += 1;
+            continue;
+        }
+        let Some(amount) = parse_amount(&record[config.amount_col]) else {
+            malformed += 1;
+            continue;
+        };
+        rows.push(ParsedRow {
+            date,
+            description,
+            amount,
+        });
+    }
+    Ok((rows, malformed))
+}
+
+// ---------------------------------------------------------------------------
 // import_file
 // ---------------------------------------------------------------------------
 
@@ -194,6 +304,7 @@ pub struct ImportResult {
     pub skipped: usize,
     pub malformed: usize,
     pub duplicate_file: bool,
+    pub sample: Vec<ParsedRow>,
 }
 
 pub fn import_file(
@@ -201,6 +312,8 @@ pub fn import_file(
     file_path: &Path,
     account_name: &str,
     format_key: Option<&str>,
+    dry_run: bool,
+    inline_config: Option<&GenericCsvConfig>,
 ) -> Result<ImportResult> {
     let (account_id, account_type) = {
         let mut stmt = conn.prepare("SELECT id, account_type FROM accounts WHERE name = ?1")?;
@@ -220,51 +333,84 @@ pub fn import_file(
                 skipped: 0,
                 malformed: 0,
                 duplicate_file: true,
+                sample: Vec::new(),
             });
         }
     }
 
-    let importer = if let Some(key) = format_key {
-        get_by_key(key).ok_or_else(|| NigelError::UnknownFormat(key.to_string()))?
+    enum ResolvedImporter {
+        BuiltIn(ImporterKind),
+        Generic(GenericCsvConfig),
+    }
+
+    let resolved = if let Some(config) = inline_config {
+        ResolvedImporter::Generic(config.clone())
+    } else if let Some(key) = format_key {
+        if let Some(kind) = get_by_key(key) {
+            ResolvedImporter::BuiltIn(kind)
+        } else if let Some(config) = load_csv_profile(conn, key)? {
+            ResolvedImporter::Generic(config)
+        } else {
+            return Err(NigelError::UnknownFormat(key.to_string()));
+        }
     } else {
-        get_for_file(&account_type, file_path)
-            .ok_or_else(|| NigelError::NoImporter(account_type.clone()))?
+        ResolvedImporter::BuiltIn(
+            get_for_file(&account_type, file_path)
+                .ok_or_else(|| NigelError::NoImporter(account_type.clone()))?,
+        )
     };
 
-    let (parsed_rows, malformed) = importer.parse(file_path)?;
-
-    let dates: Vec<&str> = parsed_rows.iter().map(|r| r.date.as_str()).collect();
-    let min_date = dates.iter().min().copied();
-    let max_date = dates.iter().max().copied();
-    conn.execute(
-        "INSERT INTO imports (filename, account_id, record_count, date_range_start, date_range_end, checksum) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![
-            file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-            account_id,
-            parsed_rows.len() as i64,
-            min_date,
-            max_date,
-            checksum,
-        ],
-    )?;
-    let import_id = conn.last_insert_rowid();
+    let (parsed_rows, malformed) = match &resolved {
+        ResolvedImporter::BuiltIn(kind) => kind.parse(file_path)?,
+        ResolvedImporter::Generic(config) => parse_generic_csv(file_path, config)?,
+    };
+    let sample: Vec<ParsedRow> = parsed_rows.iter().take(5).cloned().collect();
 
     let mut imported = 0usize;
     let mut skipped = 0usize;
-    for row in &parsed_rows {
-        if is_duplicate_row(conn, account_id, row)? {
-            skipped += 1;
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO transactions (account_id, date, description, amount, import_id, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, ?5, 1, 'No matching rule')",
-            rusqlite::params![account_id, row.date, row.description, row.amount, import_id],
-        )?;
-        imported += 1;
-    }
 
-    if importer.has_post_import() {
-        importer.post_import(conn, account_id, &parsed_rows)?;
+    if !dry_run {
+        let dates: Vec<&str> = parsed_rows.iter().map(|r| r.date.as_str()).collect();
+        let min_date = dates.iter().min().copied();
+        let max_date = dates.iter().max().copied();
+        conn.execute(
+            "INSERT INTO imports (filename, account_id, record_count, date_range_start, date_range_end, checksum) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                account_id,
+                parsed_rows.len() as i64,
+                min_date,
+                max_date,
+                checksum,
+            ],
+        )?;
+        let import_id = conn.last_insert_rowid();
+
+        for row in &parsed_rows {
+            if is_duplicate_row(conn, account_id, row)? {
+                skipped += 1;
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO transactions (account_id, date, description, amount, import_id, is_flagged, flag_reason) VALUES (?1, ?2, ?3, ?4, ?5, 1, 'No matching rule')",
+                rusqlite::params![account_id, row.date, row.description, row.amount, import_id],
+            )?;
+            imported += 1;
+        }
+
+        if let ResolvedImporter::BuiltIn(importer) = &resolved {
+            if importer.has_post_import() {
+                importer.post_import(conn, account_id, &parsed_rows)?;
+            }
+        }
+    } else {
+        for row in &parsed_rows {
+            if is_duplicate_row(conn, account_id, row)? {
+                skipped += 1;
+            } else {
+                imported += 1;
+            }
+        }
     }
 
     Ok(ImportResult {
@@ -272,6 +418,7 @@ pub fn import_file(
         skipped,
         malformed,
         duplicate_file: false,
+        sample,
     })
 }
 
@@ -303,7 +450,10 @@ fn parse_bofa_checking(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     let mut malformed = 0usize;
 
     for result in rdr.records() {
-        let Ok(record) = result else { continue };
+        let Ok(record) = result else {
+            malformed += 1;
+            continue;
+        };
         if !found_header {
             if record.len() >= 4 && record[0].trim() == "Date" && record[1].contains("Description")
             {
@@ -381,7 +531,10 @@ fn parse_bofa_card_format(
     let mut header_field_count: usize = 0;
 
     for result in rdr.records() {
-        let Ok(record) = result else { continue };
+        let Ok(record) = result else {
+            malformed += 1;
+            continue;
+        };
         if !found_header {
             if record.iter().any(|f| f.contains("Posting Date")) {
                 header_field_count = record.len();
@@ -702,7 +855,15 @@ mod tests {
                 ("01/17/2025", "DEPOSIT", "500.00"),
             ],
         );
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 3);
         assert!(!result.duplicate_file);
         let count: i64 = conn
@@ -720,9 +881,25 @@ mod tests {
             "stmt.csv",
             &[("01/15/2025", "PAYMENT ONE", "-100.00")],
         );
-        let r1 = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let r1 = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(r1.imported, 1);
-        let r2 = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let r2 = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert!(r2.duplicate_file);
         assert_eq!(r2.imported, 0);
     }
@@ -739,7 +916,15 @@ mod tests {
                 ("01/16/2025", "PAYMENT TWO", "-200.00"),
             ],
         );
-        import_file(&conn, &csv1, "Test Checking", Some("bofa_checking")).unwrap();
+        import_file(
+            &conn,
+            &csv1,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let csv2 = write_bofa_csv(
             dir.path(),
             "stmt2.csv",
@@ -748,7 +933,15 @@ mod tests {
                 ("01/18/2025", "PAYMENT THREE", "-300.00"),
             ],
         );
-        let r2 = import_file(&conn, &csv2, "Test Checking", Some("bofa_checking")).unwrap();
+        let r2 = import_file(
+            &conn,
+            &csv2,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(r2.imported, 1);
         assert_eq!(r2.skipped, 1);
     }
@@ -762,7 +955,15 @@ mod tests {
             "stmt.csv",
             &[("01/15/2025", "PAYMENT ONE", "-100.00")],
         );
-        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let count: i64 = conn
             .query_row("SELECT count(*) FROM imports", [], |r| r.get(0))
             .unwrap();
@@ -920,7 +1121,15 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak
                 ("01/17/2025", "ANOTHER VALID", "250.00"),
             ],
         );
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 2, "malformed amount row should be skipped");
         assert_eq!(
             result.malformed, 1,
@@ -962,7 +1171,15 @@ JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seat
             "stmt.csv",
             &[("01/15/2025", "PAYMENT ONE", "-100.00")],
         );
-        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking")).unwrap();
+        import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let import_id: i64 = conn
             .query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -990,5 +1207,256 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
         assert_eq!(malformed, 1, "one row should be counted as malformed");
         assert_eq!(rows[0].description, "AMAZON PURCHASE");
         assert_eq!(rows[1].description, "DELTA AIRLINES");
+    }
+
+    #[test]
+    fn test_import_result_has_sample() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[
+                ("01/15/2025", "PAYMENT ONE", "-100.00"),
+                ("01/16/2025", "PAYMENT TWO", "-250.00"),
+                ("01/17/2025", "DEPOSIT", "500.00"),
+            ],
+        );
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.sample.len(), 3);
+        assert_eq!(result.sample[0].description, "PAYMENT ONE");
+    }
+
+    #[test]
+    fn test_dry_run_does_not_write_to_db() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[
+                ("01/15/2025", "PAYMENT ONE", "-100.00"),
+                ("01/16/2025", "PAYMENT TWO", "-250.00"),
+            ],
+        );
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped, 0);
+        assert!(!result.duplicate_file);
+        let tx_count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tx_count, 0, "dry run should not insert transactions");
+        let import_count: i64 = conn
+            .query_row("SELECT count(*) FROM imports", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(import_count, 0, "dry run should not insert import record");
+    }
+
+    #[test]
+    fn test_dry_run_detects_duplicates() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let csv_path = write_bofa_csv(
+            dir.path(),
+            "stmt.csv",
+            &[
+                ("01/15/2025", "PAYMENT ONE", "-100.00"),
+                ("01/16/2025", "PAYMENT TWO", "-250.00"),
+            ],
+        );
+        import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
+        let csv2 = write_bofa_csv(
+            dir.path(),
+            "stmt2.csv",
+            &[
+                ("01/16/2025", "PAYMENT TWO", "-250.00"),
+                ("01/18/2025", "PAYMENT THREE", "-300.00"),
+            ],
+        );
+        let result = import_file(
+            &conn,
+            &csv2,
+            "Test Checking",
+            Some("bofa_checking"),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn test_dry_run_sample_capped_at_five() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let rows: Vec<(&str, &str, &str)> = vec![
+            ("01/01/2025", "TXN 1", "-10.00"),
+            ("01/02/2025", "TXN 2", "-20.00"),
+            ("01/03/2025", "TXN 3", "-30.00"),
+            ("01/04/2025", "TXN 4", "-40.00"),
+            ("01/05/2025", "TXN 5", "-50.00"),
+            ("01/06/2025", "TXN 6", "-60.00"),
+            ("01/07/2025", "TXN 7", "-70.00"),
+        ];
+        let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &rows);
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.sample.len(), 5, "sample should be capped at 5");
+        assert_eq!(result.imported, 7);
+    }
+
+    #[test]
+    fn test_parse_generic_csv_default_date_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generic.csv");
+        let content = "\
+Date,Memo,Debit,Credit,Balance
+01/15/2025,COFFEE SHOP,-5.50,,994.50
+01/16/2025,PAYCHECK,,2000.00,2994.50
+01/17/2025,RENT,-1500.00,,1494.50
+";
+        std::fs::write(&path, content).unwrap();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        let (rows, malformed) = parse_generic_csv(&path, &config).unwrap();
+        assert_eq!(rows.len(), 2); // row 2 has empty amount col -> malformed
+        assert_eq!(malformed, 1);
+        assert_eq!(rows[0].date, "2025-01-15");
+        assert_eq!(rows[0].description, "COFFEE SHOP");
+        assert_eq!(rows[0].amount, -5.50);
+    }
+
+    #[test]
+    fn test_parse_generic_csv_custom_date_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generic.csv");
+        let content = "\
+transaction_date,description,amount
+2025-01-15,COFFEE SHOP,-5.50
+2025-01-16,PAYCHECK,2000.00
+";
+        std::fs::write(&path, content).unwrap();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%Y-%m-%d".to_string(),
+        };
+        let (rows, _) = parse_generic_csv(&path, &config).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].date, "2025-01-15");
+        assert_eq!(rows[1].amount, 2000.0);
+    }
+
+    #[test]
+    fn test_generic_csv_profile_save_and_load() {
+        let (_dir, conn) = test_db();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 2,
+            amount_col: 4,
+            date_format: "%d/%m/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &config).unwrap();
+        let loaded = load_csv_profile(&conn, "chase").unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.date_col, 0);
+        assert_eq!(loaded.desc_col, 2);
+        assert_eq!(loaded.amount_col, 4);
+        assert_eq!(loaded.date_format, "%d/%m/%Y");
+    }
+
+    #[test]
+    fn test_generic_csv_profile_overwrite() {
+        let (_dir, conn) = test_db();
+        let config1 = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &config1).unwrap();
+        let config2 = GenericCsvConfig {
+            date_col: 1,
+            desc_col: 3,
+            amount_col: 5,
+            date_format: "%Y-%m-%d".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &config2).unwrap();
+        let loaded = load_csv_profile(&conn, "chase").unwrap().unwrap();
+        assert_eq!(loaded.date_col, 1);
+        assert_eq!(loaded.desc_col, 3);
+    }
+
+    #[test]
+    fn test_import_file_with_generic_csv() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let path = dir.path().join("generic.csv");
+        let content = "\
+Date,Note,Amount
+01/15/2025,COFFEE,-5.50
+01/16/2025,SALARY,3000.00
+";
+        std::fs::write(&path, content).unwrap();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "test_bank", &config).unwrap();
+        let result = import_file(
+            &conn,
+            &path,
+            "Test Checking",
+            Some("test_bank"),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.imported, 2);
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }

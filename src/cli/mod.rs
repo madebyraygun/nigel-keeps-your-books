@@ -19,12 +19,16 @@ pub mod password_manager;
 pub mod reconcile;
 pub mod reconcile_manager;
 pub mod report;
+pub mod restore;
 pub mod review;
 pub mod rules;
 pub mod rules_manager;
+pub mod settings_manager;
 pub mod snake;
 pub mod splash;
 pub mod status;
+pub mod undo;
+pub mod undo_manager;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -75,9 +79,27 @@ pub enum Commands {
         /// Account name to import into
         #[arg(long)]
         account: String,
-        /// Importer format key (e.g. bofa_checking)
+        /// Importer format key (e.g. bofa_checking, or a saved profile name)
         #[arg(long)]
         format: Option<String>,
+        /// Preview import without writing to database
+        #[arg(long)]
+        dry_run: bool,
+        /// Column index for date (0-based, used with generic CSV)
+        #[arg(long)]
+        date_col: Option<usize>,
+        /// Column index for description (0-based, used with generic CSV)
+        #[arg(long)]
+        desc_col: Option<usize>,
+        /// Column index for amount (0-based, used with generic CSV)
+        #[arg(long)]
+        amount_col: Option<usize>,
+        /// Date format string (default: %m/%d/%Y, used with generic CSV)
+        #[arg(long)]
+        date_format: Option<String>,
+        /// Save column mapping as a reusable profile name
+        #[arg(long)]
+        save_profile: Option<String>,
     },
     /// Re-run categorization rules on uncategorized transactions.
     Categorize,
@@ -121,6 +143,11 @@ pub enum Commands {
         #[arg(long)]
         output: Option<String>,
     },
+    /// Restore a database from a backup file.
+    Restore {
+        /// Path to the backup file to restore
+        path: String,
+    },
     /// Interactively browse data.
     Browse {
         #[command(subcommand)]
@@ -133,6 +160,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: PasswordCommand,
     },
+    /// Undo the last import (delete its transactions and import record).
+    Undo,
     /// Generate shell completions script.
     Completions {
         /// Shell: bash, zsh, fish, powershell

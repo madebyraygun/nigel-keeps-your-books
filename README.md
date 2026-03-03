@@ -13,10 +13,12 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 ## Features
 
 - **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, manage accounts and categories, view rules, view/export reports, and switch data files.
-- **Bank imports** — CSV/XLSX parsers with format auto-detection
+- **Bank imports** — CSV/XLSX parsers with format auto-detection; `--dry-run` to preview without writing
+- **Generic CSV** — import any CSV with `--date-col`, `--desc-col`, `--amount-col`; save reusable profiles with `--save-profile`
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
+- **Undo imports** — `nigel undo` rolls back the last import, removing its transactions after confirmation
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
@@ -24,7 +26,8 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
-- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or later via `nigel password set`; backups preserve encryption state
+- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; backups preserve encryption state
+- **Settings screen** — edit business name and manage database password from the dashboard (`p` key)
 - **Snake** - 🍎 🐍
 
 Importers currently include Bank of America and Gusto, but adding a new importer is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
@@ -54,6 +57,21 @@ nigel accounts add "BofA Checking" --type checking --institution "Bank of Americ
 
 # Import transactions
 nigel import statement.csv --account "BofA Checking"
+
+# Preview an import without writing to the database
+nigel import statement.csv --account "BofA Checking" --dry-run
+
+# Import a generic CSV with custom column mapping
+nigel import statement.csv --account "Chase" --date-col 0 --desc-col 1 --amount-col 3
+
+# Save a reusable profile for future imports
+nigel import statement.csv --account "Chase" --date-col 0 --desc-col 1 --amount-col 3 --save-profile chase
+
+# Use a saved profile
+nigel import statement.csv --account "Chase" --format chase
+
+# Undo the last import
+nigel undo
 
 # Manage accounts
 nigel accounts rename 1 "New Name"
@@ -104,6 +122,9 @@ nigel load ~/other-books
 # Back up your database
 nigel backup
 nigel backup --output /tmp/nigel-backup.db
+
+# Restore from a backup
+nigel restore ~/Documents/nigel/backups/nigel-20250301-120000.db
 
 # Database encryption
 nigel password set                                # Encrypt database with a password

@@ -9,13 +9,23 @@ use crate::settings::{get_data_dir, restrict_dir_permissions, restrict_file_perm
 
 /// Copy the database to `dest_path` using SQLite's online-backup API.
 /// Preserves encryption state: encrypted sources produce encrypted backups.
+/// The `password` must match the source database's encryption key (if any).
 pub fn snapshot(conn: &rusqlite::Connection, dest_path: &Path) -> Result<()> {
+    snapshot_with_password(conn, dest_path, crate::db::get_db_password().as_deref())
+}
+
+/// Like `snapshot`, but accepts an explicit password instead of reading global state.
+/// Used by tests that cannot rely on the global DB_PASSWORD mutex.
+pub fn snapshot_with_password(
+    conn: &rusqlite::Connection,
+    dest_path: &Path,
+    password: Option<&str>,
+) -> Result<()> {
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let password = crate::db::get_db_password();
     let mut dest_conn = rusqlite::Connection::open(dest_path)?;
-    if let Some(ref pw) = password {
+    if let Some(pw) = password {
         dest_conn.pragma_update(None, "key", pw)?;
     }
     let backup = Backup::new(conn, &mut dest_conn)?;
@@ -50,12 +60,14 @@ pub fn run(output: Option<String>) -> Result<()> {
     Ok(())
 }
 
-// Tests mutate the global DB_PASSWORD mutex and must run with --test-threads=1.
-// See also: db::tests, cli::password::tests.
+// Root cause of prior failures: tests used the global DB_PASSWORD mutex for
+// snapshot encryption, but cargo test runs in parallel so concurrent tests
+// would overwrite each other's password.  Fixed by using snapshot_with_password()
+// which accepts an explicit password, eliminating shared mutable state.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{get_connection, init_db, is_encrypted, open_connection, set_db_password};
+    use crate::db::{init_db, is_encrypted, open_connection};
 
     #[test]
     fn test_snapshot_preserves_encryption() {
@@ -64,18 +76,16 @@ mod tests {
         let dst_path = dir.path().join("backup.db");
 
         // Create encrypted source
-        set_db_password(Some("secret".into()));
-        let conn = get_connection(&src_path).unwrap();
+        let conn = open_connection(&src_path, Some("secret")).unwrap();
         init_db(&conn).unwrap();
         drop(conn);
 
-        // Snapshot
-        let src_conn = get_connection(&src_path).unwrap();
-        snapshot(&src_conn, &dst_path).unwrap();
+        // Snapshot with explicit password (no global state dependency)
+        let src_conn = open_connection(&src_path, Some("secret")).unwrap();
+        snapshot_with_password(&src_conn, &dst_path, Some("secret")).unwrap();
         drop(src_conn);
 
         // Verify backup is also encrypted
-        set_db_password(None);
         assert!(is_encrypted(&dst_path).unwrap());
 
         // Verify backup opens with same password
@@ -92,11 +102,10 @@ mod tests {
         let src_path = dir.path().join("source.db");
         let dst_path = dir.path().join("backup.db");
 
-        set_db_password(None);
-        let conn = get_connection(&src_path).unwrap();
+        let conn = open_connection(&src_path, None).unwrap();
         init_db(&conn).unwrap();
 
-        snapshot(&conn, &dst_path).unwrap();
+        snapshot_with_password(&conn, &dst_path, None).unwrap();
         drop(conn);
 
         assert!(!is_encrypted(&dst_path).unwrap());

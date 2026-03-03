@@ -17,7 +17,9 @@ use crate::cli::load_manager::{LoadAction, LoadScreen};
 use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::cli::rules_manager::{RulesAction, RulesManager};
+use crate::cli::settings_manager::{SettingsAction, SettingsManager};
 use crate::cli::snake::{SnakeAction, SnakeGame};
+use crate::cli::undo_manager::{UndoAction, UndoScreen};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::number;
@@ -51,15 +53,16 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[a] Add or modify accounts", 'a'),
     ("[t] Edit chart of accounts", 't'),
     ("[u] View or edit categorization rules", 'u'),
+    ("[z] Undo last import", 'z'),
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
     ("[l] Load a different data file", 'l'),
-    ("[p] Password management", 'p'),
+    ("[p] Settings", 'p'),
     ("[s] Snake", 's'),
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
-const MENU_LEFT_COUNT: usize = 6;
+const MENU_LEFT_COUNT: usize = 7;
 
 const REPORT_TYPES: &[&str] = &[
     "Profit & Loss",
@@ -114,7 +117,8 @@ enum DashboardScreen {
         selection: usize,
     },
     ReportView(Box<dyn ReportView>),
-    Password(super::password_manager::PasswordManager),
+    Undo(UndoScreen),
+    Settings(SettingsManager),
     Snake(SnakeGame),
 }
 
@@ -330,7 +334,11 @@ impl Dashboard {
             self.draw_picker(frame, "Select export format", EXPORT_FORMATS, selection);
             return;
         }
-        if let DashboardScreen::Password(ref mgr) = self.screen {
+        if let DashboardScreen::Undo(ref undo) = self.screen {
+            undo.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Settings(ref mgr) = self.screen {
             mgr.draw(frame);
             return;
         }
@@ -637,35 +645,43 @@ impl Dashboard {
     fn activate_menu_item(&mut self, idx: usize, conn: &rusqlite::Connection) {
         match idx {
             0 => self.screen = self.enter_browse(conn),
-            1 => self.screen = DashboardScreen::Import(ImportScreen::new(conn, &self.greeting)),
+            1 => match ImportScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Import(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
             2 => self.screen = self.enter_review(conn),
-            3 => {
-                self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting))
-            }
+            3 => match ReconcileScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Reconcile(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
             4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
             5 => {
                 self.screen =
                     DashboardScreen::Categories(CategoryManager::new(conn, &self.greeting))
             }
             6 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
-            7 => {
+            7 => match UndoScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Undo(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
+            8 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::View,
                 }
             }
-            8 => {
+            9 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::Export,
                 }
             }
-            9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            10 => match super::password_manager::PasswordManager::new(&self.greeting) {
-                Ok(mgr) => self.screen = DashboardScreen::Password(mgr),
+            10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            11 => match SettingsManager::new(&conn, &self.greeting) {
+                Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            11 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            12 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -847,7 +863,9 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
 
 fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
     let year = year.or_else(|| Some(chrono::Local::now().year()));
-    let names = ["pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep"];
+    let names = [
+        "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep",
+    ];
 
     if idx == 8 {
         // "All Reports" text export
@@ -860,7 +878,10 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ("expenses", super::report::text::expenses(None, year)),
             ("tax", super::report::text::tax(year)),
             ("cashflow", super::report::text::cashflow(None, year)),
-            ("register", super::report::text::register(None, year, None, None, None)),
+            (
+                "register",
+                super::report::text::register(None, year, None, None, None),
+            ),
             ("flagged", super::report::text::flagged()),
             ("balance", super::report::text::balance()),
             ("k1-prep", super::report::text::k1(year)),
@@ -1154,6 +1175,15 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
+                        DashboardScreen::Undo(ref mut undo) => {
+                            match undo.handle_key(key.code, &conn) {
+                                UndoAction::Close => {
+                                    return_home = true;
+                                }
+                                UndoAction::Continue => {}
+                            }
+                            false
+                        }
                         DashboardScreen::ReportView(ref mut view) => {
                             let action = view.handle_key(key.code);
                             match action {
@@ -1196,7 +1226,10 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
-                        DashboardScreen::ExportFormatPicker { report_idx, selection } => {
+                        DashboardScreen::ExportFormatPicker {
+                            report_idx,
+                            selection,
+                        } => {
                             let max_idx = EXPORT_FORMATS.len() - 1;
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),
@@ -1219,12 +1252,12 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
-                        DashboardScreen::Password(ref mut mgr) => {
-                            match mgr.handle_key(key.code) {
-                                super::password_manager::PasswordAction::Close => {
+                        DashboardScreen::Settings(ref mut mgr) => {
+                            match mgr.handle_key(key.code, &conn) {
+                                SettingsAction::Close => {
                                     return_home = true;
                                 }
-                                super::password_manager::PasswordAction::Continue => {}
+                                SettingsAction::Continue => {}
                             }
                             false
                         }

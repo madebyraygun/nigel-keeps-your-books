@@ -12,6 +12,7 @@ use rusqlite::Connection;
 
 use crate::categorizer::categorize_transactions;
 use crate::cli::accounts;
+use crate::error::Result;
 use crate::importer::import_file;
 use crate::settings::{get_data_dir, shellexpand_path};
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
@@ -45,9 +46,9 @@ pub struct ImportScreen {
 }
 
 impl ImportScreen {
-    pub fn new(conn: &Connection, greeting: &str) -> Self {
-        let accounts = accounts::account_names(conn);
-        Self {
+    pub fn new(conn: &Connection, greeting: &str) -> Result<Self> {
+        let accounts = accounts::account_names(conn)?;
+        Ok(Self {
             accounts,
             account_idx: 0,
             file_path: String::new(),
@@ -55,7 +56,7 @@ impl ImportScreen {
             screen: Screen::Form,
             status_message: None,
             greeting: greeting.to_string(),
-        }
+        })
     }
 
     pub fn draw(&self, frame: &mut Frame) {
@@ -288,7 +289,7 @@ fn run_import(conn: &Connection, file_path: &Path, account_name: &str) -> Import
         };
     }
 
-    match import_file(conn, file_path, account_name, None) {
+    match import_file(conn, file_path, account_name, None, false, None) {
         Err(e) => ImportResult {
             message: format!("Import failed: {e}"),
             is_error: true,
