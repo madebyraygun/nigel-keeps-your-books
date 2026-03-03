@@ -5,7 +5,7 @@ use rusqlite::backup::Backup;
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::format_bytes;
-use crate::settings::get_data_dir;
+use crate::settings::{get_data_dir, restrict_dir_permissions, restrict_file_permissions};
 
 /// Copy the database to `dest_path` using SQLite's online-backup API.
 /// Preserves encryption state: encrypted sources produce encrypted backups.
@@ -20,6 +20,9 @@ pub fn snapshot(conn: &rusqlite::Connection, dest_path: &Path) -> Result<()> {
     }
     let backup = Backup::new(conn, &mut dest_conn)?;
     backup.run_to_completion(100, std::time::Duration::from_millis(10), None)?;
+    drop(backup);
+    drop(dest_conn);
+    restrict_file_permissions(dest_path)?;
     Ok(())
 }
 
@@ -33,6 +36,7 @@ pub fn run(output: Option<String>) -> Result<()> {
         None => {
             let backups_dir = data_dir.join("backups");
             std::fs::create_dir_all(&backups_dir)?;
+            restrict_dir_permissions(&backups_dir)?;
             let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
             backups_dir.join(format!("nigel-{stamp}.db"))
         }
@@ -51,7 +55,7 @@ pub fn run(output: Option<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{get_connection, init_db, is_encrypted, open_connection, set_db_password};
+    use crate::db::{init_db, is_encrypted, open_connection, set_db_password};
 
     #[test]
     fn test_snapshot_preserves_encryption() {
@@ -61,17 +65,19 @@ mod tests {
 
         // Create encrypted source
         set_db_password(Some("secret".into()));
-        let conn = get_connection(&src_path).unwrap();
+        let conn = open_connection(&src_path, Some("secret")).unwrap();
         init_db(&conn).unwrap();
         drop(conn);
 
-        // Snapshot
-        let src_conn = get_connection(&src_path).unwrap();
+        // Snapshot (snapshot reads global password for dest encryption)
+        let src_conn = open_connection(&src_path, Some("secret")).unwrap();
         snapshot(&src_conn, &dst_path).unwrap();
         drop(src_conn);
 
-        // Verify backup is also encrypted
+        // Clear global password before assertions
         set_db_password(None);
+
+        // Verify backup is also encrypted
         assert!(is_encrypted(&dst_path).unwrap());
 
         // Verify backup opens with same password
@@ -89,7 +95,7 @@ mod tests {
         let dst_path = dir.path().join("backup.db");
 
         set_db_password(None);
-        let conn = get_connection(&src_path).unwrap();
+        let conn = open_connection(&src_path, None).unwrap();
         init_db(&conn).unwrap();
 
         snapshot(&conn, &dst_path).unwrap();

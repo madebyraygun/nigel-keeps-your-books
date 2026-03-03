@@ -16,7 +16,7 @@ mod reviewer;
 mod settings;
 mod tui;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use cli::{
     AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
@@ -34,6 +34,7 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
+        // Dashboard handles missing init via its own onboarding flow
         None => cli::dashboard::run(),
         Some(command) => dispatch(command),
     };
@@ -45,10 +46,25 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
+    // Check that nigel has been initialized (skip for init/demo which create new DBs, and load which switches directories)
+    if !matches!(
+        command,
+        Commands::Init { .. } | Commands::Demo | Commands::Load { .. }
+    ) {
+        let data_dir = crate::settings::get_data_dir();
+        let db_path = data_dir.join("nigel.db");
+        if !db_path.exists() {
+            return Err(error::NigelError::NotInitialized);
+        }
+    }
+
     // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
     if !matches!(
         command,
-        Commands::Init { .. } | Commands::Demo | Commands::Password { .. }
+        Commands::Init { .. }
+            | Commands::Demo
+            | Commands::Password { .. }
+            | Commands::Completions { .. }
     ) {
         let data_dir = crate::settings::get_data_dir();
         let db_path = data_dir.join("nigel.db");
@@ -72,6 +88,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 last_four.as_deref(),
             ),
             AccountsCommands::List => cli::accounts::list(),
+            AccountsCommands::Rename { id, name } => cli::accounts::rename(id, &name),
+            AccountsCommands::Delete { id } => cli::accounts::delete(id),
         },
         Commands::Categories { command } => match command {
             CategoriesCommands::List => cli::categories::list(),
@@ -151,6 +169,10 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 priority,
             } => cli::rules::update(id, pattern, category, vendor, match_type, priority),
             RulesCommands::Delete { id } => cli::rules::delete(id),
+            RulesCommands::Test {
+                pattern,
+                match_type,
+            } => cli::rules::test(&pattern, &match_type),
         },
         Commands::Review { id } => cli::review::run(id),
         Commands::Report { command } => cli::report::dispatch(command),
@@ -170,11 +192,21 @@ fn dispatch(command: Commands) -> error::Result<()> {
         } => cli::reconcile::run(&account, &month, balance),
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
+        Commands::Undo => cli::undo::run(),
         Commands::Status => cli::status::run(),
         Commands::Password { command } => match command {
             PasswordCommand::Set => cli::password::run_set(),
             PasswordCommand::Change => cli::password::run_change(),
             PasswordCommand::Remove => cli::password::run_remove(),
         },
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut cli::Cli::command(),
+                "nigel",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
     }
 }

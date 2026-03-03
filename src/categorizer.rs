@@ -3,7 +3,7 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
-fn matches(description: &str, pattern: &str, match_type: &str) -> bool {
+pub fn matches(description: &str, pattern: &str, match_type: &str) -> bool {
     let desc_upper = description.to_uppercase();
     let pat_upper = pattern.to_uppercase();
     match match_type {

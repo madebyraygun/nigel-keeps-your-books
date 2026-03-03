@@ -51,9 +51,12 @@ pub fn load_settings() -> Settings {
 pub fn save_settings(settings: &Settings) -> Result<()> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir)?;
+    restrict_dir_permissions(&dir)?;
     let json =
         serde_json::to_string_pretty(settings).map_err(|e| NigelError::Settings(e.to_string()))?;
-    std::fs::write(settings_path(), format!("{json}\n"))?;
+    let path = settings_path();
+    std::fs::write(&path, format!("{json}\n"))?;
+    restrict_file_permissions(&path)?;
     Ok(())
 }
 
@@ -93,6 +96,36 @@ pub fn shellexpand_path(path: &str) -> String {
         .unwrap_or_else(|_| PathBuf::from(path))
         .to_string_lossy()
         .to_string()
+}
+
+/// Restrict a file to owner-only read/write (0o600) on Unix.
+/// No-op on non-Unix platforms.
+pub fn restrict_file_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Restrict a directory to owner-only access (0o700) on Unix.
+/// No-op on non-Unix platforms.
+pub fn restrict_dir_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

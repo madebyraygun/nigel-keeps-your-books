@@ -53,6 +53,20 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
+pub fn rename(id: i64, new_name: &str) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    rename_account(&conn, id, new_name)?;
+    println!("Renamed account {id} to: {new_name}");
+    Ok(())
+}
+
+pub fn delete(id: i64) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    delete_account(&conn, id)?;
+    println!("Deleted account {id}");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Data-layer functions for TUI account management
 // ---------------------------------------------------------------------------

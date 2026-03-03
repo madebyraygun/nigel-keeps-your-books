@@ -195,7 +195,7 @@ pub fn logo_reveal_order() -> Vec<(usize, usize)> {
     positions
 }
 
-/// Render the Nigel ASCII logo with animated rainbow gradient (all characters visible).
+/// Render the Nigel ASCII logo with animated rainbow gradient.
 pub fn render_logo(phase: f64, frame: &mut Frame, logo_area: Rect) {
     render_logo_reveal(phase, frame, logo_area, None);
 }
