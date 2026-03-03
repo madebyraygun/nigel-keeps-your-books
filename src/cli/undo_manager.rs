@@ -9,6 +9,7 @@ use ratatui::{
 use rusqlite::Connection;
 
 use crate::cli::undo::{delete_import, get_last_import, LastImport};
+use crate::error::Result;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
 
 pub enum UndoAction {
@@ -28,13 +29,13 @@ pub struct UndoScreen {
 }
 
 impl UndoScreen {
-    pub fn new(conn: &Connection, greeting: &str) -> Self {
-        let last_import = get_last_import(conn).ok().flatten();
-        Self {
+    pub fn new(conn: &Connection, greeting: &str) -> Result<Self> {
+        let last_import = get_last_import(conn)?;
+        Ok(Self {
             greeting: greeting.to_string(),
             last_import,
             phase: Phase::Confirm,
-        }
+        })
     }
 
     pub fn draw(&self, frame: &mut Frame) {

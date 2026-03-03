@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, Write};
 
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
@@ -58,8 +59,10 @@ pub fn get_last_import(conn: &Connection) -> Result<Option<LastImport>> {
 /// Delete all transactions and the import record for the given import.
 /// Returns the number of transactions deleted.
 pub fn delete_import(conn: &Connection, import_id: i64) -> Result<usize> {
-    let deleted = conn.execute("DELETE FROM transactions WHERE import_id = ?1", [import_id])?;
-    conn.execute("DELETE FROM imports WHERE id = ?1", [import_id])?;
+    let tx = conn.unchecked_transaction()?;
+    let deleted = tx.execute("DELETE FROM transactions WHERE import_id = ?1", [import_id])?;
+    tx.execute("DELETE FROM imports WHERE id = ?1", [import_id])?;
+    tx.commit()?;
     Ok(deleted)
 }
 
@@ -102,21 +105,6 @@ pub fn run() -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Extension trait for optional query results (rusqlite doesn't expose this publicly).
-trait OptionalExt<T> {
-    fn optional(self) -> std::result::Result<Option<T>, rusqlite::Error>;
-}
-
-impl<T> OptionalExt<T> for std::result::Result<T, rusqlite::Error> {
-    fn optional(self) -> std::result::Result<Option<T>, rusqlite::Error> {
-        match self {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
 }
 
 #[cfg(test)]

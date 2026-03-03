@@ -655,7 +655,10 @@ impl Dashboard {
                     DashboardScreen::Categories(CategoryManager::new(conn, &self.greeting))
             }
             6 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
-            7 => self.screen = DashboardScreen::Undo(UndoScreen::new(conn, &self.greeting)),
+            7 => match UndoScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Undo(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
             8 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
