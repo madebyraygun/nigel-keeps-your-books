@@ -3,16 +3,12 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Layout},
-    text::Span,
-    widgets::Paragraph,
     Frame,
 };
 
 use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
-use crate::tui::FOOTER_STYLE;
-
-const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+use crate::tui;
 
 const SPLASH_DURATION: Duration = Duration::from_millis(1500);
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
@@ -90,11 +86,7 @@ impl Splash {
 
         // Show version during the fully-revealed phase (not during reveal/dissolve)
         if elapsed_ms >= REVEAL_MS && remaining_ms >= DISSOLVE_MS {
-            frame.render_widget(
-                Paragraph::new(Span::styled(VERSION, FOOTER_STYLE))
-                    .alignment(ratatui::layout::Alignment::Center),
-                version_area,
-            );
+            tui::render_version(frame, version_area);
         }
     }
 }
@@ -160,12 +152,6 @@ mod tests {
     #[test]
     fn splash_duration_is_1500ms() {
         assert_eq!(SPLASH_DURATION, Duration::from_millis(1500));
-    }
-
-    #[test]
-    fn version_string_matches_cargo_pkg() {
-        assert_eq!(VERSION, concat!("v", env!("CARGO_PKG_VERSION")));
-        assert!(VERSION.starts_with("v"));
     }
 
     #[test]

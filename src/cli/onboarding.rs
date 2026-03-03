@@ -12,9 +12,7 @@ use zeroize::Zeroize;
 
 use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
-use crate::tui::{FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
-
-const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+use crate::tui::{self, FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
 
 /// What the user chose to do after onboarding.
 #[derive(Clone, Copy)]
@@ -257,7 +255,7 @@ impl Onboarding {
             hints_area,
         );
 
-        render_version(frame, version_area);
+        tui::render_version(frame, version_area);
     }
 
     fn draw_action_picker(&self, frame: &mut Frame, area: Rect) {
@@ -312,7 +310,7 @@ impl Onboarding {
             hints_area,
         );
 
-        render_version(frame, version_area);
+        tui::render_version(frame, version_area);
     }
 
     fn draw_confirm_password(&self, frame: &mut Frame, area: Rect) {
@@ -386,7 +384,7 @@ impl Onboarding {
             hints_area,
         );
 
-        render_version(frame, version_area);
+        tui::render_version(frame, version_area);
     }
 
     /// Convert a char-index cursor position to a byte offset in the string.
@@ -583,14 +581,6 @@ impl Onboarding {
     }
 }
 
-fn render_version(frame: &mut Frame, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(Span::styled(VERSION, FOOTER_STYLE))
-            .alignment(ratatui::layout::Alignment::Center),
-        area,
-    );
-}
-
 /// Convert a char-index cursor position to a byte offset.
 fn confirm_byte_pos(s: &str, cursor: usize) -> usize {
     s.char_indices()
@@ -728,12 +718,6 @@ mod tests {
             reveal_order: vec![],
             intro_done: true,
         }
-    }
-
-    #[test]
-    fn version_string_matches_cargo_pkg() {
-        assert_eq!(VERSION, concat!("v", env!("CARGO_PKG_VERSION")));
-        assert!(VERSION.starts_with("v"));
     }
 
     #[test]
