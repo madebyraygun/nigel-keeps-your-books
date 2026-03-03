@@ -362,6 +362,7 @@ pub fn run() -> Result<()> {
     }
 
     let txn_count = insert_demo_data(&conn)?;
+    crate::db::set_metadata(&conn, "company_name", "Acme Consulting LLC")?;
     let result = categorize_transactions(&conn)?;
 
     println!("Demo data loaded!");
@@ -407,6 +408,7 @@ pub fn setup_demo() -> Result<()> {
     )?;
     if !exists {
         insert_demo_data(&conn)?;
+        crate::db::set_metadata(&conn, "company_name", "Acme Consulting LLC")?;
         categorize_transactions(&conn)?;
     }
 
@@ -472,6 +474,7 @@ mod tests {
     fn test_demo_creates_data() {
         let (_dir, conn) = test_db();
         let txn_count = insert_demo_data(&conn).unwrap();
+        crate::db::set_metadata(&conn, "company_name", "Acme Consulting LLC").unwrap();
         let result = categorize_transactions(&conn).unwrap();
 
         let acct_count: i64 = conn
@@ -492,6 +495,9 @@ mod tests {
             "should categorize some transactions"
         );
         assert!(result.still_flagged > 0, "should leave some flagged");
+
+        let company = crate::db::get_metadata(&conn, "company_name");
+        assert_eq!(company.as_deref(), Some("Acme Consulting LLC"));
     }
 
     #[test]
