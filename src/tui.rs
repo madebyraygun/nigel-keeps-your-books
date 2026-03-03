@@ -1,10 +1,14 @@
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::error::Result;
 use crate::fmt::money;
+
+pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 pub const HEADER_STYLE: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 
@@ -37,6 +41,14 @@ pub fn wrap_text(text: &str, width: usize) -> (String, u16) {
     let wrapped = textwrap::fill(text, width);
     let lines = wrapped.lines().count().max(1) as u16;
     (wrapped, lines)
+}
+
+pub fn render_version(frame: &mut Frame, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Span::styled(VERSION, FOOTER_STYLE))
+            .alignment(ratatui::layout::Alignment::Center),
+        area,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -100,4 +112,15 @@ pub fn run_report_view(view: &mut dyn ReportView) -> Result<()> {
     drop(terminal);
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_string_matches_cargo_pkg() {
+        assert_eq!(VERSION, concat!("v", env!("CARGO_PKG_VERSION")));
+        assert!(VERSION.starts_with("v"));
+    }
 }
