@@ -17,6 +17,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
+- **Undo imports** — `nigel undo` rolls back the last import, removing its transactions after confirmation
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
@@ -54,6 +55,9 @@ nigel accounts add "BofA Checking" --type checking --institution "Bank of Americ
 
 # Import transactions
 nigel import statement.csv --account "BofA Checking"
+
+# Undo the last import
+nigel undo
 
 # Manage accounts
 nigel accounts rename 1 "New Name"

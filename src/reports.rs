@@ -943,7 +943,7 @@ mod tests {
     fn test_cashflow_cross_year_boundary() {
         let (_dir, conn) = test_db();
         seed_transactions(&conn); // 2025 transactions
-        // Add a 2024 transaction that should NOT affect 2025 prior balance
+                                  // Add a 2024 transaction that should NOT affect 2025 prior balance
         let acct: i64 = conn
             .query_row("SELECT id FROM accounts WHERE name = 'Test'", [], |r| {
                 r.get(0)

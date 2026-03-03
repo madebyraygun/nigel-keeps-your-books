@@ -212,9 +212,8 @@ pub fn render_logo_reveal(
     let logo_width = max_logo_width();
     let gradient_width = 40.0;
 
-    let visible_set: Option<HashSet<(usize, usize)>> = reveal.map(|(order, count)| {
-        order[..count.min(order.len())].iter().copied().collect()
-    });
+    let visible_set: Option<HashSet<(usize, usize)>> =
+        reveal.map(|(order, count)| order[..count.min(order.len())].iter().copied().collect());
 
     let logo_lines: Vec<Line> = LOGO
         .iter()

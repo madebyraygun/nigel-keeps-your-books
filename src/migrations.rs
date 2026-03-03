@@ -25,9 +25,9 @@ pub fn get_schema_version(conn: &Connection) -> Result<u32> {
         [],
         |row| row.get::<_, String>(0),
     ) {
-        Ok(v) => v.parse::<u32>().map_err(|_| {
-            crate::error::NigelError::Other(format!("invalid schema_version: {v}"))
-        }),
+        Ok(v) => v
+            .parse::<u32>()
+            .map_err(|_| crate::error::NigelError::Other(format!("invalid schema_version: {v}"))),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
         Err(e) => Err(e.into()),
     }
