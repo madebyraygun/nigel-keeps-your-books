@@ -12,7 +12,7 @@ pdf = ["dep:printpdf"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-rusqlite = { version = "0.31", features = ["bundled-sqlcipher", "backup"] }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl", "backup"] }
 csv = "1"
 calamine = { version = "0.25", optional = true }
 regex = "1"
