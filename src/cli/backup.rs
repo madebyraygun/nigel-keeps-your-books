@@ -55,7 +55,7 @@ pub fn run(output: Option<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{get_connection, init_db, is_encrypted, open_connection, set_db_password};
+    use crate::db::{init_db, is_encrypted, open_connection, set_db_password};
 
     #[test]
     fn test_snapshot_preserves_encryption() {
@@ -65,17 +65,19 @@ mod tests {
 
         // Create encrypted source
         set_db_password(Some("secret".into()));
-        let conn = get_connection(&src_path).unwrap();
+        let conn = open_connection(&src_path, Some("secret")).unwrap();
         init_db(&conn).unwrap();
         drop(conn);
 
-        // Snapshot
-        let src_conn = get_connection(&src_path).unwrap();
+        // Snapshot (snapshot reads global password for dest encryption)
+        let src_conn = open_connection(&src_path, Some("secret")).unwrap();
         snapshot(&src_conn, &dst_path).unwrap();
         drop(src_conn);
 
-        // Verify backup is also encrypted
+        // Clear global password before assertions
         set_db_password(None);
+
+        // Verify backup is also encrypted
         assert!(is_encrypted(&dst_path).unwrap());
 
         // Verify backup opens with same password
@@ -93,7 +95,7 @@ mod tests {
         let dst_path = dir.path().join("backup.db");
 
         set_db_password(None);
-        let conn = get_connection(&src_path).unwrap();
+        let conn = open_connection(&src_path, None).unwrap();
         init_db(&conn).unwrap();
 
         snapshot(&conn, &dst_path).unwrap();
