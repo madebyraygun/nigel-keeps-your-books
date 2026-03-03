@@ -18,7 +18,7 @@ pub fn run(file: &str, account: &str, format: Option<&str>) -> Result<()> {
     backup::snapshot(&conn, &snap_path)?;
     println!("Pre-import snapshot saved to {}", snap_path.display());
 
-    let result = import_file(&conn, &file_path, account, format)?;
+    let result = import_file(&conn, &file_path, account, format, false)?;
 
     if result.duplicate_file {
         println!("This file has already been imported (duplicate checksum).");
