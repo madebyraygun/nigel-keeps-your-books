@@ -27,7 +27,8 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 - **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen; backups preserve encryption state
-- **Settings screen** — edit business name and manage database password from the dashboard (`p` key)
+- **Auto-updater** — checks GitHub Releases for new versions on launch (once per 24 hours); run `nigel update` to download and install the latest binary in-place; opt out via the Settings screen or `update_check: false` in settings.json
+- **Settings screen** — edit business name, manage database password, and toggle auto-update checks from the dashboard (`p` key)
 - **Snake** - 🍎 🐍
 
 Importers currently include Bank of America and Gusto, but adding a new importer is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
@@ -131,13 +132,16 @@ nigel password set                                # Encrypt database with a pass
 nigel password change                             # Change existing password
 nigel password remove                             # Decrypt database (remove password)
 
+# Check for and install updates
+nigel update
+
 # Shell completions
 nigel completions bash                            # Also: zsh, fish, powershell
 ```
 
 ## Configuration
 
-Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics.
+Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch.
 
 ## Feature Flags
 

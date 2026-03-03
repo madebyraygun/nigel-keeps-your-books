@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use crate::cli::password_manager::{PasswordAction, PasswordManager};
 use crate::db;
 use crate::error::Result;
-use crate::settings::get_data_dir;
+use crate::settings::{get_data_dir, load_settings, save_settings};
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
 
 pub enum SettingsAction {
@@ -28,6 +28,8 @@ enum Screen {
 /// Menu items on the main settings screen.
 const MENU_BUSINESS_NAME: usize = 0;
 const MENU_PASSWORD: usize = 1;
+const MENU_UPDATE_CHECK: usize = 2;
+const MENU_LAST: usize = MENU_UPDATE_CHECK;
 
 pub struct SettingsManager {
     greeting: String,
@@ -38,6 +40,7 @@ pub struct SettingsManager {
     status_message: Option<(String, bool)>,
     status_ttl: u8,
     encrypted: bool,
+    update_check: bool,
 }
 
 impl SettingsManager {
@@ -45,6 +48,7 @@ impl SettingsManager {
         let company_name = db::get_metadata(conn, "company_name").unwrap_or_default();
         let db_path = get_data_dir().join("nigel.db");
         let encrypted = db::is_encrypted(&db_path)?;
+        let settings = load_settings();
         Ok(Self {
             greeting: greeting.to_string(),
             screen: Screen::Main,
@@ -54,6 +58,7 @@ impl SettingsManager {
             status_message: None,
             status_ttl: 0,
             encrypted,
+            update_check: settings.update_check,
         })
     }
 
@@ -77,6 +82,26 @@ impl SettingsManager {
             Screen::EditingName => self.draw_main(frame),
             Screen::Password(mgr) => mgr.draw(frame),
         }
+    }
+
+    fn menu_row(label: &str, value: &str, selected: bool) -> Line<'static> {
+        let marker = if selected { ">" } else { " " };
+        let label_style = if selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        Line::from(vec![
+            Span::styled(format!(" {marker} {label:<17}"), label_style),
+            Span::styled(
+                value.to_string(),
+                if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+        ])
     }
 
     fn draw_main(&self, frame: &mut Frame) {
@@ -112,16 +137,15 @@ impl SettingsManager {
 
         // Business Name row
         let name_selected = self.selection == MENU_BUSINESS_NAME;
-        let name_marker = if name_selected { ">" } else { " " };
-        let name_style = if name_selected {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
         if let Screen::EditingName = &self.screen {
+            let marker = if name_selected { ">" } else { " " };
+            let label_style = if name_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
             lines.push(Line::from(vec![
-                Span::styled(format!(" {name_marker} Business Name    "), name_style),
+                Span::styled(format!(" {marker} Business Name    "), label_style),
                 Span::styled(format!("{}_", self.edit_buffer), SELECTED_STYLE),
             ]));
         } else {
@@ -130,41 +154,36 @@ impl SettingsManager {
             } else {
                 &self.company_name
             };
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {name_marker} Business Name    "), name_style),
-                Span::styled(
-                    display_name.to_string(),
-                    if name_selected {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-            ]));
+            lines.push(Self::menu_row("Business Name", display_name, name_selected));
         }
 
         lines.push(Line::from(""));
 
         // Password section
-        let pw_selected = self.selection == MENU_PASSWORD;
-        let pw_marker = if pw_selected { ">" } else { " " };
-        let pw_style = if pw_selected {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
         let pw_status = if self.encrypted {
-            "encrypted"
+            "(encrypted)"
         } else {
-            "not set"
+            "(not set)"
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {pw_marker} Password         "), pw_style),
-            Span::styled(
-                format!("({pw_status})"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
+        lines.push(Self::menu_row(
+            "Password",
+            pw_status,
+            self.selection == MENU_PASSWORD,
+        ));
+
+        lines.push(Line::from(""));
+
+        // Update check toggle
+        let uc_status = if self.update_check {
+            "(enabled)"
+        } else {
+            "(disabled)"
+        };
+        lines.push(Self::menu_row(
+            "Auto-update check",
+            uc_status,
+            self.selection == MENU_UPDATE_CHECK,
+        ));
 
         // Status message
         if let Some((msg, success)) = &self.status_message {
@@ -227,7 +246,7 @@ impl SettingsManager {
                 SettingsAction::Continue
             }
             KeyCode::Down => {
-                self.selection = (self.selection + 1).min(MENU_PASSWORD);
+                self.selection = (self.selection + 1).min(MENU_LAST);
                 SettingsAction::Continue
             }
             KeyCode::Enter => {
@@ -242,6 +261,26 @@ impl SettingsManager {
                             self.set_status(format!("Could not open password settings: {e}"), false)
                         }
                     },
+                    MENU_UPDATE_CHECK => {
+                        self.update_check = !self.update_check;
+                        let mut settings = load_settings();
+                        settings.update_check = self.update_check;
+                        match save_settings(&settings) {
+                            Ok(()) => {
+                                let state = if self.update_check {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                };
+                                self.set_status(format!("Auto-update check {state}."), true);
+                            }
+                            Err(e) => {
+                                // Revert on save failure
+                                self.update_check = !self.update_check;
+                                self.set_status(format!("Could not save setting: {e}"), false);
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 SettingsAction::Continue
@@ -332,7 +371,11 @@ mod tests {
         mgr.handle_key(KeyCode::Down, &conn);
         assert_eq!(mgr.selection, MENU_PASSWORD);
         mgr.handle_key(KeyCode::Down, &conn);
-        assert_eq!(mgr.selection, MENU_PASSWORD); // clamped
+        assert_eq!(mgr.selection, MENU_UPDATE_CHECK);
+        mgr.handle_key(KeyCode::Down, &conn);
+        assert_eq!(mgr.selection, MENU_UPDATE_CHECK); // clamped
+        mgr.handle_key(KeyCode::Up, &conn);
+        assert_eq!(mgr.selection, MENU_PASSWORD);
         mgr.handle_key(KeyCode::Up, &conn);
         assert_eq!(mgr.selection, MENU_BUSINESS_NAME);
     }
@@ -476,5 +519,35 @@ mod tests {
         assert!(mgr.status_message.is_some());
         mgr.handle_key(KeyCode::Down, &conn); // tick 1->0, cleared
         assert!(mgr.status_message.is_none());
+    }
+
+    #[test]
+    fn toggle_update_check() {
+        let (_dir, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+
+        // Default is enabled
+        assert!(mgr.update_check);
+
+        // Navigate to update check menu item
+        mgr.handle_key(KeyCode::Down, &conn);
+        mgr.handle_key(KeyCode::Down, &conn);
+        assert_eq!(mgr.selection, MENU_UPDATE_CHECK);
+
+        // Toggle off
+        mgr.handle_key(KeyCode::Enter, &conn);
+        assert!(!mgr.update_check);
+
+        // Toggle back on
+        mgr.handle_key(KeyCode::Enter, &conn);
+        assert!(mgr.update_check);
+    }
+
+    #[test]
+    fn update_check_loads_from_settings() {
+        let (_dir, conn) = test_db();
+        let mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        // update_check defaults to true from settings
+        assert!(mgr.update_check);
     }
 }

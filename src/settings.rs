@@ -4,11 +4,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{NigelError, Result};
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub data_dir: String,
     #[serde(default)]
     pub user_name: String,
+    #[serde(default = "default_true")]
+    pub update_check: bool,
+    #[serde(default)]
+    pub last_update_check: Option<String>,
 }
 
 impl Default for Settings {
@@ -16,6 +24,8 @@ impl Default for Settings {
         Self {
             data_dir: default_data_dir().to_string_lossy().to_string(),
             user_name: String::new(),
+            update_check: true,
+            last_update_check: None,
         }
     }
 }
@@ -139,6 +149,8 @@ mod tests {
         let settings = Settings {
             data_dir: "/tmp/test".to_string(),
             user_name: "Alice".to_string(),
+            update_check: true,
+            last_update_check: None,
         };
         let json = serde_json::to_string_pretty(&settings).unwrap();
         std::fs::write(&path, &json).unwrap();
@@ -179,5 +191,38 @@ mod tests {
         let json = serde_json::to_string_pretty(&settings).unwrap();
         std::fs::write(&path, format!("{json}\n")).unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_update_check_defaults_true() {
+        let s = Settings::default();
+        assert!(s.update_check);
+        assert!(s.last_update_check.is_none());
+    }
+
+    #[test]
+    fn test_update_check_roundtrip() {
+        let settings = Settings {
+            data_dir: "/tmp/test".to_string(),
+            user_name: "Alice".to_string(),
+            update_check: false,
+            last_update_check: Some("2025-06-15T10:30:00".to_string()),
+        };
+        let json = serde_json::to_string_pretty(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!loaded.update_check);
+        assert_eq!(
+            loaded.last_update_check.as_deref(),
+            Some("2025-06-15T10:30:00")
+        );
+    }
+
+    #[test]
+    fn test_legacy_settings_get_update_check_default() {
+        // Simulates loading settings.json that was created before update_check existed
+        let json = r#"{"data_dir": "/tmp/test", "user_name": "Bob"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.update_check); // defaults to true
+        assert!(s.last_update_check.is_none());
     }
 }

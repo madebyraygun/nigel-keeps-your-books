@@ -36,7 +36,16 @@ fn main() {
     let result = match cli.command {
         // Dashboard handles missing init via its own onboarding flow
         None => cli::dashboard::run(),
-        Some(command) => dispatch(command),
+        Some(command) => {
+            // Non-blocking update check for CLI subcommands (dashboard does its own).
+            // Skip when running `nigel update` since it does its own check.
+            if !matches!(command, Commands::Update) {
+                if let Some(msg) = cli::update::check_and_notify() {
+                    eprintln!("notice: {msg}");
+                }
+            }
+            dispatch(command)
+        }
     };
 
     if let Err(e) = result {
@@ -46,10 +55,10 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
-    // Check that nigel has been initialized (skip for init/demo which create new DBs, and load which switches directories)
+    // Check that nigel has been initialized (skip for init/demo which create new DBs, load which switches directories, and update which needs no DB)
     if !matches!(
         command,
-        Commands::Init { .. } | Commands::Demo | Commands::Load { .. }
+        Commands::Init { .. } | Commands::Demo | Commands::Load { .. } | Commands::Update
     ) {
         let data_dir = crate::settings::get_data_dir();
         let db_path = data_dir.join("nigel.db");
@@ -65,6 +74,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Demo
             | Commands::Password { .. }
             | Commands::Completions { .. }
+            | Commands::Update
     ) {
         let data_dir = crate::settings::get_data_dir();
         let db_path = data_dir.join("nigel.db");
@@ -194,6 +204,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
         Commands::Backup { output } => cli::backup::run(output),
         Commands::Restore { path } => cli::restore::run(&path),
         Commands::Undo => cli::undo::run(),
+        Commands::Update => cli::update::run(),
         Commands::Status => cli::status::run(),
         Commands::Password { command } => match command {
             PasswordCommand::Set => cli::password::run_set(),

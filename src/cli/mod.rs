@@ -30,6 +30,7 @@ pub mod splash;
 pub mod status;
 pub mod undo;
 pub mod undo_manager;
+pub mod update;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -163,6 +164,8 @@ pub enum Commands {
     },
     /// Undo the last import (delete its transactions and import record).
     Undo,
+    /// Check for and install updates from GitHub Releases.
+    Update,
     /// Generate shell completions script.
     Completions {
         /// Shell: bash, zsh, fish, powershell
