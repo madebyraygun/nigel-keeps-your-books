@@ -195,7 +195,7 @@ pub fn logo_reveal_order() -> Vec<(usize, usize)> {
     positions
 }
 
-/// Render the Nigel ASCII logo with animated rainbow gradient (all characters visible).
+/// Render the Nigel ASCII logo with animated rainbow gradient.
 pub fn render_logo(phase: f64, frame: &mut Frame, logo_area: Rect) {
     render_logo_reveal(phase, frame, logo_area, None);
 }
@@ -212,8 +212,9 @@ pub fn render_logo_reveal(
     let logo_width = max_logo_width();
     let gradient_width = 40.0;
 
-    let visible_set: Option<HashSet<(usize, usize)>> =
-        reveal.map(|(order, count)| order[..count.min(order.len())].iter().copied().collect());
+    let visible_set: Option<HashSet<(usize, usize)>> = reveal.map(|(order, count)| {
+        order[..count.min(order.len())].iter().copied().collect()
+    });
 
     let logo_lines: Vec<Line> = LOGO
         .iter()

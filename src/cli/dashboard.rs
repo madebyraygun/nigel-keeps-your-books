@@ -865,14 +865,22 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ("balance", super::report::text::balance()),
             ("k1-prep", super::report::text::k1(year)),
         ];
+        let mut failed = Vec::new();
         for (name, result) in reports {
-            if let Ok(content) = result {
-                let path = dir.join(format!("{name}-{date}.txt"));
-                std::fs::write(&path, content)?;
-                count += 1;
+            match result {
+                Ok(content) => {
+                    let path = dir.join(format!("{name}-{date}.txt"));
+                    std::fs::write(&path, content)?;
+                    count += 1;
+                }
+                Err(_) => failed.push(name),
             }
         }
-        return Ok(format!("Exported {count} text reports to {}", dir.display()));
+        let msg = format!("Exported {count} text reports to {}", dir.display());
+        if failed.is_empty() {
+            return Ok(msg);
+        }
+        return Ok(format!("{msg} (skipped: {})", failed.join(", ")));
     }
 
     let name = names.get(idx).unwrap_or(&"report");
@@ -1186,7 +1194,12 @@ pub fn run() -> Result<()> {
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),
                                 KeyCode::Down => *selection = (*selection + 1).min(max_idx),
-                                KeyCode::Esc | KeyCode::Char('q') => return_home = true,
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    dashboard.screen = DashboardScreen::ReportPicker {
+                                        selection: *report_idx,
+                                        mode: ReportPickerMode::Export,
+                                    };
+                                }
                                 KeyCode::Enter => {
                                     let format = EXPORT_FORMATS[*selection];
                                     if format == "Text" {
