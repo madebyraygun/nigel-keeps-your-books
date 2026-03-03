@@ -9,16 +9,86 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build aarch64
+        run: cargo build --release --target aarch64-apple-darwin
+      - name: Build x86_64
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/nigel \
+            target/x86_64-apple-darwin/release/nigel \
+            -output nigel
+          file nigel
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+
+          security create-keychain -p "$MACOS_KEYCHAIN_PWD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" $KEYCHAIN_PATH
+
+          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$MACOS_KEYCHAIN_PWD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Sign binary
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+        run: |
+          codesign --force --sign "$MACOS_CERTIFICATE_NAME" \
+            --options runtime \
+            --timestamp \
+            nigel
+          codesign -dv --verbose=4 nigel
+
+      - name: Notarize binary
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PWD: ${{ secrets.APPLE_APP_SPECIFIC_PWD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          zip nigel-notarize.zip nigel
+          xcrun notarytool submit nigel-notarize.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PWD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          rm nigel-notarize.zip
+
+      - name: Rename binary
+        run: mv nigel nigel-universal-apple-darwin
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nigel-universal-apple-darwin
+          path: nigel-universal-apple-darwin
+
+  build-other:
     strategy:
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            runner: macos-latest
-            ext: ""
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-            ext: ""
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             ext: ""
@@ -41,7 +111,7 @@ jobs:
           path: nigel-${{ matrix.target }}${{ matrix.ext }}
 
   release:
-    needs: build
+    needs: [build-macos, build-other]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
