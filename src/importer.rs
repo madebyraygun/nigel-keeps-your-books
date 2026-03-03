@@ -332,14 +332,30 @@ pub fn import_file(
         }
     }
 
-    let importer = if let Some(key) = format_key {
-        get_by_key(key).ok_or_else(|| NigelError::UnknownFormat(key.to_string()))?
+    enum ResolvedImporter {
+        BuiltIn(ImporterKind),
+        Generic(GenericCsvConfig),
+    }
+
+    let resolved = if let Some(key) = format_key {
+        if let Some(kind) = get_by_key(key) {
+            ResolvedImporter::BuiltIn(kind)
+        } else if let Some(config) = load_csv_profile(conn, key)? {
+            ResolvedImporter::Generic(config)
+        } else {
+            return Err(NigelError::UnknownFormat(key.to_string()));
+        }
     } else {
-        get_for_file(&account_type, file_path)
-            .ok_or_else(|| NigelError::NoImporter(account_type.clone()))?
+        ResolvedImporter::BuiltIn(
+            get_for_file(&account_type, file_path)
+                .ok_or_else(|| NigelError::NoImporter(account_type.clone()))?,
+        )
     };
 
-    let (parsed_rows, malformed) = importer.parse(file_path)?;
+    let (parsed_rows, malformed) = match &resolved {
+        ResolvedImporter::BuiltIn(kind) => kind.parse(file_path)?,
+        ResolvedImporter::Generic(config) => parse_generic_csv(file_path, config)?,
+    };
     let sample: Vec<ParsedRow> = parsed_rows.iter().take(5).cloned().collect();
 
     let mut imported = 0usize;
@@ -374,8 +390,10 @@ pub fn import_file(
             imported += 1;
         }
 
-        if importer.has_post_import() {
-            importer.post_import(conn, account_id, &parsed_rows)?;
+        if let ResolvedImporter::BuiltIn(importer) = &resolved {
+            if importer.has_post_import() {
+                importer.post_import(conn, account_id, &parsed_rows)?;
+            }
         }
     } else {
         for row in &parsed_rows {
@@ -1284,5 +1302,32 @@ transaction_date,description,amount
         let loaded = load_csv_profile(&conn, "chase").unwrap().unwrap();
         assert_eq!(loaded.date_col, 1);
         assert_eq!(loaded.desc_col, 3);
+    }
+
+    #[test]
+    fn test_import_file_with_generic_csv() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let path = dir.path().join("generic.csv");
+        let content = "\
+Date,Note,Amount
+01/15/2025,COFFEE,-5.50
+01/16/2025,SALARY,3000.00
+";
+        std::fs::write(&path, content).unwrap();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "test_bank", &config).unwrap();
+        let result =
+            import_file(&conn, &path, "Test Checking", Some("test_bank"), false).unwrap();
+        assert_eq!(result.imported, 2);
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }

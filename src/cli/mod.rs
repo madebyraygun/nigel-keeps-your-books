@@ -75,12 +75,27 @@ pub enum Commands {
         /// Account name to import into
         #[arg(long)]
         account: String,
-        /// Importer format key (e.g. bofa_checking)
+        /// Importer format key (e.g. bofa_checking, or a saved profile name)
         #[arg(long)]
         format: Option<String>,
         /// Preview import without writing to database
         #[arg(long)]
         dry_run: bool,
+        /// Column index for date (0-based, used with generic CSV)
+        #[arg(long)]
+        date_col: Option<usize>,
+        /// Column index for description (0-based, used with generic CSV)
+        #[arg(long)]
+        desc_col: Option<usize>,
+        /// Column index for amount (0-based, used with generic CSV)
+        #[arg(long)]
+        amount_col: Option<usize>,
+        /// Date format string (default: %m/%d/%Y, used with generic CSV)
+        #[arg(long)]
+        date_format: Option<String>,
+        /// Save column mapping as a reusable profile name
+        #[arg(long)]
+        save_profile: Option<String>,
     },
     /// Re-run categorization rules on uncategorized transactions.
     Categorize,
