@@ -10,11 +10,13 @@ static DB_PASSWORD: Mutex<Option<String>> = Mutex::new(None);
 
 /// Set the global database password. Call before `get_connection()`.
 pub fn set_db_password(password: Option<String>) {
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
     *DB_PASSWORD.lock().unwrap() = password;
 }
 
 /// Read the current global database password.
 pub fn get_db_password() -> Option<String> {
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
     DB_PASSWORD.lock().unwrap().clone()
 }
 
@@ -356,6 +358,7 @@ pub fn get_connection(db_path: &Path) -> Result<Connection> {
 /// Used by backup, password management, and tests.
 pub fn open_connection(db_path: &Path, password: Option<&str>) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
+    crate::settings::restrict_file_permissions(db_path)?;
     if let Some(pw) = password {
         conn.pragma_update(None, "key", pw)?;
     }

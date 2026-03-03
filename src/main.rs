@@ -45,6 +45,18 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
+    // Check that nigel has been initialized (skip for init/demo which create new DBs)
+    if !matches!(
+        command,
+        Commands::Init { .. } | Commands::Demo | Commands::Load { .. }
+    ) {
+        let data_dir = crate::settings::get_data_dir();
+        let db_path = data_dir.join("nigel.db");
+        if !db_path.exists() {
+            return Err(error::NigelError::NotInitialized);
+        }
+    }
+
     // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
     if !matches!(
         command,

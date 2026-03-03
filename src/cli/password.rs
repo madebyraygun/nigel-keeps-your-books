@@ -17,9 +17,11 @@ pub fn encrypt_database(db_path: &Path, new_password: &str) -> Result<()> {
     conn.execute_batch("SELECT sqlcipher_export('encrypted');")?;
     conn.execute_batch("DETACH DATABASE encrypted;")?;
     drop(conn);
+    crate::settings::restrict_file_permissions(&tmp_path)?;
     let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
     let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
     std::fs::rename(&tmp_path, db_path)?;
+    crate::settings::restrict_file_permissions(db_path)?;
     Ok(())
 }
 
@@ -37,9 +39,11 @@ pub fn decrypt_database(db_path: &Path, current_password: &str) -> Result<()> {
     conn.execute_batch("SELECT sqlcipher_export('plaintext');")?;
     conn.execute_batch("DETACH DATABASE plaintext;")?;
     drop(conn);
+    crate::settings::restrict_file_permissions(&tmp_path)?;
     let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
     let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
     std::fs::rename(&tmp_path, db_path)?;
+    crate::settings::restrict_file_permissions(db_path)?;
     Ok(())
 }
 

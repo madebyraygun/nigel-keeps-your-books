@@ -36,8 +36,10 @@ fn default_path(name: &str) -> PathBuf {
 fn write_pdf(bytes: &[u8], path: &PathBuf) -> Result<String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        crate::settings::restrict_dir_permissions(parent)?;
     }
     std::fs::write(path, bytes)?;
+    crate::settings::restrict_file_permissions(path)?;
     let display = format!("{}", path.display());
     println!("Wrote {display}");
     Ok(display)
@@ -222,6 +224,7 @@ pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<String> {
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("exports"));
     std::fs::create_dir_all(&dir)?;
+    crate::settings::restrict_dir_permissions(&dir)?;
 
     let path = |name: &str| dir.join(format!("{name}-{date}.pdf"));
 

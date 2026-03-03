@@ -23,6 +23,19 @@ pub fn reconcile(
         )
         .map_err(|_| NigelError::UnknownAccount(account_name.to_string()))?;
 
+    // Check if there are any transactions for this account in the given month
+    let tx_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 AND date >= ?2 || '-01' AND date <= ?2 || '-31'",
+        rusqlite::params![account_id, month],
+        |row| row.get(0),
+    )?;
+    if tx_count == 0 {
+        return Err(NigelError::NoTransactions(
+            account_name.to_string(),
+            month.to_string(),
+        ));
+    }
+
     let calculated: f64 = conn.query_row(
         "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ?1 AND date <= ?2 || '-31'",
         rusqlite::params![account_id, month],

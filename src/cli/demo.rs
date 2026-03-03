@@ -145,10 +145,14 @@ const MEAL_AMOUNTS: &[(f64, f64)] = &[
 
 /// Clamp a day to the last valid day of the given year/month.
 fn clamp_day(year: i32, month: u32, day: u32) -> u32 {
-    let last_day = NaiveDate::from_ymd_opt(year, month + 1, 1)
-        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
+    let first_of_next = NaiveDate::from_ymd_opt(year, month + 1, 1)
+        .or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1))
+        // year+1, Jan 1 is always valid for any realistic year
+        .expect("valid year for date arithmetic");
+    let last_day = first_of_next
         .pred_opt()
-        .unwrap()
+        // predecessor of a valid date is always valid (won't underflow NaiveDate::MIN here)
+        .expect("predecessor of first-of-month is valid")
         .day();
     day.min(last_day)
 }
@@ -387,7 +391,10 @@ pub fn setup_demo() -> Result<()> {
     let base_dir = PathBuf::from(&settings.data_dir);
     let demo_dir = base_dir.join("demo");
     std::fs::create_dir_all(&demo_dir)?;
-    std::fs::create_dir_all(demo_dir.join("exports"))?;
+    crate::settings::restrict_dir_permissions(&demo_dir)?;
+    let exports_dir = demo_dir.join("exports");
+    std::fs::create_dir_all(&exports_dir)?;
+    crate::settings::restrict_dir_permissions(&exports_dir)?;
 
     let db_path = demo_dir.join("nigel.db");
     let conn = get_connection(&db_path)?;
