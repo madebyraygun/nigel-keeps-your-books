@@ -9,11 +9,31 @@ struct Migration {
     up: fn(&Connection) -> Result<()>,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    description: "baseline — establish schema version tracking",
-    up: |_conn| Ok(()),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "baseline — establish schema version tracking",
+        up: |_conn| Ok(()),
+    },
+    Migration {
+        version: 2,
+        description: "add csv_profiles table for generic CSV column mappings",
+        up: |conn| {
+            conn.execute_batch(
+                "CREATE TABLE csv_profiles (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    date_col INTEGER NOT NULL,
+                    desc_col INTEGER NOT NULL,
+                    amount_col INTEGER NOT NULL,
+                    date_format TEXT NOT NULL DEFAULT '%m/%d/%Y',
+                    created_at TEXT DEFAULT (datetime('now'))
+                )",
+            )?;
+            Ok(())
+        },
+    },
+];
 
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
@@ -101,6 +121,19 @@ mod tests {
         run_migrations(&conn).unwrap();
         let v2 = get_schema_version(&conn).unwrap();
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_csv_profiles_table_exists_after_migration() {
+        let (_dir, conn) = test_db();
+        let exists: bool = conn
+            .query_row(
+                "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name='csv_profiles'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(exists, "csv_profiles table should exist after init_db");
     }
 
     #[test]
