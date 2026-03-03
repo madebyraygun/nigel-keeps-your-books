@@ -19,6 +19,7 @@ pub mod password_manager;
 pub mod reconcile;
 pub mod reconcile_manager;
 pub mod report;
+pub mod restore;
 pub mod review;
 pub mod rules;
 pub mod rules_manager;
@@ -140,6 +141,11 @@ pub enum Commands {
         /// Output path (default: <data_dir>/backups/nigel-YYYYMMDD-HHMMSS.db)
         #[arg(long)]
         output: Option<String>,
+    },
+    /// Restore a database from a backup file.
+    Restore {
+        /// Path to the backup file to restore
+        path: String,
     },
     /// Interactively browse data.
     Browse {

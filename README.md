@@ -122,6 +122,9 @@ nigel load ~/other-books
 nigel backup
 nigel backup --output /tmp/nigel-backup.db
 
+# Restore from a backup
+nigel restore ~/Documents/nigel/backups/nigel-20250301-120000.db
+
 # Database encryption
 nigel password set                                # Encrypt database with a password
 nigel password change                             # Change existing password
