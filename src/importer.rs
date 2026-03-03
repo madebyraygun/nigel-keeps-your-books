@@ -187,6 +187,110 @@ pub fn get_for_file(account_type: &str, file_path: &Path) -> Option<ImporterKind
 }
 
 // ---------------------------------------------------------------------------
+// Generic CSV config + helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct GenericCsvConfig {
+    pub date_col: usize,
+    pub desc_col: usize,
+    pub amount_col: usize,
+    pub date_format: String,
+}
+
+pub fn save_csv_profile(conn: &Connection, name: &str, config: &GenericCsvConfig) -> Result<()> {
+    conn.execute(
+        "INSERT INTO csv_profiles (name, date_col, desc_col, amount_col, date_format)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(name) DO UPDATE SET
+            date_col = excluded.date_col,
+            desc_col = excluded.desc_col,
+            amount_col = excluded.amount_col,
+            date_format = excluded.date_format",
+        rusqlite::params![
+            name,
+            config.date_col as i64,
+            config.desc_col as i64,
+            config.amount_col as i64,
+            config.date_format,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn load_csv_profile(conn: &Connection, name: &str) -> Result<Option<GenericCsvConfig>> {
+    let mut stmt = conn.prepare(
+        "SELECT date_col, desc_col, amount_col, date_format FROM csv_profiles WHERE name = ?1",
+    )?;
+    let result = stmt.query_row([name], |row| {
+        Ok(GenericCsvConfig {
+            date_col: row.get::<_, i64>(0)? as usize,
+            desc_col: row.get::<_, i64>(1)? as usize,
+            amount_col: row.get::<_, i64>(2)? as usize,
+            date_format: row.get(3)?,
+        })
+    });
+    match result {
+        Ok(config) => Ok(Some(config)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn parse_generic_csv(
+    file_path: &Path,
+    config: &GenericCsvConfig,
+) -> Result<(Vec<ParsedRow>, usize)> {
+    let mut rdr = create_csv_reader(file_path)?;
+    let mut rows = Vec::new();
+    let mut malformed = 0usize;
+    let mut first = true;
+    let min_cols = [config.date_col, config.desc_col, config.amount_col]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    for result in rdr.records() {
+        let Ok(record) = result else {
+            malformed += 1;
+            continue;
+        };
+        // Skip header row
+        if first {
+            first = false;
+            continue;
+        }
+        if record.len() < min_cols {
+            malformed += 1;
+            continue;
+        }
+        let raw_date = record[config.date_col].trim();
+        let date = match chrono::NaiveDate::parse_from_str(raw_date, &config.date_format) {
+            Ok(d) => d.format("%Y-%m-%d").to_string(),
+            Err(_) => {
+                malformed += 1;
+                continue;
+            }
+        };
+        let description = record[config.desc_col].trim().to_string();
+        if description.is_empty() {
+            continue;
+        }
+        let Some(amount) = parse_amount(&record[config.amount_col]) else {
+            malformed += 1;
+            continue;
+        };
+        rows.push(ParsedRow {
+            date,
+            description,
+            amount,
+        });
+    }
+    Ok((rows, malformed))
+}
+
+// ---------------------------------------------------------------------------
 // import_file
 // ---------------------------------------------------------------------------
 
@@ -1092,5 +1196,93 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
         let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), true).unwrap();
         assert_eq!(result.sample.len(), 5, "sample should be capped at 5");
         assert_eq!(result.imported, 7);
+    }
+
+    #[test]
+    fn test_parse_generic_csv_default_date_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generic.csv");
+        let content = "\
+Date,Memo,Debit,Credit,Balance
+01/15/2025,COFFEE SHOP,-5.50,,994.50
+01/16/2025,PAYCHECK,,2000.00,2994.50
+01/17/2025,RENT,-1500.00,,1494.50
+";
+        std::fs::write(&path, content).unwrap();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        let (rows, malformed) = parse_generic_csv(&path, &config).unwrap();
+        assert_eq!(rows.len(), 2); // row 2 has empty amount col -> malformed
+        assert_eq!(malformed, 1);
+        assert_eq!(rows[0].date, "2025-01-15");
+        assert_eq!(rows[0].description, "COFFEE SHOP");
+        assert_eq!(rows[0].amount, -5.50);
+    }
+
+    #[test]
+    fn test_parse_generic_csv_custom_date_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generic.csv");
+        let content = "\
+transaction_date,description,amount
+2025-01-15,COFFEE SHOP,-5.50
+2025-01-16,PAYCHECK,2000.00
+";
+        std::fs::write(&path, content).unwrap();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%Y-%m-%d".to_string(),
+        };
+        let (rows, _) = parse_generic_csv(&path, &config).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].date, "2025-01-15");
+        assert_eq!(rows[1].amount, 2000.0);
+    }
+
+    #[test]
+    fn test_generic_csv_profile_save_and_load() {
+        let (_dir, conn) = test_db();
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 2,
+            amount_col: 4,
+            date_format: "%d/%m/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &config).unwrap();
+        let loaded = load_csv_profile(&conn, "chase").unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.date_col, 0);
+        assert_eq!(loaded.desc_col, 2);
+        assert_eq!(loaded.amount_col, 4);
+        assert_eq!(loaded.date_format, "%d/%m/%Y");
+    }
+
+    #[test]
+    fn test_generic_csv_profile_overwrite() {
+        let (_dir, conn) = test_db();
+        let config1 = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &config1).unwrap();
+        let config2 = GenericCsvConfig {
+            date_col: 1,
+            desc_col: 3,
+            amount_col: 5,
+            date_format: "%Y-%m-%d".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &config2).unwrap();
+        let loaded = load_csv_profile(&conn, "chase").unwrap().unwrap();
+        assert_eq!(loaded.date_col, 1);
+        assert_eq!(loaded.desc_col, 3);
     }
 }
