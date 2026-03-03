@@ -17,6 +17,7 @@ use crate::cli::load_manager::{LoadAction, LoadScreen};
 use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::cli::rules_manager::{RulesAction, RulesManager};
+use crate::cli::settings_manager::{SettingsAction, SettingsManager};
 use crate::cli::snake::{SnakeAction, SnakeGame};
 use crate::cli::undo_manager::{UndoAction, UndoScreen};
 use crate::db::get_connection;
@@ -56,7 +57,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
     ("[l] Load a different data file", 'l'),
-    ("[p] Password management", 'p'),
+    ("[p] Settings", 'p'),
     ("[s] Snake", 's'),
 ];
 
@@ -117,7 +118,7 @@ enum DashboardScreen {
     },
     ReportView(Box<dyn ReportView>),
     Undo(UndoScreen),
-    Password(super::password_manager::PasswordManager),
+    Settings(SettingsManager),
     Snake(SnakeGame),
 }
 
@@ -337,7 +338,7 @@ impl Dashboard {
             undo.draw(frame);
             return;
         }
-        if let DashboardScreen::Password(ref mgr) = self.screen {
+        if let DashboardScreen::Settings(ref mgr) = self.screen {
             mgr.draw(frame);
             return;
         }
@@ -672,8 +673,8 @@ impl Dashboard {
                 }
             }
             10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            11 => match super::password_manager::PasswordManager::new(&self.greeting) {
-                Ok(mgr) => self.screen = DashboardScreen::Password(mgr),
+            11 => match SettingsManager::new(&conn, &self.greeting) {
+                Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
             12 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
@@ -1247,12 +1248,12 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
-                        DashboardScreen::Password(ref mut mgr) => {
-                            match mgr.handle_key(key.code) {
-                                super::password_manager::PasswordAction::Close => {
+                        DashboardScreen::Settings(ref mut mgr) => {
+                            match mgr.handle_key(key.code, &conn) {
+                                SettingsAction::Close => {
                                     return_home = true;
                                 }
-                                super::password_manager::PasswordAction::Continue => {}
+                                SettingsAction::Continue => {}
                             }
                             false
                         }
