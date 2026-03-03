@@ -304,7 +304,7 @@ fn parse_bofa_checking(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     let mut malformed = 0usize;
 
     for result in rdr.records() {
-        let Ok(record) = result else { continue };
+        let Ok(record) = result else { malformed += 1; continue };
         if !found_header {
             if record.len() >= 4 && record[0].trim() == "Date" && record[1].contains("Description")
             {
@@ -382,7 +382,7 @@ fn parse_bofa_card_format(
     let mut header_field_count: usize = 0;
 
     for result in rdr.records() {
-        let Ok(record) = result else { continue };
+        let Ok(record) = result else { malformed += 1; continue };
         if !found_header {
             if record.iter().any(|f| f.contains("Posting Date")) {
                 header_field_count = record.len();
