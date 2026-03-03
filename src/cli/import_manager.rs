@@ -288,7 +288,7 @@ fn run_import(conn: &Connection, file_path: &Path, account_name: &str) -> Import
         };
     }
 
-    match import_file(conn, file_path, account_name, None) {
+    match import_file(conn, file_path, account_name, None, false, None) {
         Err(e) => ImportResult {
             message: format!("Import failed: {e}"),
             is_error: true,
