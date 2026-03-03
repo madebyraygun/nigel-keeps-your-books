@@ -8,6 +8,7 @@ pub mod category_manager;
 pub mod dashboard;
 pub mod demo;
 pub mod export;
+pub mod goodbye;
 pub mod import;
 pub mod import_manager;
 pub mod init;
