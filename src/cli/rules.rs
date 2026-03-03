@@ -1,8 +1,22 @@
 use comfy_table::{Cell, Table};
+use regex::Regex;
 
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::settings::get_data_dir;
+
+fn rule_matches(description: &str, pattern: &str, match_type: &str) -> bool {
+    let desc_upper = description.to_uppercase();
+    let pat_upper = pattern.to_uppercase();
+    match match_type {
+        "contains" => desc_upper.contains(&pat_upper),
+        "starts_with" => desc_upper.starts_with(&pat_upper),
+        "regex" => Regex::new(pattern)
+            .map(|re| re.is_match(description))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
 
 pub fn add(
     pattern: &str,
@@ -170,6 +184,52 @@ pub fn delete(id: i64) -> Result<()> {
             Ok(())
         }
     }
+}
+
+pub fn test(pattern: &str, match_type: &str) -> Result<()> {
+    let valid_types = ["contains", "starts_with", "regex"];
+    if !valid_types.contains(&match_type) {
+        return Err(NigelError::Other(format!(
+            "Invalid match type: {match_type}. Must be one of: {}",
+            valid_types.join(", ")
+        )));
+    }
+
+    if match_type == "regex" {
+        Regex::new(pattern).map_err(|e| NigelError::Other(format!("Invalid regex: {e}")))?;
+    }
+
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let mut stmt = conn.prepare("SELECT description FROM transactions")?;
+    let descriptions: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut match_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for desc in &descriptions {
+        if rule_matches(desc, pattern, match_type) {
+            *match_counts.entry(desc.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let total: usize = match_counts.values().sum();
+    if total == 0 {
+        println!("No transactions match pattern \"{pattern}\" ({match_type})");
+        return Ok(());
+    }
+
+    let mut sorted: Vec<_> = match_counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    println!(
+        "Would match {total} transaction{}:",
+        if total == 1 { "" } else { "s" }
+    );
+    for (desc, count) in &sorted {
+        println!("  {desc} ({count})");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

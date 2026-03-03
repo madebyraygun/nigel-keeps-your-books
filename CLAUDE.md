@@ -8,7 +8,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, status, password
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, status, password, completions
 - **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `prompt_password_if_needed()` prompts via rpassword with 3 retries
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; no plugin registry
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
@@ -46,11 +46,14 @@ nigel init --data-dir ~/my-books                  # Initialize with custom data 
 nigel demo                                        # Load sample data to explore
 nigel import <file> --account <name>              # Import CSV/XLSX (auto-detects format)
 nigel import <file> --account <name> --format bofa_checking  # Import with explicit format
+nigel accounts rename 1 "New Name"                # Rename account by ID
+nigel accounts delete 3                           # Delete account by ID (blocked if has transactions)
 nigel categories list                             # List all categories
 nigel categories add "Consulting" --type income   # Add a category
 nigel categories rename 5 "Professional Fees"     # Rename a category
 nigel categories update 5 "Fees" --type income --tax-line "Gross receipts"  # Update all fields
 nigel categories delete 30                        # Soft-delete a category
+nigel rules test "ADOBE" --match-type contains    # Test pattern against transactions (dry run)
 nigel rules update 1 --priority 10                # Update a rule field
 nigel rules update 5 --category "Rent / Lease"    # Reassign rule category
 nigel rules delete 3                              # Deactivate a rule (soft-delete)
@@ -83,6 +86,7 @@ nigel backup --output /tmp/nigel-backup.db        # Back up to custom path
 nigel password set                                # Encrypt an unencrypted database
 nigel password change                             # Change password on encrypted database
 nigel password remove                             # Decrypt database (remove password)
+nigel completions bash                            # Generate shell completions (bash, zsh, fish, powershell)
 ```
 
 ## Documentation Policy
