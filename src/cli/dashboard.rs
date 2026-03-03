@@ -847,7 +847,9 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
 
 fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
     let year = year.or_else(|| Some(chrono::Local::now().year()));
-    let names = ["pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep"];
+    let names = [
+        "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep",
+    ];
 
     if idx == 8 {
         // "All Reports" text export
@@ -860,7 +862,10 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ("expenses", super::report::text::expenses(None, year)),
             ("tax", super::report::text::tax(year)),
             ("cashflow", super::report::text::cashflow(None, year)),
-            ("register", super::report::text::register(None, year, None, None, None)),
+            (
+                "register",
+                super::report::text::register(None, year, None, None, None),
+            ),
             ("flagged", super::report::text::flagged()),
             ("balance", super::report::text::balance()),
             ("k1-prep", super::report::text::k1(year)),
@@ -1196,7 +1201,10 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
-                        DashboardScreen::ExportFormatPicker { report_idx, selection } => {
+                        DashboardScreen::ExportFormatPicker {
+                            report_idx,
+                            selection,
+                        } => {
                             let max_idx = EXPORT_FORMATS.len() - 1;
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),

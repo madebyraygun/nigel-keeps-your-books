@@ -61,7 +61,10 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
     if !matches!(
         command,
-        Commands::Init { .. } | Commands::Demo | Commands::Password { .. } | Commands::Completions { .. }
+        Commands::Init { .. }
+            | Commands::Demo
+            | Commands::Password { .. }
+            | Commands::Completions { .. }
     ) {
         let data_dir = crate::settings::get_data_dir();
         let db_path = data_dir.join("nigel.db");
@@ -148,7 +151,10 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 priority,
             } => cli::rules::update(id, pattern, category, vendor, match_type, priority),
             RulesCommands::Delete { id } => cli::rules::delete(id),
-            RulesCommands::Test { pattern, match_type } => cli::rules::test(&pattern, &match_type),
+            RulesCommands::Test {
+                pattern,
+                match_type,
+            } => cli::rules::test(&pattern, &match_type),
         },
         Commands::Review { id } => cli::review::run(id),
         Commands::Report { command } => cli::report::dispatch(command),
