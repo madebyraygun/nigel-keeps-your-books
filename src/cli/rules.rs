@@ -1,22 +1,12 @@
+use std::collections::HashMap;
+
 use comfy_table::{Cell, Table};
 use regex::Regex;
 
+use crate::categorizer::matches as rule_matches;
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::settings::get_data_dir;
-
-fn rule_matches(description: &str, pattern: &str, match_type: &str) -> bool {
-    let desc_upper = description.to_uppercase();
-    let pat_upper = pattern.to_uppercase();
-    match match_type {
-        "contains" => desc_upper.contains(&pat_upper),
-        "starts_with" => desc_upper.starts_with(&pat_upper),
-        "regex" => Regex::new(pattern)
-            .map(|re| re.is_match(description))
-            .unwrap_or(false),
-        _ => false,
-    }
-}
 
 pub fn add(
     pattern: &str,
@@ -205,11 +195,10 @@ pub fn test(pattern: &str, match_type: &str) -> Result<()> {
         .query_map([], |row| row.get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut match_counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut match_counts: HashMap<String, usize> = HashMap::new();
     for desc in &descriptions {
         if rule_matches(desc, pattern, match_type) {
-            *match_counts.entry(desc.clone()).or_insert(0) += 1;
+            *match_counts.entry(desc.clone()).or_default() += 1;
         }
     }
 

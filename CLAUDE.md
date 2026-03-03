@@ -130,13 +130,13 @@ src/
     demo.rs             # nigel demo (sample data + setup_demo for isolated demo DB)
     onboarding.rs       # First-run onboarding TUI (animated logo, name collection, action picker)
     account_manager.rs  # TUI account management screen (list, add, rename, delete)
-    accounts.rs         # nigel accounts add/list + data-layer functions for TUI
+    accounts.rs         # nigel accounts add/list/rename/delete + data-layer functions for TUI
     categories.rs       # nigel categories list/add/rename/delete + data-layer functions for TUI
     category_manager.rs # TUI category management screen (list, add, edit, delete)
     import.rs           # nigel import
     import_manager.rs   # TUI import screen (file path + account selector + result)
     categorize.rs       # nigel categorize
-    rules.rs            # nigel rules add/list
+    rules.rs            # nigel rules add/list/update/delete/test
     rules_manager.rs    # TUI rules screen (scrollable list + delete)
     password.rs         # nigel password set/change/remove (encrypt/decrypt/rekey)
     password_manager.rs # TUI password management screen (set/change/remove via dashboard)
