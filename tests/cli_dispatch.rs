@@ -319,3 +319,96 @@ fn test_import_dry_run_no_db_writes() {
     // Verify no snapshots were created for the dry run (only the demo's snapshots should exist)
     // The key assertion is that "Dry run" appeared in stdout, meaning no DB writes occurred
 }
+
+#[test]
+fn test_import_generic_csv_with_column_flags() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // CSV with a non-standard column layout: trans_date, ref, memo, amount, balance
+    let csv_path = env.home.path().join("generic-import.csv");
+    std::fs::write(
+        &csv_path,
+        "trans_date,ref,memo,amount,balance\n\
+         01/10/2025,1001,Office Supplies,-45.99,954.01\n\
+         01/11/2025,1002,Client Payment,1200.00,2154.01\n",
+    )
+    .unwrap();
+
+    env.cmd()
+        .args([
+            "import",
+            &csv_path.to_string_lossy(),
+            "--account",
+            "BofA Checking",
+            "--date-col",
+            "0",
+            "--desc-col",
+            "2",
+            "--amount-col",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 imported"));
+}
+
+#[test]
+fn test_import_generic_csv_with_saved_profile() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // First import: use column flags + --save-profile
+    let csv1_path = env.home.path().join("bank-export-1.csv");
+    std::fs::write(
+        &csv1_path,
+        "posted,ref_num,payee,debit_credit,running\n\
+         01/20/2025,5001,Rent Payment,-2000.00,5000.00\n\
+         01/21/2025,5002,Invoice 42,3500.00,8500.00\n",
+    )
+    .unwrap();
+
+    env.cmd()
+        .args([
+            "import",
+            &csv1_path.to_string_lossy(),
+            "--account",
+            "BofA Checking",
+            "--date-col",
+            "0",
+            "--desc-col",
+            "2",
+            "--amount-col",
+            "3",
+            "--save-profile",
+            "mybank",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Saved profile 'mybank'")
+                .and(predicate::str::contains("2 imported")),
+        );
+
+    // Second import: use the saved profile via --format
+    let csv2_path = env.home.path().join("bank-export-2.csv");
+    std::fs::write(
+        &csv2_path,
+        "posted,ref_num,payee,debit_credit,running\n\
+         02/15/2025,5003,Software License,-199.00,8301.00\n",
+    )
+    .unwrap();
+
+    env.cmd()
+        .args([
+            "import",
+            &csv2_path.to_string_lossy(),
+            "--account",
+            "BofA Checking",
+            "--format",
+            "mybank",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 imported"));
+}
