@@ -24,7 +24,13 @@ pub fn run(file: &str, account: &str, opts: ImportOpts<'_>) -> Result<()> {
 
     // Build inline config when column flags are provided without --format
     let inline_config = if opts.format.is_none() && opts.date_col.is_some() {
-        Some(build_generic_config(opts.date_col, opts.desc_col, opts.amount_col, opts.date_format, "--date-col")?)
+        Some(build_generic_config(
+            opts.date_col,
+            opts.desc_col,
+            opts.amount_col,
+            opts.date_format,
+            "--date-col",
+        )?)
     } else {
         None
     };
@@ -33,7 +39,15 @@ pub fn run(file: &str, account: &str, opts: ImportOpts<'_>) -> Result<()> {
     if !opts.dry_run {
         if let Some(profile_name) = opts.save_profile {
             let config = inline_config.as_ref().map_or_else(
-                || build_generic_config(opts.date_col, opts.desc_col, opts.amount_col, opts.date_format, "--save-profile"),
+                || {
+                    build_generic_config(
+                        opts.date_col,
+                        opts.desc_col,
+                        opts.amount_col,
+                        opts.date_format,
+                        "--save-profile",
+                    )
+                },
                 |c| Ok(c.clone()),
             )?;
             save_csv_profile(&conn, profile_name, &config)?;

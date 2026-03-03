@@ -312,8 +312,7 @@ fn test_import_dry_run_no_db_writes() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Dry run")
-                .and(predicate::str::contains("would be imported")),
+            predicate::str::contains("Dry run").and(predicate::str::contains("would be imported")),
         );
 
     // Verify no snapshots were created for the dry run (only the demo's snapshots should exist)

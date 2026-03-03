@@ -450,7 +450,10 @@ fn parse_bofa_checking(file_path: &Path) -> Result<(Vec<ParsedRow>, usize)> {
     let mut malformed = 0usize;
 
     for result in rdr.records() {
-        let Ok(record) = result else { malformed += 1; continue };
+        let Ok(record) = result else {
+            malformed += 1;
+            continue;
+        };
         if !found_header {
             if record.len() >= 4 && record[0].trim() == "Date" && record[1].contains("Description")
             {
@@ -528,7 +531,10 @@ fn parse_bofa_card_format(
     let mut header_field_count: usize = 0;
 
     for result in rdr.records() {
-        let Ok(record) = result else { malformed += 1; continue };
+        let Ok(record) = result else {
+            malformed += 1;
+            continue;
+        };
         if !found_header {
             if record.iter().any(|f| f.contains("Posting Date")) {
                 header_field_count = record.len();
@@ -849,7 +855,15 @@ mod tests {
                 ("01/17/2025", "DEPOSIT", "500.00"),
             ],
         );
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 3);
         assert!(!result.duplicate_file);
         let count: i64 = conn
@@ -867,9 +881,25 @@ mod tests {
             "stmt.csv",
             &[("01/15/2025", "PAYMENT ONE", "-100.00")],
         );
-        let r1 = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        let r1 = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(r1.imported, 1);
-        let r2 = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        let r2 = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert!(r2.duplicate_file);
         assert_eq!(r2.imported, 0);
     }
@@ -886,7 +916,15 @@ mod tests {
                 ("01/16/2025", "PAYMENT TWO", "-200.00"),
             ],
         );
-        import_file(&conn, &csv1, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        import_file(
+            &conn,
+            &csv1,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let csv2 = write_bofa_csv(
             dir.path(),
             "stmt2.csv",
@@ -895,7 +933,15 @@ mod tests {
                 ("01/18/2025", "PAYMENT THREE", "-300.00"),
             ],
         );
-        let r2 = import_file(&conn, &csv2, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        let r2 = import_file(
+            &conn,
+            &csv2,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(r2.imported, 1);
         assert_eq!(r2.skipped, 1);
     }
@@ -909,7 +955,15 @@ mod tests {
             "stmt.csv",
             &[("01/15/2025", "PAYMENT ONE", "-100.00")],
         );
-        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let count: i64 = conn
             .query_row("SELECT count(*) FROM imports", [], |r| r.get(0))
             .unwrap();
@@ -1067,7 +1121,15 @@ RAYGUN DESIGN, LLC,1234,01/17/2025,01/17/2025,100.00,Refund,STORE REFUND,789 Oak
                 ("01/17/2025", "ANOTHER VALID", "250.00"),
             ],
         );
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 2, "malformed amount row should be skipped");
         assert_eq!(
             result.malformed, 1,
@@ -1109,7 +1171,15 @@ JOHN DOE,1234,01/15/2025,01/15/2025,-50.00,Shopping,AMAZON, INC,123 Main St,Seat
             "stmt.csv",
             &[("01/15/2025", "PAYMENT ONE", "-100.00")],
         );
-        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let import_id: i64 = conn
             .query_row("SELECT id FROM imports LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -1152,7 +1222,15 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
                 ("01/17/2025", "DEPOSIT", "500.00"),
             ],
         );
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.sample.len(), 3);
         assert_eq!(result.sample[0].description, "PAYMENT ONE");
     }
@@ -1169,13 +1247,25 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
                 ("01/16/2025", "PAYMENT TWO", "-250.00"),
             ],
         );
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), true, None).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 2);
         assert_eq!(result.skipped, 0);
         assert!(!result.duplicate_file);
-        let tx_count: i64 = conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        let tx_count: i64 = conn
+            .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(tx_count, 0, "dry run should not insert transactions");
-        let import_count: i64 = conn.query_row("SELECT count(*) FROM imports", [], |r| r.get(0)).unwrap();
+        let import_count: i64 = conn
+            .query_row("SELECT count(*) FROM imports", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(import_count, 0, "dry run should not insert import record");
     }
 
@@ -1191,7 +1281,15 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
                 ("01/16/2025", "PAYMENT TWO", "-250.00"),
             ],
         );
-        import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), false, None).unwrap();
+        import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            false,
+            None,
+        )
+        .unwrap();
         let csv2 = write_bofa_csv(
             dir.path(),
             "stmt2.csv",
@@ -1200,7 +1298,15 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
                 ("01/18/2025", "PAYMENT THREE", "-300.00"),
             ],
         );
-        let result = import_file(&conn, &csv2, "Test Checking", Some("bofa_checking"), true, None).unwrap();
+        let result = import_file(
+            &conn,
+            &csv2,
+            "Test Checking",
+            Some("bofa_checking"),
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 1);
         assert_eq!(result.skipped, 1);
     }
@@ -1219,7 +1325,15 @@ RAYGUN DESIGN LLC,1234,01/17/2025,01/17/2025,-25.00,Travel,DELTA AIRLINES,789 Oa
             ("01/07/2025", "TXN 7", "-70.00"),
         ];
         let csv_path = write_bofa_csv(dir.path(), "stmt.csv", &rows);
-        let result = import_file(&conn, &csv_path, "Test Checking", Some("bofa_checking"), true, None).unwrap();
+        let result = import_file(
+            &conn,
+            &csv_path,
+            "Test Checking",
+            Some("bofa_checking"),
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.sample.len(), 5, "sample should be capped at 5");
         assert_eq!(result.imported, 7);
     }
@@ -1330,8 +1444,15 @@ Date,Note,Amount
             date_format: "%m/%d/%Y".to_string(),
         };
         save_csv_profile(&conn, "test_bank", &config).unwrap();
-        let result =
-            import_file(&conn, &path, "Test Checking", Some("test_bank"), false, None).unwrap();
+        let result = import_file(
+            &conn,
+            &path,
+            "Test Checking",
+            Some("test_bank"),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.imported, 2);
         let count: i64 = conn
             .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
