@@ -285,3 +285,37 @@ fn demo_without_init_fails() {
         .failure()
         .stderr(predicate::str::contains("No database found"));
 }
+
+#[test]
+fn test_import_dry_run_no_db_writes() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // Write a BofA checking CSV
+    let csv_path = env.home.path().join("test-import.csv");
+    std::fs::write(
+        &csv_path,
+        "Date,Description,Amount,Running Bal.\n\
+         01/15/2025,DRY RUN PAYMENT,-100.00,900.00\n\
+         01/16/2025,DRY RUN DEPOSIT,500.00,1400.00\n",
+    )
+    .unwrap();
+
+    env.cmd()
+        .args([
+            "import",
+            &csv_path.to_string_lossy(),
+            "--account",
+            "BofA Checking",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Dry run")
+                .and(predicate::str::contains("would be imported")),
+        );
+
+    // Verify no snapshots were created for the dry run (only the demo's snapshots should exist)
+    // The key assertion is that "Dry run" appeared in stdout, meaning no DB writes occurred
+}

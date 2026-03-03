@@ -78,6 +78,9 @@ pub enum Commands {
         /// Importer format key (e.g. bofa_checking)
         #[arg(long)]
         format: Option<String>,
+        /// Preview import without writing to database
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Re-run categorization rules on uncategorized transactions.
     Categorize,

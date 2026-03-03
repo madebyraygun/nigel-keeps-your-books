@@ -106,7 +106,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
             file,
             account,
             format,
-        } => cli::import::run(&file, &account, format.as_deref()),
+            dry_run,
+        } => cli::import::run(&file, &account, format.as_deref(), dry_run),
         Commands::Categorize => cli::categorize::run(),
         Commands::Demo => cli::demo::run(),
         Commands::Rules { command } => match command {
