@@ -388,6 +388,16 @@ pub fn is_encrypted(db_path: &Path) -> Result<bool> {
     Ok(&buf != b"SQLite format 3\0")
 }
 
+/// Try to open an encrypted database with the given password.
+/// Returns true if the password is correct, false otherwise.
+/// Does not modify global password state.
+pub fn validate_password(db_path: &Path, password: &str) -> Result<bool> {
+    match open_connection(db_path, Some(password)) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
 /// If the database is encrypted, prompt the user for a password (up to 3 attempts).
 /// Sets the global password on success. Returns an error after 3 failures.
 pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
@@ -623,6 +633,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(form_line.as_deref(), Some("1120S-8"));
+    }
+
+    #[test]
+    fn test_validate_password_correct() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        assert!(validate_password(&db_path, "secret").unwrap());
+    }
+
+    #[test]
+    fn test_validate_password_wrong() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        assert!(!validate_password(&db_path, "wrong").unwrap());
     }
 
     #[test]

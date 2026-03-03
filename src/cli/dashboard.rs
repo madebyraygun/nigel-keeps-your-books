@@ -933,7 +933,14 @@ pub fn run() -> Result<()> {
     // Returning users: show splash screen before dashboard
     let is_first_run = !settings_file_exists();
     if !is_first_run {
-        super::splash::run()?;
+        let settings = load_settings();
+        let db_path = std::path::PathBuf::from(&settings.data_dir).join("nigel.db");
+        let needs_password = db_path.exists() && crate::db::is_encrypted(&db_path)?;
+        if needs_password {
+            super::splash::run_with_password(&db_path)?;
+        } else {
+            super::splash::run()?;
+        }
     }
 
     // First-run: show onboarding, then ensure data dir + DB exist
@@ -972,12 +979,6 @@ pub fn run() -> Result<()> {
     let backups_dir = data_dir.join("backups");
     std::fs::create_dir_all(&backups_dir)?;
     crate::settings::restrict_dir_permissions(&backups_dir)?;
-    if !is_first_run {
-        let db_path = data_dir.join("nigel.db");
-        if db_path.exists() {
-            crate::db::prompt_password_if_needed(&db_path)?;
-        }
-    }
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
     crate::db::init_db(&conn)?;
 
