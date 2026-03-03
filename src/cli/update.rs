@@ -8,10 +8,24 @@ const GITHUB_API_URL: &str =
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+const TIMESTAMP_FMT: &str = "%Y-%m-%dT%H:%M:%S";
+
+/// Minimum acceptable binary size (1 MB) to guard against truncated downloads.
+const MIN_BINARY_SIZE: usize = 1_000_000;
+
 /// Information about an available update.
 pub struct UpdateInfo {
     pub version: String,
     pub download_url: String,
+}
+
+/// Build an HTTP client with the given timeout.
+fn http_client(timeout_secs: u64) -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .user_agent(format!("nigel/{CURRENT_VERSION}"))
+        .build()
+        .map_err(|e| NigelError::Other(format!("HTTP client error: {e}")))
 }
 
 /// Returns the expected release asset name for the current platform.
@@ -27,15 +41,12 @@ pub fn asset_name() -> Option<&'static str> {
 /// Check the GitHub Releases API for a newer version.
 /// Returns `Some(UpdateInfo)` if a newer version is available, `None` otherwise.
 pub fn check_for_update() -> Result<Option<UpdateInfo>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .user_agent(format!("nigel/{CURRENT_VERSION}"))
-        .build()
-        .map_err(|e| NigelError::Other(format!("HTTP client error: {e}")))?;
+    let client = http_client(5)?;
 
     let resp: serde_json::Value = client
         .get(GITHUB_API_URL)
         .send()
+        .and_then(|r| r.error_for_status())
         .map_err(|e| NigelError::Other(format!("Update check failed: {e}")))?
         .json()
         .map_err(|e| NigelError::Other(format!("Invalid response: {e}")))?;
@@ -73,26 +84,27 @@ pub fn check_for_update() -> Result<Option<UpdateInfo>> {
 /// Download the binary from `url` and replace the current executable.
 fn download_and_install(url: &str) -> Result<()> {
     println!("Downloading...");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .user_agent(format!("nigel/{CURRENT_VERSION}"))
-        .build()
-        .map_err(|e| NigelError::Other(format!("HTTP client error: {e}")))?;
+    let client = http_client(120)?;
 
     let bytes = client
         .get(url)
         .send()
+        .and_then(|r| r.error_for_status())
         .map_err(|e| NigelError::Other(format!("Download failed: {e}")))?
         .bytes()
         .map_err(|e| NigelError::Other(format!("Download failed: {e}")))?;
 
-    if bytes.is_empty() {
-        return Err(NigelError::Other("Downloaded file is empty".into()));
+    if bytes.len() < MIN_BINARY_SIZE {
+        return Err(NigelError::Other(format!(
+            "Downloaded file too small ({} bytes, minimum {}). Aborting.",
+            bytes.len(),
+            MIN_BINARY_SIZE
+        )));
     }
 
-    // Write to a temp file, then atomically replace
+    // Write to a temp file with a unique name, then atomically replace
     let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join("nigel-update-tmp");
+    let tmp_path = tmp_dir.join(format!("nigel-update-{}", std::process::id()));
     std::fs::write(&tmp_path, &bytes)?;
 
     // Set executable permission on Unix
@@ -139,7 +151,7 @@ pub fn run() -> Result<()> {
             println!("You're on the latest version (v{CURRENT_VERSION}).");
         }
         Err(e) => {
-            return Err(NigelError::Other(format!("Update check failed: {e}")));
+            return Err(e);
         }
     }
     Ok(())
@@ -154,20 +166,23 @@ pub fn check_and_notify() -> Option<String> {
         return None;
     }
 
+    let now = chrono::Local::now().naive_local();
+
     // Check cooldown (24 hours)
     if let Some(ref last_check) = settings.last_update_check {
-        if let Ok(last) = chrono::NaiveDateTime::parse_from_str(last_check, "%Y-%m-%dT%H:%M:%S") {
-            let now = chrono::Local::now().naive_local();
+        if let Ok(last) = chrono::NaiveDateTime::parse_from_str(last_check, TIMESTAMP_FMT) {
             if now.signed_duration_since(last) < chrono::Duration::hours(24) {
                 return None;
             }
         }
     }
 
-    // Update the timestamp regardless of check result
-    let now = chrono::Local::now().naive_local();
-    settings.last_update_check = Some(now.format("%Y-%m-%dT%H:%M:%S").to_string());
-    let _ = save_settings(&settings);
+    // Update the timestamp regardless of check result.
+    // If we can't persist, skip the check to avoid hammering the API on every launch.
+    settings.last_update_check = Some(now.format(TIMESTAMP_FMT).to_string());
+    if save_settings(&settings).is_err() {
+        return None;
+    }
 
     // Attempt the check, silently returning None on any error
     let info = check_for_update().ok()??;
@@ -179,9 +194,9 @@ pub fn check_and_notify() -> Option<String> {
 
 /// Compare two semver strings. Returns true if `remote` is newer than `current`.
 pub fn is_newer(remote: &str, current: &str) -> bool {
-    let remote = semver::Version::parse(remote).ok();
-    let current = semver::Version::parse(current).ok();
-    match (remote, current) {
+    let remote_ver = semver::Version::parse(remote).ok();
+    let current_ver = semver::Version::parse(current).ok();
+    match (remote_ver, current_ver) {
         (Some(r), Some(c)) => r > c,
         _ => false,
     }
@@ -239,10 +254,10 @@ mod tests {
         // Simulate a recent check timestamp
         let now = chrono::Local::now().naive_local();
         let recent = now - chrono::Duration::hours(1);
-        let timestamp = recent.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let timestamp = recent.format(TIMESTAMP_FMT).to_string();
 
         // Parse and check the cooldown logic
-        let last = chrono::NaiveDateTime::parse_from_str(&timestamp, "%Y-%m-%dT%H:%M:%S").unwrap();
+        let last = chrono::NaiveDateTime::parse_from_str(&timestamp, TIMESTAMP_FMT).unwrap();
         let duration = now.signed_duration_since(last);
         assert!(duration < chrono::Duration::hours(24));
     }
@@ -251,9 +266,9 @@ mod tests {
     fn test_cooldown_expired() {
         let now = chrono::Local::now().naive_local();
         let old = now - chrono::Duration::hours(25);
-        let timestamp = old.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let timestamp = old.format(TIMESTAMP_FMT).to_string();
 
-        let last = chrono::NaiveDateTime::parse_from_str(&timestamp, "%Y-%m-%dT%H:%M:%S").unwrap();
+        let last = chrono::NaiveDateTime::parse_from_str(&timestamp, TIMESTAMP_FMT).unwrap();
         let duration = now.signed_duration_since(last);
         assert!(duration >= chrono::Duration::hours(24));
     }

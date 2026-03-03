@@ -37,9 +37,12 @@ fn main() {
         // Dashboard handles missing init via its own onboarding flow
         None => cli::dashboard::run(),
         Some(command) => {
-            // Non-blocking update check for CLI subcommands (dashboard does its own)
-            if let Some(msg) = cli::update::check_and_notify() {
-                eprintln!("{msg}");
+            // Non-blocking update check for CLI subcommands (dashboard does its own).
+            // Skip when running `nigel update` since it does its own check.
+            if !matches!(command, Commands::Update) {
+                if let Some(msg) = cli::update::check_and_notify() {
+                    eprintln!("notice: {msg}");
+                }
             }
             dispatch(command)
         }

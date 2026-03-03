@@ -84,6 +84,26 @@ impl SettingsManager {
         }
     }
 
+    fn menu_row(label: &str, value: &str, selected: bool) -> Line<'static> {
+        let marker = if selected { ">" } else { " " };
+        let label_style = if selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        Line::from(vec![
+            Span::styled(format!(" {marker} {label:<17}"), label_style),
+            Span::styled(
+                value.to_string(),
+                if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+        ])
+    }
+
     fn draw_main(&self, frame: &mut Frame) {
         let area = frame.area();
         let border_style = Style::default().fg(Color::DarkGray);
@@ -117,16 +137,15 @@ impl SettingsManager {
 
         // Business Name row
         let name_selected = self.selection == MENU_BUSINESS_NAME;
-        let name_marker = if name_selected { ">" } else { " " };
-        let name_style = if name_selected {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
         if let Screen::EditingName = &self.screen {
+            let marker = if name_selected { ">" } else { " " };
+            let label_style = if name_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
             lines.push(Line::from(vec![
-                Span::styled(format!(" {name_marker} Business Name    "), name_style),
+                Span::styled(format!(" {marker} Business Name    "), label_style),
                 Span::styled(format!("{}_", self.edit_buffer), SELECTED_STYLE),
             ]));
         } else {
@@ -135,64 +154,36 @@ impl SettingsManager {
             } else {
                 &self.company_name
             };
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {name_marker} Business Name    "), name_style),
-                Span::styled(
-                    display_name.to_string(),
-                    if name_selected {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-            ]));
+            lines.push(Self::menu_row("Business Name", display_name, name_selected));
         }
 
         lines.push(Line::from(""));
 
         // Password section
-        let pw_selected = self.selection == MENU_PASSWORD;
-        let pw_marker = if pw_selected { ">" } else { " " };
-        let pw_style = if pw_selected {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
         let pw_status = if self.encrypted {
-            "encrypted"
+            "(encrypted)"
         } else {
-            "not set"
+            "(not set)"
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {pw_marker} Password         "), pw_style),
-            Span::styled(
-                format!("({pw_status})"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
+        lines.push(Self::menu_row(
+            "Password",
+            pw_status,
+            self.selection == MENU_PASSWORD,
+        ));
 
         lines.push(Line::from(""));
 
         // Update check toggle
-        let uc_selected = self.selection == MENU_UPDATE_CHECK;
-        let uc_marker = if uc_selected { ">" } else { " " };
-        let uc_style = if uc_selected {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
         let uc_status = if self.update_check {
-            "enabled"
+            "(enabled)"
         } else {
-            "disabled"
+            "(disabled)"
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {uc_marker} Auto-update check"), uc_style),
-            Span::styled(
-                format!(" ({uc_status})"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
+        lines.push(Self::menu_row(
+            "Auto-update check",
+            uc_status,
+            self.selection == MENU_UPDATE_CHECK,
+        ));
 
         // Status message
         if let Some((msg, success)) = &self.status_message {

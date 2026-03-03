@@ -152,7 +152,7 @@ struct Dashboard {
 }
 
 impl Dashboard {
-    fn new(user_name: Option<String>) -> Self {
+    fn new(user_name: Option<String>, update_notification: Option<String>) -> Self {
         let mut rng = rand::thread_rng();
         let random_greeting = GREETINGS.choose(&mut rng).unwrap_or(&"Hello.").to_string();
         let first_name = user_name
@@ -175,7 +175,7 @@ impl Dashboard {
             status_message: None,
             needs_reload: false,
             current_report_idx: None,
-            update_notification: None,
+            update_notification,
         }
     }
 
@@ -1044,8 +1044,7 @@ pub fn run() -> Result<()> {
 
     loop {
         let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-        let mut dashboard = Dashboard::new(user_name.clone());
-        dashboard.update_notification = update_notification.clone();
+        let mut dashboard = Dashboard::new(user_name.clone(), update_notification.clone());
         dashboard.load_data(&conn)?;
 
         let mut terminal = ratatui::init();
