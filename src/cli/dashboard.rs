@@ -677,7 +677,7 @@ impl Dashboard {
                 }
             }
             10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            11 => match SettingsManager::new(&conn, &self.greeting) {
+            11 => match SettingsManager::new(conn, &self.greeting) {
                 Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
