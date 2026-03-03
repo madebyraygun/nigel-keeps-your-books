@@ -29,6 +29,7 @@
 - **Integration tests** for CLI dispatch paths
 
 ### Changed
+- Export picker shows format selection step (PDF / Text) instead of defaulting to PDF
 - Demo transactions generated dynamically (18 months from current date) instead of hardcoded dates
 - Browse register shows all transactions by default (no implicit year filter)
 - Review screen migrated to ratatui from raw crossterm
