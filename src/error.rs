@@ -11,14 +11,20 @@ pub enum NigelError {
     #[error("CSV error: {0}")]
     Csv(#[from] csv::Error),
 
-    #[error("Unknown account: {0}")]
+    #[error("Not initialized. Run `nigel init` first to set up your data directory.")]
+    NotInitialized,
+
+    #[error("Account '{0}' not found. Run `nigel accounts list` to see available accounts, or `nigel accounts add` to create one.")]
     UnknownAccount(String),
 
-    #[error("Unknown format: {0}")]
+    #[error("Unknown format: '{0}'. Run `nigel import --help` for supported formats.")]
     UnknownFormat(String),
 
-    #[error("No importer for account type: {0}")]
+    #[error("Couldn't detect the format of this file for account type '{0}'. Use `--format <key>` to specify. Run `nigel import --help` for supported formats.")]
     NoImporter(String),
+
+    #[error("No transactions found for {account} in {month}.")]
+    NoTransactions { account: String, month: String },
 
     #[error("Unknown category: {0}")]
     UnknownCategory(String),

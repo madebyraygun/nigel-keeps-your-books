@@ -35,6 +35,7 @@ pub fn parse_date_mdy(raw: &str) -> Option<String> {
 #[cfg(any(feature = "gusto", test))]
 pub fn excel_serial_to_date(serial: f64) -> String {
     // Excel epoch is 1899-12-30 (accounting for the 1900 leap year bug)
+    // unwrap safe: 1899-12-30 is a valid date constant
     let base = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).unwrap();
     let date = base + chrono::Duration::days(serial as i64);
     date.format("%Y-%m-%d").to_string()
@@ -55,19 +56,17 @@ fn compute_checksum(file_path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn is_duplicate_row(conn: &Connection, account_id: i64, row: &ParsedRow) -> bool {
+fn is_duplicate_row(conn: &Connection, account_id: i64, row: &ParsedRow) -> Result<bool> {
     let mut stmt = conn
         .prepare_cached(
             "SELECT 1 FROM transactions WHERE account_id = ?1 AND date = ?2 AND amount = ?3 AND description = ?4",
-        )
-        .unwrap();
-    stmt.exists(rusqlite::params![
+        )?;
+    Ok(stmt.exists(rusqlite::params![
         account_id,
         row.date,
         row.amount,
         row.description
-    ])
-    .unwrap_or(false)
+    ])?)
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +252,7 @@ pub fn import_file(
     let mut imported = 0usize;
     let mut skipped = 0usize;
     for row in &parsed_rows {
-        if is_duplicate_row(conn, account_id, row) {
+        if is_duplicate_row(conn, account_id, row)? {
             skipped += 1;
             continue;
         }

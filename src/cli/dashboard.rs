@@ -867,9 +867,16 @@ pub fn run() -> Result<()> {
     let settings = load_settings();
     let data_dir = std::path::PathBuf::from(&settings.data_dir);
     std::fs::create_dir_all(&data_dir)?;
-    std::fs::create_dir_all(data_dir.join("exports"))?;
-    std::fs::create_dir_all(data_dir.join("snapshots"))?;
-    std::fs::create_dir_all(data_dir.join("backups"))?;
+    crate::settings::restrict_dir_permissions(&data_dir)?;
+    let exports_dir = data_dir.join("exports");
+    std::fs::create_dir_all(&exports_dir)?;
+    crate::settings::restrict_dir_permissions(&exports_dir)?;
+    let snapshots_dir = data_dir.join("snapshots");
+    std::fs::create_dir_all(&snapshots_dir)?;
+    crate::settings::restrict_dir_permissions(&snapshots_dir)?;
+    let backups_dir = data_dir.join("backups");
+    std::fs::create_dir_all(&backups_dir)?;
+    crate::settings::restrict_dir_permissions(&backups_dir)?;
     if !is_first_run {
         let db_path = data_dir.join("nigel.db");
         if db_path.exists() {
@@ -905,9 +912,9 @@ pub fn run() -> Result<()> {
                     "Current data directory: {}\nPath to data directory: ",
                     get_data_dir().display()
                 );
-                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                std::io::Write::flush(&mut std::io::stdout())?;
                 let mut input = String::new();
-                std::io::stdin().read_line(&mut input).unwrap();
+                std::io::stdin().read_line(&mut input)?;
                 let path = input.trim();
                 if !path.is_empty() {
                     super::load::run(path)?;

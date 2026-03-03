@@ -111,6 +111,7 @@ fn export_text(cmd: ReportCommands, output: Option<String>) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&p, &s)?;
+    crate::settings::restrict_file_permissions(&p)?;
     println!("Wrote {}", p.display());
     Ok(())
 }
@@ -118,10 +119,14 @@ fn export_text(cmd: ReportCommands, output: Option<String>) -> Result<()> {
 fn export_all_text(year: Option<i32>, output_dir: Option<String>) -> Result<()> {
     let data_dir = crate::settings::get_data_dir();
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let is_default_dir = output_dir.is_none();
     let dir = output_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("exports"));
     std::fs::create_dir_all(&dir)?;
+    if is_default_dir {
+        crate::settings::restrict_dir_permissions(&dir)?;
+    }
 
     let reports: Vec<(&str, Result<String>)> = vec![
         ("pnl", text::pnl(None, year, None, None)),
@@ -139,6 +144,7 @@ fn export_all_text(year: Option<i32>, output_dir: Option<String>) -> Result<()> 
             Ok(content) => {
                 let path = dir.join(format!("{name}-{date}.txt"));
                 std::fs::write(&path, content)?;
+                crate::settings::restrict_file_permissions(&path)?;
                 println!("Wrote {}", path.display());
             }
             Err(e) => eprintln!("Skipping {name}: {e}"),
