@@ -10,9 +10,9 @@ pub fn run() -> Result<()> {
     let db_path = data_dir.join("nigel.db");
 
     let user_name = if settings.user_name.is_empty() {
-        "(not set)".to_string()
+        "(not set)"
     } else {
-        settings.user_name.clone()
+        &settings.user_name
     };
 
     if !db_path.exists() {
@@ -30,7 +30,7 @@ pub fn run() -> Result<()> {
     let conn = get_connection(&db_path)?;
 
     let company = get_metadata(&conn, "company_name");
-    let schema_v = get_schema_version(&conn).unwrap_or(0);
+    let schema_v = get_schema_version(&conn)?;
     let accounts: i64 = conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
     let transactions: i64 =
         conn.query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))?;
@@ -46,14 +46,8 @@ pub fn run() -> Result<()> {
     println!("Data dir:   {}", data_dir.display());
     println!("Database:   {}", db_path.display());
     println!("DB size:    {}", format_bytes(size));
-    println!(
-        "Encrypted:  {}",
-        if encrypted { "yes" } else { "no" }
-    );
-    println!(
-        "Company:    {}",
-        company.as_deref().unwrap_or("(not set)")
-    );
+    println!("Encrypted:  {}", if encrypted { "yes" } else { "no" });
+    println!("Company:    {}", company.as_deref().unwrap_or("(not set)"));
     println!("Schema:     v{schema_v} (latest: v{LATEST_VERSION})");
     println!();
     println!("Accounts:      {accounts}");
