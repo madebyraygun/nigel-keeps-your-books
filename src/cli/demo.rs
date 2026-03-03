@@ -25,6 +25,11 @@ struct RecurringTxn {
 
 const RECURRING: &[RecurringTxn] = &[
     RecurringTxn {
+        day: 1,
+        description: "GUSTO PAYROLL",
+        amount: -3200.00,
+    },
+    RecurringTxn {
         day: 5,
         description: "ADOBE CREATIVE CLOUD",
         amount: -54.99,
@@ -124,13 +129,15 @@ const MEALS: &[(&str, &str)] = &[
 ];
 
 /// Base income amounts for the two monthly Stripe transfers.
+/// Tuned so that average monthly income is ~$9k, creating a realistic mix
+/// of profitable and unprofitable months against ~$4.7k/month in expenses.
 const INCOME_BASES: &[(f64, f64)] = &[
-    (12000.0, 8500.0),
-    (15000.0, 9200.0),
-    (11500.0, 13800.0),
-    (10200.0, 11000.0),
-    (14500.0, 7800.0),
-    (13000.0, 9500.0),
+    (5500.0, 3800.0),
+    (7500.0, 4500.0),
+    (3200.0, 1800.0),
+    (6000.0, 5000.0),
+    (3800.0, 1500.0),
+    (8000.0, 4200.0),
 ];
 
 /// Base meal amounts cycled per month.
@@ -255,6 +262,11 @@ const RULES: &[DemoRule] = &[
         pattern: "STRIPE TRANSFER",
         category: "Client Services",
         vendor: "Stripe",
+    },
+    DemoRule {
+        pattern: "GUSTO",
+        category: "Contract Labor",
+        vendor: "Gusto",
     },
     DemoRule {
         pattern: "ADOBE",
@@ -434,8 +446,8 @@ mod tests {
     #[test]
     fn test_generate_transactions_count() {
         let txns = generate_transactions();
-        // 18 months × 14 txns per month (2 income + 6 recurring + 2 meals + 3 rotating + 1 interest)
-        assert_eq!(txns.len(), 18 * 14);
+        // 18 months × 15 txns per month (2 income + 7 recurring + 2 meals + 3 rotating + 1 interest)
+        assert_eq!(txns.len(), 18 * 15);
     }
 
     #[test]
@@ -550,6 +562,49 @@ mod tests {
         assert_eq!(
             txn_count_before, txn_count_after,
             "no duplicates on second run"
+        );
+    }
+
+    #[test]
+    fn test_total_balance_under_120k() {
+        let txns = generate_transactions();
+        let total: f64 = txns.iter().map(|t| t.amount).sum();
+        assert!(
+            total < 120_000.0,
+            "total balance should be under $120k, got ${total:.2}"
+        );
+        assert!(
+            total > 0.0,
+            "total balance should be positive, got ${total:.2}"
+        );
+    }
+
+    #[test]
+    fn test_some_months_are_unprofitable() {
+        let txns = generate_transactions();
+        let today = Local::now().date_naive();
+
+        // Group transactions by month and check net
+        let mut unprofitable_months = 0;
+        for i in 0..18u32 {
+            let months_ago = 17 - i;
+            let target = today - chrono::Months::new(months_ago);
+            let ym = format!("{:04}-{:02}", target.year(), target.month());
+
+            let month_net: f64 = txns
+                .iter()
+                .filter(|t| t.date.starts_with(&ym))
+                .map(|t| t.amount)
+                .sum();
+
+            if month_net < 0.0 {
+                unprofitable_months += 1;
+            }
+        }
+
+        assert!(
+            unprofitable_months >= 2,
+            "at least 2 months should be unprofitable, got {unprofitable_months}"
         );
     }
 
