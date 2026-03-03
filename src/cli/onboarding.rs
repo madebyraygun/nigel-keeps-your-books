@@ -14,6 +14,8 @@ use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
 
+const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
 /// What the user chose to do after onboarding.
 #[derive(Clone, Copy)]
 pub enum PostSetupAction {
@@ -149,7 +151,7 @@ impl Onboarding {
 
     fn draw_name_input(&self, frame: &mut Frame, area: Rect) {
         let logo_height = LOGO.len() as u16;
-        let [_top_pad, logo_area, _gap1, welcome_area, _gap2, form_area, _gap3, button_area, _gap4, hints_area, _bottom_pad] =
+        let [_top_pad, logo_area, _gap1, welcome_area, _gap2, form_area, _gap3, button_area, _gap4, hints_area, _bottom_pad, version_area] =
             Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(logo_height),
@@ -162,6 +164,7 @@ impl Onboarding {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Fill(1),
+                Constraint::Length(1),
             ])
             .areas(area);
 
@@ -253,12 +256,14 @@ impl Onboarding {
                 .alignment(ratatui::layout::Alignment::Center),
             hints_area,
         );
+
+        render_version(frame, version_area);
     }
 
     fn draw_action_picker(&self, frame: &mut Frame, area: Rect) {
         let logo_height = LOGO.len() as u16;
         let menu_height = ACTION_ITEMS.len() as u16;
-        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, menu_area, _gap3, hints_area, _bottom_pad] =
+        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, menu_area, _gap3, hints_area, _bottom_pad, version_area] =
             Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(logo_height),
@@ -269,6 +274,7 @@ impl Onboarding {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Fill(1),
+                Constraint::Length(1),
             ])
             .areas(area);
 
@@ -305,12 +311,14 @@ impl Onboarding {
                 .alignment(ratatui::layout::Alignment::Center),
             hints_area,
         );
+
+        render_version(frame, version_area);
     }
 
     fn draw_confirm_password(&self, frame: &mut Frame, area: Rect) {
         let logo_height = LOGO.len() as u16;
         let error_height = if self.confirm_mismatch { 1 } else { 0 };
-        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, field_area, error_area, _gap3, hints_area, _bottom_pad] =
+        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, field_area, error_area, _gap3, hints_area, _bottom_pad, version_area] =
             Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(logo_height),
@@ -322,6 +330,7 @@ impl Onboarding {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Fill(1),
+                Constraint::Length(1),
             ])
             .areas(area);
 
@@ -376,6 +385,8 @@ impl Onboarding {
                 .alignment(ratatui::layout::Alignment::Center),
             hints_area,
         );
+
+        render_version(frame, version_area);
     }
 
     /// Convert a char-index cursor position to a byte offset in the string.
@@ -572,6 +583,14 @@ impl Onboarding {
     }
 }
 
+fn render_version(frame: &mut Frame, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Span::styled(VERSION, FOOTER_STYLE))
+            .alignment(ratatui::layout::Alignment::Center),
+        area,
+    );
+}
+
 /// Convert a char-index cursor position to a byte offset.
 fn confirm_byte_pos(s: &str, cursor: usize) -> usize {
     s.char_indices()
@@ -709,6 +728,12 @@ mod tests {
             reveal_order: vec![],
             intro_done: true,
         }
+    }
+
+    #[test]
+    fn version_string_matches_cargo_pkg() {
+        assert_eq!(VERSION, concat!("v", env!("CARGO_PKG_VERSION")));
+        assert!(VERSION.starts_with("v"));
     }
 
     #[test]
