@@ -388,6 +388,24 @@ pub fn is_encrypted(db_path: &Path) -> Result<bool> {
     Ok(&buf != b"SQLite format 3\0")
 }
 
+/// Test whether the given password can open the database at `db_path`.
+/// The file must already exist. Callers should first confirm the database
+/// is encrypted via `is_encrypted()`. Does not modify global password state.
+///
+/// Returns `Ok(true)` on success, `Ok(false)` for a wrong password
+/// (SQLCipher's "not a database" error). All other errors are propagated.
+pub fn validate_password(db_path: &Path, password: &str) -> Result<bool> {
+    match open_connection(db_path, Some(password)) {
+        Ok(_) => Ok(true),
+        Err(crate::error::NigelError::Db(rusqlite::Error::SqliteFailure(err, _)))
+            if err.code == rusqlite::ErrorCode::NotADatabase =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// If the database is encrypted, prompt the user for a password (up to 3 attempts).
 /// Sets the global password on success. Returns an error after 3 failures.
 pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
@@ -623,6 +641,48 @@ mod tests {
             )
             .unwrap();
         assert_eq!(form_line.as_deref(), Some("1120S-8"));
+    }
+
+    #[test]
+    fn test_validate_password_correct() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        assert!(validate_password(&db_path, "secret").unwrap());
+    }
+
+    #[test]
+    fn test_validate_password_wrong() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        assert!(!validate_password(&db_path, "wrong").unwrap());
+    }
+
+    #[test]
+    fn test_validate_password_nonexistent_file() {
+        // validate_password on a missing file creates it via open_connection.
+        // Callers must check existence first (dashboard.rs does db_path.exists()).
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("does_not_exist.db");
+        let result = validate_password(&db_path, "anything");
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_validate_password_non_database_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("garbage.db");
+        std::fs::write(&path, b"this is not a database at all").unwrap();
+        assert!(!validate_password(&path, "test").unwrap());
     }
 
     #[test]
