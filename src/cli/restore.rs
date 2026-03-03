@@ -24,9 +24,11 @@ pub fn run(path: &str) -> Result<()> {
     }
 
     // 2. Validate the backup is a valid SQLite database
-    // Try opening it — if encrypted, we need the password already set
-    let test_conn = get_connection(&backup_path)?;
-    // Verify it has the expected Nigel tables
+    let test_conn = get_connection(&backup_path).map_err(|e| {
+        crate::error::NigelError::Other(format!(
+            "Cannot open backup file (is the password correct?): {e}"
+        ))
+    })?;
     let has_tables: bool = test_conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('accounts', 'categories', 'transactions')",
@@ -36,7 +38,11 @@ pub fn run(path: &str) -> Result<()> {
                 Ok(count == 3)
             },
         )
-        .unwrap_or(false);
+        .map_err(|e| {
+            crate::error::NigelError::Other(format!(
+                "Cannot read backup file (is the password correct?): {e}"
+            ))
+        })?;
     drop(test_conn);
 
     if !has_tables {
@@ -48,7 +54,19 @@ pub fn run(path: &str) -> Result<()> {
     let data_dir = get_data_dir();
     let db_path = data_dir.join("nigel.db");
 
-    // 3. Create a safety backup of the current database
+    // 3. Confirm with user before replacing the database
+    if db_path.exists() {
+        print!("This will replace the current database. Continue? [y/N] ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Restore cancelled.");
+            return Ok(());
+        }
+    }
+
+    // 4. Create a safety backup of the current database
     let backups_dir = data_dir.join("backups");
     std::fs::create_dir_all(&backups_dir)?;
     crate::settings::restrict_dir_permissions(&backups_dir)?;
@@ -62,19 +80,22 @@ pub fn run(path: &str) -> Result<()> {
         println!("Safety backup saved to {}", safety_path.display());
     }
 
-    // 4. Copy the backup file over the active database
-    std::fs::copy(&backup_path, &db_path)?;
+    // 5. Restore using the SQLite backup API (handles WAL and encryption correctly)
+    let src_conn = get_connection(&backup_path)?;
+    crate::cli::backup::snapshot(&src_conn, &db_path)?;
+    drop(src_conn);
     restrict_file_permissions(&db_path)?;
 
-    // 5. Validate the restored database
+    // 6. Validate the restored database
     let conn = get_connection(&db_path)?;
     init_db(&conn)?;
-    let tx_count: i64 = conn
-        .query_row("SELECT count(*) FROM transactions", [], |row| row.get(0))
-        .unwrap_or(0);
-    let acct_count: i64 = conn
-        .query_row("SELECT count(*) FROM accounts", [], |row| row.get(0))
-        .unwrap_or(0);
+    let tx_count: i64 = conn.query_row(
+        "SELECT count(*) FROM transactions",
+        [],
+        |row| row.get(0),
+    )?;
+    let acct_count: i64 =
+        conn.query_row("SELECT count(*) FROM accounts", [], |row| row.get(0))?;
     drop(conn);
 
     let size = std::fs::metadata(&db_path)?.len();
@@ -122,8 +143,10 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        // Copy backup over current
-        std::fs::copy(&backup_path, &db_path).unwrap();
+        // Use the SQLite backup API (same as run() does)
+        let src_conn = get_connection(&backup_path).unwrap();
+        crate::cli::backup::snapshot(&src_conn, &db_path).unwrap();
+        drop(src_conn);
 
         // Verify the restored DB has the backup's data
         let conn = get_connection(&db_path).unwrap();
@@ -135,7 +158,9 @@ mod tests {
 
     #[test]
     fn test_restore_rejects_nonexistent_file() {
-        let result = run("/tmp/nonexistent-nigel-backup-abc123.db");
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nonexistent-backup.db");
+        let result = run(missing.to_str().unwrap());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not found"));
@@ -149,12 +174,22 @@ mod tests {
 
         // Create a valid SQLite DB but without Nigel tables
         let conn = rusqlite::Connection::open(&fake_path).unwrap();
-        conn.execute_batch("CREATE TABLE foo (id INTEGER PRIMARY KEY)").unwrap();
+        conn.execute_batch("CREATE TABLE foo (id INTEGER PRIMARY KEY)")
+            .unwrap();
         drop(conn);
 
         let result = run(fake_path.to_str().unwrap());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not a valid Nigel database"));
+    }
+
+    #[test]
+    fn test_restore_rejects_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run(dir.path().to_str().unwrap());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Not a file"));
     }
 }
