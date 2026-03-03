@@ -1336,8 +1336,11 @@ pub fn run() -> Result<()> {
 
         match exit {
             Err(e) => return Err(e),
-            Ok(true) => return Ok(()), // quit
-            Ok(false) => continue,     // reload (data directory changed)
+            Ok(true) => {
+                let _ = super::goodbye::run();
+                return Ok(());
+            }
+            Ok(false) => continue, // reload (data directory changed)
         }
     }
 }
