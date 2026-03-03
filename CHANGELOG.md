@@ -25,6 +25,7 @@
 - **Page title headers** on all TUI screens
 - **Keyboard shortcuts** on dashboard menu items
 - **Snake game** easter egg accessible from dashboard
+- **Version display** — version number shown at the bottom center of splash and onboarding screens
 - **GitHub Actions CI** workflow
 - **Integration tests** for CLI dispatch paths
 
