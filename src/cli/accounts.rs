@@ -334,4 +334,12 @@ mod tests {
         let names = account_names(&conn).unwrap();
         assert!(names.is_empty());
     }
+
+    #[test]
+    fn test_account_names_propagates_db_error() {
+        let (_dir, conn) = test_conn();
+        conn.execute("DROP TABLE accounts", []).unwrap();
+        let result = account_names(&conn);
+        assert!(result.is_err());
+    }
 }

@@ -645,7 +645,7 @@ impl Dashboard {
             3 => match ReconcileScreen::new(conn, &self.greeting) {
                 Ok(screen) => self.screen = DashboardScreen::Reconcile(screen),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
-            }
+            },
             4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
             5 => {
                 self.screen =
