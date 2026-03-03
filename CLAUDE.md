@@ -8,7 +8,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, status, password, completions
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, status, password, completions
 - **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `prompt_password_if_needed()` prompts via rpassword with 3 retries
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; `GenericCsvConfig` supports user-defined column mappings stored as profiles in `csv_profiles` table; malformed CSV rows are counted and reported in import output
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
@@ -89,6 +89,7 @@ nigel status                                      # Show active DB and summary s
 nigel load ~/other-books                          # Switch to a different data directory
 nigel backup                                      # Back up DB to <data_dir>/backups/
 nigel backup --output /tmp/nigel-backup.db        # Back up to custom path
+nigel restore ~/backups/nigel-20250301-120000.db  # Restore from a backup file
 nigel password set                                # Encrypt an unencrypted database
 nigel password change                             # Change password on encrypted database
 nigel password remove                             # Decrypt database (remove password)
@@ -164,6 +165,7 @@ src/
     reconcile.rs        # nigel reconcile
     load.rs             # nigel load (switch data directory)
     backup.rs           # nigel backup (database backup)
+    restore.rs          # nigel restore (restore database from backup)
     status.rs           # nigel status (show active DB + stats)
   db.rs                 # SQLite schema, connection, category seeding
   migrations.rs          # Schema migration runner (version tracking, sequential up() functions)

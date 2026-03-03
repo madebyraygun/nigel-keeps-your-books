@@ -121,6 +121,76 @@ fn backup_default_location() {
 }
 
 #[test]
+fn restore_from_backup() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // Create a backup
+    let backup_path = env.home.path().join("test-backup.db");
+    env.cmd()
+        .args(["backup", "--output", &backup_path.to_string_lossy()])
+        .assert()
+        .success();
+
+    // Add a new account to the current database (post-backup change)
+    env.cmd()
+        .args([
+            "accounts",
+            "add",
+            "Post-Backup Account",
+            "--type",
+            "checking",
+        ])
+        .assert()
+        .success();
+
+    // Restore from backup (pipe "y" to confirm)
+    env.cmd()
+        .args(["restore", &backup_path.to_string_lossy()])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Safety backup saved to"))
+        .stdout(predicate::str::contains("Database restored from"));
+
+    // Verify the post-backup account is gone (restored to pre-change state)
+    let output = env.cmd().args(["accounts", "list"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Post-Backup Account"),
+        "Post-backup account should not exist after restore"
+    );
+
+    // Verify a safety backup was created
+    let backups_dir = env.data_dir().join("backups");
+    let entries: Vec<_> = std::fs::read_dir(&backups_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .contains("pre-restore")
+        })
+        .collect();
+    assert!(
+        !entries.is_empty(),
+        "pre-restore safety backup should exist"
+    );
+}
+
+#[test]
+fn restore_nonexistent_file_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args(["restore", "/tmp/nonexistent-nigel-backup-xyz.db"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
 fn report_pnl_text_export() {
     let env = TestEnv::new();
     env.init_and_demo();
