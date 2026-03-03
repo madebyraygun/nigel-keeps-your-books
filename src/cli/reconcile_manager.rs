@@ -9,6 +9,7 @@ use ratatui::{
 use rusqlite::Connection;
 
 use crate::cli::accounts;
+use crate::error::Result;
 use crate::fmt::money;
 use crate::reconciler;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
@@ -46,9 +47,9 @@ pub struct ReconcileScreen {
 }
 
 impl ReconcileScreen {
-    pub fn new(conn: &Connection, greeting: &str) -> Self {
-        let accounts = accounts::account_names(conn);
-        Self {
+    pub fn new(conn: &Connection, greeting: &str) -> Result<Self> {
+        let accounts = accounts::account_names(conn)?;
+        Ok(Self {
             accounts,
             account_idx: 0,
             month: String::new(),
@@ -57,7 +58,7 @@ impl ReconcileScreen {
             screen: Screen::Form,
             status_message: None,
             greeting: greeting.to_string(),
-        }
+        })
     }
 
     pub fn draw(&self, frame: &mut Frame) {

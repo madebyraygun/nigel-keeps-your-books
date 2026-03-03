@@ -637,10 +637,14 @@ impl Dashboard {
     fn activate_menu_item(&mut self, idx: usize, conn: &rusqlite::Connection) {
         match idx {
             0 => self.screen = self.enter_browse(conn),
-            1 => self.screen = DashboardScreen::Import(ImportScreen::new(conn, &self.greeting)),
+            1 => match ImportScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Import(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
             2 => self.screen = self.enter_review(conn),
-            3 => {
-                self.screen = DashboardScreen::Reconcile(ReconcileScreen::new(conn, &self.greeting))
+            3 => match ReconcileScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Reconcile(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
             }
             4 => self.screen = DashboardScreen::Accounts(AccountManager::new(conn, &self.greeting)),
             5 => {
