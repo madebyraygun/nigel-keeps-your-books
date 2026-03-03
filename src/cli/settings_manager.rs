@@ -122,10 +122,7 @@ impl SettingsManager {
         if let Screen::EditingName = &self.screen {
             lines.push(Line::from(vec![
                 Span::styled(format!(" {name_marker} Business Name    "), name_style),
-                Span::styled(
-                    format!("{}_", self.edit_buffer),
-                    SELECTED_STYLE,
-                ),
+                Span::styled(format!("{}_", self.edit_buffer), SELECTED_STYLE),
             ]));
         } else {
             let display_name = if self.company_name.is_empty() {
@@ -239,15 +236,12 @@ impl SettingsManager {
                         self.edit_buffer = self.company_name.clone();
                         self.screen = Screen::EditingName;
                     }
-                    MENU_PASSWORD => {
-                        match PasswordManager::new(&self.greeting) {
-                            Ok(mgr) => self.screen = Screen::Password(mgr),
-                            Err(e) => self.set_status(
-                                format!("Could not open password settings: {e}"),
-                                false,
-                            ),
+                    MENU_PASSWORD => match PasswordManager::new(&self.greeting) {
+                        Ok(mgr) => self.screen = Screen::Password(mgr),
+                        Err(e) => {
+                            self.set_status(format!("Could not open password settings: {e}"), false)
                         }
-                    }
+                    },
                     _ => {}
                 }
                 SettingsAction::Continue
@@ -270,10 +264,7 @@ impl SettingsManager {
                         self.set_status("Business name saved.".into(), true);
                     }
                     Err(e) => {
-                        self.set_status(
-                            format!("Could not save business name: {e}"),
-                            false,
-                        );
+                        self.set_status(format!("Could not save business name: {e}"), false);
                     }
                 }
                 self.edit_buffer.clear();
