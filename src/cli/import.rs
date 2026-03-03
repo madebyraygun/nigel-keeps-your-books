@@ -22,23 +22,24 @@ pub fn run(file: &str, account: &str, opts: ImportOpts<'_>) -> Result<()> {
     let data_dir = get_data_dir();
     let conn = get_connection(&data_dir.join("nigel.db"))?;
 
-    // If --save-profile is provided, save the generic CSV config
-    if let Some(profile_name) = opts.save_profile {
-        let config = build_generic_config(opts.date_col, opts.desc_col, opts.amount_col, opts.date_format, "--save-profile")?;
-        save_csv_profile(&conn, profile_name, &config)?;
-        println!("Saved profile '{profile_name}'");
-    }
-
-    // Determine effective format:
-    // - If column flags provided without --format, save as __inline__ and use that
-    // - Otherwise use whatever --format was given (or None for auto-detect)
-    let effective_format: Option<String> = if opts.format.is_none() && opts.date_col.is_some() {
-        let config = build_generic_config(opts.date_col, opts.desc_col, opts.amount_col, opts.date_format, "--date-col")?;
-        save_csv_profile(&conn, "__inline__", &config)?;
-        Some("__inline__".to_string())
+    // Build inline config when column flags are provided without --format
+    let inline_config = if opts.format.is_none() && opts.date_col.is_some() {
+        Some(build_generic_config(opts.date_col, opts.desc_col, opts.amount_col, opts.date_format, "--date-col")?)
     } else {
-        opts.format.map(|s| s.to_string())
+        None
     };
+
+    // Save profile only when not doing a dry run
+    if !opts.dry_run {
+        if let Some(profile_name) = opts.save_profile {
+            let config = inline_config.as_ref().map_or_else(
+                || build_generic_config(opts.date_col, opts.desc_col, opts.amount_col, opts.date_format, "--save-profile"),
+                |c| Ok(c.clone()),
+            )?;
+            save_csv_profile(&conn, profile_name, &config)?;
+            println!("Saved profile '{profile_name}'");
+        }
+    }
 
     if !opts.dry_run {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
@@ -51,8 +52,9 @@ pub fn run(file: &str, account: &str, opts: ImportOpts<'_>) -> Result<()> {
         &conn,
         &file_path,
         account,
-        effective_format.as_deref(),
+        opts.format,
         opts.dry_run,
+        inline_config.as_ref(),
     )?;
 
     if result.duplicate_file {

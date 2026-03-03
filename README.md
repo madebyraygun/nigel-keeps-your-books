@@ -13,7 +13,8 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 ## Features
 
 - **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, manage accounts and categories, view rules, view/export reports, and switch data files.
-- **Bank imports** — CSV/XLSX parsers with format auto-detection
+- **Bank imports** — CSV/XLSX parsers with format auto-detection; `--dry-run` to preview without writing
+- **Generic CSV** — import any CSV with `--date-col`, `--desc-col`, `--amount-col`; save reusable profiles with `--save-profile`
 - **Payroll import** — XLSX payroll importer with auto-categorization
 - **Duplicate detection** — file-level checksums and transaction-level matching prevent double-imports
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
@@ -54,6 +55,18 @@ nigel accounts add "BofA Checking" --type checking --institution "Bank of Americ
 
 # Import transactions
 nigel import statement.csv --account "BofA Checking"
+
+# Preview an import without writing to the database
+nigel import statement.csv --account "BofA Checking" --dry-run
+
+# Import a generic CSV with custom column mapping
+nigel import statement.csv --account "Chase" --date-col 0 --desc-col 1 --amount-col 3
+
+# Save a reusable profile for future imports
+nigel import statement.csv --account "Chase" --date-col 0 --desc-col 1 --amount-col 3 --save-profile chase
+
+# Use a saved profile
+nigel import statement.csv --account "Chase" --format chase
 
 # Add a categorization rule
 nigel rules add "ADOBE" --category "Software & Subscriptions" --vendor "Adobe"
