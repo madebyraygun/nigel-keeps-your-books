@@ -90,6 +90,11 @@ enum ReportPickerMode {
     Export,
 }
 
+#[cfg(feature = "pdf")]
+const EXPORT_FORMATS: &[&str] = &["PDF", "Text"];
+#[cfg(not(feature = "pdf"))]
+const EXPORT_FORMATS: &[&str] = &["Text"];
+
 enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
@@ -103,6 +108,10 @@ enum DashboardScreen {
     ReportPicker {
         selection: usize,
         mode: ReportPickerMode,
+    },
+    ExportFormatPicker {
+        report_idx: usize,
+        selection: usize,
     },
     ReportView(Box<dyn ReportView>),
     Password(super::password_manager::PasswordManager),
@@ -130,6 +139,7 @@ struct Dashboard {
     home_data: Option<HomeData>,
     pending_report_view: Option<usize>,
     pending_export: Option<usize>,
+    pending_text_export: Option<usize>,
     status_message: Option<String>,
     needs_reload: bool,
     /// Tracks which report index is currently displayed (for reload on date change)
@@ -156,6 +166,7 @@ impl Dashboard {
             home_data: None,
             pending_report_view: None,
             pending_export: None,
+            pending_text_export: None,
             status_message: None,
             needs_reload: false,
             current_report_idx: None,
@@ -313,6 +324,10 @@ impl Dashboard {
                 ReportPickerMode::Export => ("Select a report to export", EXPORT_TYPES as &[&str]),
             };
             self.draw_picker(frame, title, items, selection);
+            return;
+        }
+        if let DashboardScreen::ExportFormatPicker { selection, .. } = self.screen {
+            self.draw_picker(frame, "Select export format", EXPORT_FORMATS, selection);
             return;
         }
         if let DashboardScreen::Password(ref mgr) = self.screen {
@@ -598,7 +613,7 @@ impl Dashboard {
         frame.render_widget(Paragraph::new(lines), content_area);
 
         frame.render_widget(
-            Paragraph::new(" Up/Down=navigate  Enter=select  Esc=back  q=quit").style(FOOTER_STYLE),
+            Paragraph::new(" Up/Down=navigate  Enter=select  Esc/q=back").style(FOOTER_STYLE),
             hints_area,
         );
     }
@@ -828,6 +843,57 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
         };
         Ok(format!("Exported {path}"))
     }
+}
+
+fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
+    let year = year.or_else(|| Some(chrono::Local::now().year()));
+    let names = ["pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep"];
+
+    if idx == 8 {
+        // "All Reports" text export
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let dir = crate::settings::get_data_dir().join("exports");
+        std::fs::create_dir_all(&dir)?;
+        let mut count = 0;
+        let reports: Vec<(&str, Result<String>)> = vec![
+            ("pnl", super::report::text::pnl(None, year, None, None)),
+            ("expenses", super::report::text::expenses(None, year)),
+            ("tax", super::report::text::tax(year)),
+            ("cashflow", super::report::text::cashflow(None, year)),
+            ("register", super::report::text::register(None, year, None, None, None)),
+            ("flagged", super::report::text::flagged()),
+            ("balance", super::report::text::balance()),
+            ("k1-prep", super::report::text::k1(year)),
+        ];
+        for (name, result) in reports {
+            if let Ok(content) = result {
+                let path = dir.join(format!("{name}-{date}.txt"));
+                std::fs::write(&path, content)?;
+                count += 1;
+            }
+        }
+        return Ok(format!("Exported {count} text reports to {}", dir.display()));
+    }
+
+    let name = names.get(idx).unwrap_or(&"report");
+    let content = match idx {
+        0 => super::report::text::pnl(month, year, None, None)?,
+        1 => super::report::text::expenses(month, year)?,
+        2 => super::report::text::tax(year)?,
+        3 => super::report::text::cashflow(month, year)?,
+        4 => super::report::text::register(month, year, None, None, None)?,
+        5 => super::report::text::flagged()?,
+        6 => super::report::text::balance()?,
+        7 => super::report::text::k1(year)?,
+        _ => return Ok(String::new()),
+    };
+
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let dir = crate::settings::get_data_dir().join("exports");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{name}-{date}.txt"));
+    std::fs::write(&path, &content)?;
+    Ok(format!("Exported {}", path.display()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,18 +1165,39 @@ pub fn run() -> Result<()> {
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),
                                 KeyCode::Down => *selection = (*selection + 1).min(max_idx),
-                                KeyCode::Esc => return_home = true,
+                                KeyCode::Esc | KeyCode::Char('q') => return_home = true,
                                 KeyCode::Enter => match mode {
                                     ReportPickerMode::View => {
                                         dashboard.pending_report_view = Some(*selection);
                                     }
                                     ReportPickerMode::Export => {
-                                        dashboard.pending_export = Some(*selection);
+                                        dashboard.screen = DashboardScreen::ExportFormatPicker {
+                                            report_idx: *selection,
+                                            selection: 0,
+                                        };
                                     }
                                 },
                                 _ => {}
                             }
-                            key.code == KeyCode::Char('q')
+                            false
+                        }
+                        DashboardScreen::ExportFormatPicker { report_idx, selection } => {
+                            let max_idx = EXPORT_FORMATS.len() - 1;
+                            match key.code {
+                                KeyCode::Up => *selection = selection.saturating_sub(1),
+                                KeyCode::Down => *selection = (*selection + 1).min(max_idx),
+                                KeyCode::Esc | KeyCode::Char('q') => return_home = true,
+                                KeyCode::Enter => {
+                                    let format = EXPORT_FORMATS[*selection];
+                                    if format == "Text" {
+                                        dashboard.pending_text_export = Some(*report_idx);
+                                    } else {
+                                        dashboard.pending_export = Some(*report_idx);
+                                    }
+                                }
+                                _ => {}
+                            }
+                            false
                         }
                         DashboardScreen::Password(ref mut mgr) => {
                             match mgr.handle_key(key.code) {
@@ -1148,8 +1235,6 @@ pub fn run() -> Result<()> {
                     }
 
                     if let Some(idx) = dashboard.pending_export.take() {
-                        // Use the current report view's date params if we have
-                        // one active, otherwise default to current year
                         let (year, month) =
                             if let DashboardScreen::ReportView(ref view) = dashboard.screen {
                                 view.date_params()
@@ -1157,6 +1242,22 @@ pub fn run() -> Result<()> {
                                 (None, None)
                             };
                         match do_export(idx, year, month) {
+                            Ok(msg) => dashboard.status_message = Some(msg),
+                            Err(e) => {
+                                dashboard.status_message = Some(format!("Export failed: {e}"))
+                            }
+                        }
+                        dashboard.screen = DashboardScreen::Home;
+                    }
+
+                    if let Some(idx) = dashboard.pending_text_export.take() {
+                        let (year, month) =
+                            if let DashboardScreen::ReportView(ref view) = dashboard.screen {
+                                view.date_params()
+                            } else {
+                                (None, None)
+                            };
+                        match do_text_export(idx, year, month) {
                             Ok(msg) => dashboard.status_message = Some(msg),
                             Err(e) => {
                                 dashboard.status_message = Some(format!("Export failed: {e}"))
