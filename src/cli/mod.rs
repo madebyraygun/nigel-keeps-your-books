@@ -25,6 +25,8 @@ pub mod rules_manager;
 pub mod snake;
 pub mod splash;
 pub mod status;
+pub mod undo;
+pub mod undo_manager;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -133,6 +135,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: PasswordCommand,
     },
+    /// Undo the last import (delete its transactions and import record).
+    Undo,
     /// Generate shell completions script.
     Completions {
         /// Shell: bash, zsh, fish, powershell

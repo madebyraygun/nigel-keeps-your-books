@@ -174,6 +174,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
         } => cli::reconcile::run(&account, &month, balance),
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
+        Commands::Undo => cli::undo::run(),
         Commands::Status => cli::status::run(),
         Commands::Password { command } => match command {
             PasswordCommand::Set => cli::password::run_set(),

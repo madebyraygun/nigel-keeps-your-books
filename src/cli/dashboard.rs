@@ -18,6 +18,7 @@ use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
 use crate::cli::review::{HandleResult, TransactionReviewer};
 use crate::cli::rules_manager::{RulesAction, RulesManager};
 use crate::cli::snake::{SnakeAction, SnakeGame};
+use crate::cli::undo_manager::{UndoAction, UndoScreen};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::number;
@@ -51,6 +52,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[a] Add or modify accounts", 'a'),
     ("[t] Edit chart of accounts", 't'),
     ("[u] View or edit categorization rules", 'u'),
+    ("[z] Undo last import", 'z'),
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
     ("[l] Load a different data file", 'l'),
@@ -59,7 +61,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
-const MENU_LEFT_COUNT: usize = 6;
+const MENU_LEFT_COUNT: usize = 7;
 
 const REPORT_TYPES: &[&str] = &[
     "Profit & Loss",
@@ -114,6 +116,7 @@ enum DashboardScreen {
         selection: usize,
     },
     ReportView(Box<dyn ReportView>),
+    Undo(UndoScreen),
     Password(super::password_manager::PasswordManager),
     Snake(SnakeGame),
 }
@@ -328,6 +331,10 @@ impl Dashboard {
         }
         if let DashboardScreen::ExportFormatPicker { selection, .. } = self.screen {
             self.draw_picker(frame, "Select export format", EXPORT_FORMATS, selection);
+            return;
+        }
+        if let DashboardScreen::Undo(ref undo) = self.screen {
+            undo.draw(frame);
             return;
         }
         if let DashboardScreen::Password(ref mgr) = self.screen {
@@ -648,24 +655,28 @@ impl Dashboard {
                     DashboardScreen::Categories(CategoryManager::new(conn, &self.greeting))
             }
             6 => self.screen = DashboardScreen::Rules(RulesManager::new(conn, &self.greeting)),
-            7 => {
+            7 => match UndoScreen::new(conn, &self.greeting) {
+                Ok(screen) => self.screen = DashboardScreen::Undo(screen),
+                Err(e) => self.status_message = Some(format!("Error: {e}")),
+            },
+            8 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::View,
                 }
             }
-            8 => {
+            9 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::Export,
                 }
             }
-            9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            10 => match super::password_manager::PasswordManager::new(&self.greeting) {
+            10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            11 => match super::password_manager::PasswordManager::new(&self.greeting) {
                 Ok(mgr) => self.screen = DashboardScreen::Password(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            11 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            12 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -1156,6 +1167,15 @@ pub fn run() -> Result<()> {
                                     dashboard.needs_reload = true;
                                 }
                                 LoadAction::Continue => {}
+                            }
+                            false
+                        }
+                        DashboardScreen::Undo(ref mut undo) => {
+                            match undo.handle_key(key.code, &conn) {
+                                UndoAction::Close => {
+                                    return_home = true;
+                                }
+                                UndoAction::Continue => {}
                             }
                             false
                         }
