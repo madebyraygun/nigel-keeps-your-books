@@ -22,6 +22,7 @@ enum BrowseMode {
     GotoPage(String),
     GotoDate(String),
     FindId(String),
+    Search(String),
     EditCategory { query: String, selection: usize },
     EditVendor(String),
 }
@@ -47,6 +48,9 @@ pub struct RegisterBrowser {
     pending_category_idx: Option<usize>,
     pending_vendor: Option<String>,
     table_state: TableState,
+    search_matches: Vec<usize>,
+    search_index: usize,
+    search_query: String,
 }
 
 impl RegisterBrowser {
@@ -81,6 +85,9 @@ impl RegisterBrowser {
             pending_category_idx: None,
             pending_vendor: None,
             table_state: TableState::default(),
+            search_matches: Vec::new(),
+            search_index: 0,
+            search_query: String::new(),
         }
     }
 
@@ -307,24 +314,37 @@ impl RegisterBrowser {
         } else {
             format!(" | {}", self.filters_desc)
         };
+        let search_info = if !self.search_matches.is_empty() {
+            format!(
+                " | {} of {} matches",
+                self.search_index + 1,
+                self.search_matches.len()
+            )
+        } else if !self.search_query.is_empty() && !matches!(self.mode, BrowseMode::Search(_)) {
+            " | no matches".to_string()
+        } else {
+            String::new()
+        };
         let status = if let Some(ref msg) = self.status_message {
             format!(
-                "Rows {}-{} of {} | Net: {}{} | {}",
+                "Rows {}-{} of {} | Net: {}{}{} | {}",
                 self.offset + 1,
                 end_row,
                 self.rows.len(),
                 money(self.total),
                 filters,
+                search_info,
                 msg,
             )
         } else {
             format!(
-                "Rows {}-{} of {} | Net: {}{}",
+                "Rows {}-{} of {} | Net: {}{}{}",
                 self.offset + 1,
                 end_row,
                 self.rows.len(),
                 money(self.total),
                 filters,
+                search_info,
             )
         };
         frame.render_widget(Paragraph::new(status).style(FOOTER_STYLE), status_area);
@@ -332,25 +352,29 @@ impl RegisterBrowser {
         // Keys / input prompt
         let keys_widget = match &self.mode {
             BrowseMode::Normal => {
-                Paragraph::new("\u{2191}/\u{2193}:select  e:edit  f:flag  n/\u{2192}:next  p/\u{2190}:prev  g:page  d:date  /:id  q:quit")
-                    .style(FOOTER_STYLE)
+                let search_keys = if self.search_matches.is_empty() {
+                    ""
+                } else {
+                    "  n:next match  N:prev match"
+                };
+                Paragraph::new(format!(
+                    "\u{2191}/\u{2193}:select  e:edit  f:flag  \u{2192}:next  \u{2190}:prev  g:page  d:date  i:id  /:search{search_keys}  q:quit"
+                ))
+                .style(FOOTER_STYLE)
             }
-            BrowseMode::GotoPage(input) => {
-                Paragraph::new(format!("Go to page: {input}\u{2588}"))
-            }
+            BrowseMode::GotoPage(input) => Paragraph::new(format!("Go to page: {input}\u{2588}")),
             BrowseMode::GotoDate(input) => {
                 Paragraph::new(format!("Jump to date (YYYY-MM-DD): {input}\u{2588}"))
             }
             BrowseMode::FindId(input) => {
                 Paragraph::new(format!("Find transaction ID: {input}\u{2588}"))
             }
+            BrowseMode::Search(input) => Paragraph::new(format!("Search: {input}\u{2588}")),
             BrowseMode::EditCategory { .. } => {
-                Paragraph::new("Type to filter, Enter=select, Esc=cancel")
-                    .style(FOOTER_STYLE)
+                Paragraph::new("Type to filter, Enter=select, Esc=cancel").style(FOOTER_STYLE)
             }
             BrowseMode::EditVendor(_) => {
-                Paragraph::new("Enter=confirm (empty to skip), Esc=cancel")
-                    .style(FOOTER_STYLE)
+                Paragraph::new("Enter=confirm (empty to skip), Esc=cancel").style(FOOTER_STYLE)
             }
         };
         frame.render_widget(keys_widget, keys_area);
@@ -377,11 +401,11 @@ impl RegisterBrowser {
                         self.offset -= 1;
                     }
                 }
-                KeyCode::Char('n') | KeyCode::Right | KeyCode::PageDown => {
+                KeyCode::Right | KeyCode::PageDown => {
                     self.scroll_down();
                     self.selected = 0;
                 }
-                KeyCode::Char('p') | KeyCode::Left | KeyCode::PageUp => {
+                KeyCode::Left | KeyCode::PageUp => {
                     self.scroll_up();
                     self.selected = 0;
                 }
@@ -399,8 +423,17 @@ impl RegisterBrowser {
                 KeyCode::Char('d') => {
                     self.mode = BrowseMode::GotoDate(String::new());
                 }
-                KeyCode::Char('/') => {
+                KeyCode::Char('i') => {
                     self.mode = BrowseMode::FindId(String::new());
+                }
+                KeyCode::Char('/') => {
+                    self.mode = BrowseMode::Search(String::new());
+                }
+                KeyCode::Char('n') => {
+                    self.jump_to_next_match();
+                }
+                KeyCode::Char('N') => {
+                    self.jump_to_prev_match();
                 }
                 KeyCode::Char('e') | KeyCode::Enter => {
                     if !self.categories.is_empty() {
@@ -421,6 +454,30 @@ impl RegisterBrowser {
                 KeyCode::Enter => self.submit_input(),
                 KeyCode::Backspace => self.input_backspace(),
                 KeyCode::Char(c) => self.input_push(c),
+                _ => {}
+            },
+            BrowseMode::Search(_) => match code {
+                KeyCode::Esc => {
+                    self.search_matches.clear();
+                    self.search_query.clear();
+                    self.search_index = 0;
+                    self.mode = BrowseMode::Normal;
+                }
+                KeyCode::Enter => {
+                    self.mode = BrowseMode::Normal;
+                }
+                KeyCode::Backspace => {
+                    if let BrowseMode::Search(s) = &mut self.mode {
+                        s.pop();
+                    }
+                    self.recompute_search_matches();
+                }
+                KeyCode::Char(c) => {
+                    if let BrowseMode::Search(s) = &mut self.mode {
+                        s.push(c);
+                    }
+                    self.recompute_search_matches();
+                }
                 _ => {}
             },
             BrowseMode::EditCategory { .. } => {
@@ -488,6 +545,80 @@ impl RegisterBrowser {
 
     fn scroll_to_end(&mut self) {
         self.offset = self.rows.len().saturating_sub(PAGE_SIZE);
+    }
+
+    fn recompute_search_matches(&mut self) {
+        let query = match &self.mode {
+            BrowseMode::Search(s) => s.clone(),
+            _ => return,
+        };
+        self.search_query = query.clone();
+        self.search_matches.clear();
+        self.search_index = 0;
+
+        if query.is_empty() {
+            return;
+        }
+
+        let q = query.to_lowercase();
+        for (i, row) in self.rows.iter().enumerate() {
+            if row.description.to_lowercase().contains(&q)
+                || row
+                    .vendor
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&q)
+                || row
+                    .category
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&q)
+            {
+                self.search_matches.push(i);
+            }
+        }
+
+        // Jump to first match
+        if let Some(&idx) = self.search_matches.first() {
+            self.scroll_to_row(idx);
+        }
+    }
+
+    fn jump_to_next_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_index = (self.search_index + 1) % self.search_matches.len();
+        let idx = self.search_matches[self.search_index];
+        self.scroll_to_row(idx);
+    }
+
+    fn jump_to_prev_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        if self.search_index == 0 {
+            self.search_index = self.search_matches.len() - 1;
+        } else {
+            self.search_index -= 1;
+        }
+        let idx = self.search_matches[self.search_index];
+        self.scroll_to_row(idx);
+    }
+
+    fn scroll_to_row(&mut self, row_idx: usize) {
+        if row_idx >= self.offset && row_idx < self.offset + self.visible_count {
+            // Row is already visible, just move selection
+            self.selected = row_idx - self.offset;
+        } else {
+            // Center the row on screen
+            self.offset = row_idx.saturating_sub(self.visible_count / 2);
+            let max_offset = self.rows.len().saturating_sub(self.visible_count);
+            self.offset = self.offset.min(max_offset);
+            self.selected = row_idx - self.offset;
+        }
     }
 
     fn input_push(&mut self, c: char) {
@@ -885,7 +1016,7 @@ mod tests {
     fn test_handle_key_returns_continue_on_nav() {
         let rows = make_rows(50);
         let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
-        let action = browser.handle_key_event(KeyCode::Char('n'));
+        let action = browser.handle_key_event(KeyCode::Right);
         assert!(matches!(action, BrowseAction::Continue));
     }
 
@@ -918,7 +1049,7 @@ mod tests {
         let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
         browser.selected = 5;
 
-        browser.handle_key_event(KeyCode::Char('n'));
+        browser.handle_key_event(KeyCode::Right);
         assert_eq!(browser.selected, 0);
     }
 
@@ -1048,5 +1179,331 @@ mod tests {
             browser.selected,
             browser.visible_count,
         );
+    }
+
+    fn make_search_rows() -> Vec<RegisterRow> {
+        vec![
+            RegisterRow {
+                id: 1,
+                date: "2025-01-01".to_string(),
+                description: "ADOBE CREATIVE CLOUD".to_string(),
+                amount: -54.99,
+                category: Some("Software & Subscriptions".to_string()),
+                category_id: Some(1),
+                vendor: Some("Adobe".to_string()),
+                account_name: "BofA Checking".to_string(),
+                is_flagged: false,
+            },
+            RegisterRow {
+                id: 2,
+                date: "2025-01-05".to_string(),
+                description: "CLIENT PAYMENT ACME CORP".to_string(),
+                amount: 5000.0,
+                category: Some("Client Services".to_string()),
+                category_id: Some(2),
+                vendor: Some("Acme Corp".to_string()),
+                account_name: "BofA Checking".to_string(),
+                is_flagged: false,
+            },
+            RegisterRow {
+                id: 3,
+                date: "2025-01-10".to_string(),
+                description: "GITHUB PRO SUBSCRIPTION".to_string(),
+                amount: -4.0,
+                category: Some("Software & Subscriptions".to_string()),
+                category_id: Some(1),
+                vendor: Some("GitHub".to_string()),
+                account_name: "BofA Checking".to_string(),
+                is_flagged: false,
+            },
+            RegisterRow {
+                id: 4,
+                date: "2025-01-15".to_string(),
+                description: "OFFICE SUPPLIES STAPLES".to_string(),
+                amount: -89.50,
+                category: Some("Office Supplies".to_string()),
+                category_id: Some(3),
+                vendor: None,
+                account_name: "BofA Credit Card".to_string(),
+                is_flagged: false,
+            },
+            RegisterRow {
+                id: 5,
+                date: "2025-01-20".to_string(),
+                description: "ADOBE ACROBAT PRO".to_string(),
+                amount: -19.99,
+                category: Some("Software & Subscriptions".to_string()),
+                category_id: Some(1),
+                vendor: Some("Adobe".to_string()),
+                account_name: "BofA Checking".to_string(),
+                is_flagged: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_enter_search_mode() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        assert!(matches!(browser.mode, BrowseMode::Search(_)));
+    }
+
+    #[test]
+    fn test_search_matches_description() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('d'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('b'));
+        browser.handle_key_event(KeyCode::Char('e'));
+
+        // "adobe" should match rows 0 and 4 (description contains "ADOBE")
+        assert_eq!(browser.search_matches.len(), 2);
+        assert_eq!(browser.search_matches[0], 0);
+        assert_eq!(browser.search_matches[1], 4);
+    }
+
+    #[test]
+    fn test_search_matches_vendor() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        // Search for "acme" which is in the vendor field of row 1
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('c'));
+        browser.handle_key_event(KeyCode::Char('m'));
+        browser.handle_key_event(KeyCode::Char('e'));
+
+        assert_eq!(browser.search_matches.len(), 1);
+        assert_eq!(browser.search_matches[0], 1);
+    }
+
+    #[test]
+    fn test_search_matches_category() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        // Search for "office" which is in the category of row 3
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('f'));
+        browser.handle_key_event(KeyCode::Char('f'));
+        browser.handle_key_event(KeyCode::Char('i'));
+        browser.handle_key_event(KeyCode::Char('c'));
+        browser.handle_key_event(KeyCode::Char('e'));
+
+        assert_eq!(browser.search_matches.len(), 1);
+        assert_eq!(browser.search_matches[0], 3);
+    }
+
+    #[test]
+    fn test_search_is_case_insensitive() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        // Search for "GITHUB" in uppercase — should still match
+        browser.handle_key_event(KeyCode::Char('G'));
+        browser.handle_key_event(KeyCode::Char('I'));
+        browser.handle_key_event(KeyCode::Char('T'));
+        browser.handle_key_event(KeyCode::Char('H'));
+        browser.handle_key_event(KeyCode::Char('U'));
+        browser.handle_key_event(KeyCode::Char('B'));
+
+        assert_eq!(browser.search_matches.len(), 1);
+        assert_eq!(browser.search_matches[0], 2);
+    }
+
+    #[test]
+    fn test_search_jumps_to_first_match() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        // Scroll away from the top
+        browser.offset = 3;
+        browser.selected = 0;
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('d'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('b'));
+        browser.handle_key_event(KeyCode::Char('e'));
+
+        // Should jump to first match (row 0)
+        assert_eq!(browser.search_index, 0);
+        assert_eq!(browser.search_matches[0], 0);
+    }
+
+    #[test]
+    fn test_search_n_cycles_next() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('d'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('b'));
+        browser.handle_key_event(KeyCode::Char('e'));
+
+        // Confirm on first match
+        browser.handle_key_event(KeyCode::Enter);
+        assert!(matches!(browser.mode, BrowseMode::Normal));
+        assert_eq!(browser.search_index, 0);
+
+        // Press n to go to next match
+        browser.handle_key_event(KeyCode::Char('n'));
+        assert_eq!(browser.search_index, 1);
+
+        // Press n again to wrap around
+        browser.handle_key_event(KeyCode::Char('n'));
+        assert_eq!(browser.search_index, 0);
+    }
+
+    #[test]
+    fn test_search_shift_n_cycles_prev() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('d'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('b'));
+        browser.handle_key_event(KeyCode::Char('e'));
+        browser.handle_key_event(KeyCode::Enter);
+
+        // At index 0, press N to go to last match
+        browser.handle_key_event(KeyCode::Char('N'));
+        assert_eq!(browser.search_index, 1);
+
+        // Press N again to wrap back to 0
+        browser.handle_key_event(KeyCode::Char('N'));
+        assert_eq!(browser.search_index, 0);
+    }
+
+    #[test]
+    fn test_search_esc_clears() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('d'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('b'));
+        browser.handle_key_event(KeyCode::Char('e'));
+
+        assert!(!browser.search_matches.is_empty());
+
+        browser.handle_key_event(KeyCode::Esc);
+        assert!(matches!(browser.mode, BrowseMode::Normal));
+        assert!(browser.search_matches.is_empty());
+        assert!(browser.search_query.is_empty());
+    }
+
+    #[test]
+    fn test_search_no_matches() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('z'));
+        browser.handle_key_event(KeyCode::Char('z'));
+        browser.handle_key_event(KeyCode::Char('z'));
+
+        assert!(browser.search_matches.is_empty());
+    }
+
+    #[test]
+    fn test_search_empty_query() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        // Enter without typing anything
+        browser.handle_key_event(KeyCode::Enter);
+
+        assert!(browser.search_matches.is_empty());
+        assert!(matches!(browser.mode, BrowseMode::Normal));
+    }
+
+    #[test]
+    fn test_search_backspace_recomputes() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        // "adobe" matches 2 rows
+        browser.handle_key_event(KeyCode::Char('a'));
+        browser.handle_key_event(KeyCode::Char('d'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('b'));
+        browser.handle_key_event(KeyCode::Char('e'));
+        assert_eq!(browser.search_matches.len(), 2);
+
+        // Add more chars to narrow — "adobe c" matches only row 0
+        browser.handle_key_event(KeyCode::Char(' '));
+        browser.handle_key_event(KeyCode::Char('c'));
+        assert_eq!(browser.search_matches.len(), 1);
+        assert_eq!(browser.search_matches[0], 0);
+
+        // Backspace to widen back to "adobe "
+        browser.handle_key_event(KeyCode::Backspace);
+        // "adobe " still matches 2
+        assert_eq!(browser.search_matches.len(), 2);
+    }
+
+    #[test]
+    fn test_search_enter_keeps_matches_for_n_cycling() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('s'));
+        browser.handle_key_event(KeyCode::Char('o'));
+        browser.handle_key_event(KeyCode::Char('f'));
+        browser.handle_key_event(KeyCode::Char('t'));
+
+        let match_count = browser.search_matches.len();
+        assert!(match_count > 0);
+
+        // Enter to confirm and return to Normal mode
+        browser.handle_key_event(KeyCode::Enter);
+        assert!(matches!(browser.mode, BrowseMode::Normal));
+
+        // Matches should be preserved for n/N cycling
+        assert_eq!(browser.search_matches.len(), match_count);
+    }
+
+    #[test]
+    fn test_n_without_search_is_noop() {
+        let rows = make_search_rows();
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        let original_offset = browser.offset;
+        let original_selected = browser.selected;
+
+        browser.handle_key_event(KeyCode::Char('n'));
+
+        // No search matches, so n should be a no-op
+        assert_eq!(browser.offset, original_offset);
+        assert_eq!(browser.selected, original_selected);
+    }
+
+    #[test]
+    fn test_find_id_uses_i_key() {
+        let rows = make_rows(5);
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+
+        browser.handle_key_event(KeyCode::Char('i'));
+        assert!(matches!(browser.mode, BrowseMode::FindId(_)));
     }
 }
