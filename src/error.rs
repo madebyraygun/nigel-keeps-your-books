@@ -20,11 +20,11 @@ pub enum NigelError {
     #[error("Unknown format: '{0}'. Run `nigel import --help` for supported formats.")]
     UnknownFormat(String),
 
-    #[error("Couldn't detect the format of this file. Use `--format <key>` to specify. Run `nigel import --help` for supported formats.")]
+    #[error("Couldn't detect the format of this file for account type '{0}'. Use `--format <key>` to specify. Run `nigel import --help` for supported formats.")]
     NoImporter(String),
 
-    #[error("No transactions found for {0} in {1}.")]
-    NoTransactions(String, String),
+    #[error("No transactions found for {account} in {month}.")]
+    NoTransactions { account: String, month: String },
 
     #[error("Unknown category: {0}")]
     UnknownCategory(String),

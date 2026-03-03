@@ -17,7 +17,7 @@ pub fn run(data_dir: Option<String>) -> Result<()> {
         let default = &settings.data_dir;
         println!("Data directory [{}]: ", default);
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
+        std::io::stdin().read_line(&mut input)?;
         let chosen = input.trim();
         if !chosen.is_empty() {
             settings.data_dir = shellexpand_path(chosen);

@@ -109,7 +109,6 @@ fn export_text(cmd: ReportCommands, output: Option<String>) -> Result<()> {
     let p = PathBuf::from(&path);
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
-        crate::settings::restrict_dir_permissions(parent)?;
     }
     std::fs::write(&p, &s)?;
     crate::settings::restrict_file_permissions(&p)?;
@@ -120,11 +119,14 @@ fn export_text(cmd: ReportCommands, output: Option<String>) -> Result<()> {
 fn export_all_text(year: Option<i32>, output_dir: Option<String>) -> Result<()> {
     let data_dir = crate::settings::get_data_dir();
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let is_default_dir = output_dir.is_none();
     let dir = output_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("exports"));
     std::fs::create_dir_all(&dir)?;
-    crate::settings::restrict_dir_permissions(&dir)?;
+    if is_default_dir {
+        crate::settings::restrict_dir_permissions(&dir)?;
+    }
 
     let reports: Vec<(&str, Result<String>)> = vec![
         ("pnl", text::pnl(None, year, None, None)),

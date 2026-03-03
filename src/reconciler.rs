@@ -30,10 +30,10 @@ pub fn reconcile(
         |row| row.get(0),
     )?;
     if tx_count == 0 {
-        return Err(NigelError::NoTransactions(
-            account_name.to_string(),
-            month.to_string(),
-        ));
+        return Err(NigelError::NoTransactions {
+            account: account_name.to_string(),
+            month: month.to_string(),
+        });
     }
 
     let calculated: f64 = conn.query_row(

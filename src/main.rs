@@ -34,6 +34,7 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
+        // Dashboard handles missing init via its own onboarding flow
         None => cli::dashboard::run(),
         Some(command) => dispatch(command),
     };
@@ -45,7 +46,7 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
-    // Check that nigel has been initialized (skip for init/demo which create new DBs)
+    // Check that nigel has been initialized (skip for init/demo which create new DBs, and load which switches directories)
     if !matches!(
         command,
         Commands::Init { .. } | Commands::Demo | Commands::Load { .. }

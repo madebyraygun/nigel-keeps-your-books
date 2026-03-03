@@ -12,7 +12,6 @@ use crate::settings::{get_data_dir, restrict_dir_permissions, restrict_file_perm
 pub fn snapshot(conn: &rusqlite::Connection, dest_path: &Path) -> Result<()> {
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
-        restrict_dir_permissions(parent)?;
     }
     let password = crate::db::get_db_password();
     let mut dest_conn = rusqlite::Connection::open(dest_path)?;

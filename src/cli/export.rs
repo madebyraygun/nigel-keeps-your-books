@@ -36,7 +36,6 @@ fn default_path(name: &str) -> PathBuf {
 fn write_pdf(bytes: &[u8], path: &PathBuf) -> Result<String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
-        crate::settings::restrict_dir_permissions(parent)?;
     }
     std::fs::write(path, bytes)?;
     crate::settings::restrict_file_permissions(path)?;
@@ -220,11 +219,14 @@ pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<String> {
     let range = date_range_label(&None, &year);
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
 
+    let is_default_dir = output_dir.is_none();
     let dir = output_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("exports"));
     std::fs::create_dir_all(&dir)?;
-    crate::settings::restrict_dir_permissions(&dir)?;
+    if is_default_dir {
+        crate::settings::restrict_dir_permissions(&dir)?;
+    }
 
     let path = |name: &str| dir.join(format!("{name}-{date}.pdf"));
 

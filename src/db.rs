@@ -357,8 +357,11 @@ pub fn get_connection(db_path: &Path) -> Result<Connection> {
 /// Open a connection with an explicit password (bypasses global state).
 /// Used by backup, password management, and tests.
 pub fn open_connection(db_path: &Path, password: Option<&str>) -> Result<Connection> {
+    let is_new = !db_path.exists();
     let conn = Connection::open(db_path)?;
-    crate::settings::restrict_file_permissions(db_path)?;
+    if is_new {
+        crate::settings::restrict_file_permissions(db_path)?;
+    }
     if let Some(pw) = password {
         conn.pragma_update(None, "key", pw)?;
     }
