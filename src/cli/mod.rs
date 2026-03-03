@@ -23,6 +23,7 @@ pub mod restore;
 pub mod review;
 pub mod rules;
 pub mod rules_manager;
+pub mod settings_manager;
 pub mod snake;
 pub mod splash;
 pub mod status;
