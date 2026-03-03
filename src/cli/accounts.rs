@@ -146,14 +146,14 @@ pub fn transaction_count(conn: &Connection, account_id: i64) -> Result<i64> {
     Ok(count)
 }
 
-pub fn account_names(conn: &Connection) -> Vec<String> {
-    let mut stmt = match conn.prepare("SELECT name FROM accounts ORDER BY name") {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-    stmt.query_map([], |row| row.get(0))
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+pub fn account_names(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT name FROM accounts ORDER BY name")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    let mut names = Vec::new();
+    for row in rows {
+        names.push(row?);
+    }
+    Ok(names)
 }
 
 pub fn delete_account(conn: &Connection, id: i64) -> Result<()> {
@@ -316,5 +316,30 @@ mod tests {
         let (_dir, conn) = test_conn();
         let err = delete_account(&conn, 9999).unwrap_err();
         assert!(err.to_string().contains("Account not found"));
+    }
+
+    #[test]
+    fn test_account_names_returns_sorted_names() {
+        let (_dir, conn) = test_conn();
+        add_account(&conn, "Zeta Account", "checking", None, None).unwrap();
+        add_account(&conn, "Alpha Account", "credit_card", None, None).unwrap();
+
+        let names = account_names(&conn).unwrap();
+        assert_eq!(names, vec!["Alpha Account", "Zeta Account"]);
+    }
+
+    #[test]
+    fn test_account_names_empty_db() {
+        let (_dir, conn) = test_conn();
+        let names = account_names(&conn).unwrap();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn test_account_names_propagates_db_error() {
+        let (_dir, conn) = test_conn();
+        conn.execute("DROP TABLE accounts", []).unwrap();
+        let result = account_names(&conn);
+        assert!(result.is_err());
     }
 }
