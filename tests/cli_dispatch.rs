@@ -166,11 +166,7 @@ fn restore_from_backup() {
     let entries: Vec<_> = std::fs::read_dir(&backups_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .contains("pre-restore")
-        })
+        .filter(|e| e.file_name().to_string_lossy().contains("pre-restore"))
         .collect();
     assert!(
         !entries.is_empty(),

@@ -89,13 +89,9 @@ pub fn run(path: &str) -> Result<()> {
     // 6. Validate the restored database
     let conn = get_connection(&db_path)?;
     init_db(&conn)?;
-    let tx_count: i64 = conn.query_row(
-        "SELECT count(*) FROM transactions",
-        [],
-        |row| row.get(0),
-    )?;
-    let acct_count: i64 =
-        conn.query_row("SELECT count(*) FROM accounts", [], |row| row.get(0))?;
+    let tx_count: i64 =
+        conn.query_row("SELECT count(*) FROM transactions", [], |row| row.get(0))?;
+    let acct_count: i64 = conn.query_row("SELECT count(*) FROM accounts", [], |row| row.get(0))?;
     drop(conn);
 
     let size = std::fs::metadata(&db_path)?.len();
