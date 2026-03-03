@@ -148,6 +148,7 @@ struct Dashboard {
     needs_reload: bool,
     /// Tracks which report index is currently displayed (for reload on date change)
     current_report_idx: Option<usize>,
+    update_notification: Option<String>,
 }
 
 impl Dashboard {
@@ -174,6 +175,7 @@ impl Dashboard {
             status_message: None,
             needs_reload: false,
             current_report_idx: None,
+            update_notification: None,
         }
     }
 
@@ -354,11 +356,13 @@ impl Dashboard {
         let border_style = Style::default().fg(Color::DarkGray);
 
         let menu_rows = MENU_LEFT_COUNT as u16 + 1;
+        let has_update = self.update_notification.is_some();
 
-        let [header_area, sep1, stats_area, sep2, charts_area, sep3, menu_area, hints_area] =
+        let [header_area, sep1, update_area, stats_area, sep2, charts_area, sep3, menu_area, hints_area] =
             Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Length(1),
+                Constraint::Length(if has_update { 1 } else { 0 }),
                 Constraint::Length(5),
                 Constraint::Length(1),
                 Constraint::Fill(1),
@@ -367,6 +371,13 @@ impl Dashboard {
                 Constraint::Length(1),
             ])
             .areas(area);
+
+        if let Some(msg) = &self.update_notification {
+            frame.render_widget(
+                Paragraph::new(format!(" {msg}")).style(Style::default().fg(Color::Yellow)),
+                update_area,
+            );
+        }
 
         // Header
         frame.render_widget(
@@ -1028,9 +1039,13 @@ pub fn run() -> Result<()> {
         Some(settings.user_name.clone())
     };
 
+    // Non-blocking update check for dashboard
+    let update_notification = super::update::check_and_notify();
+
     loop {
         let conn = get_connection(&get_data_dir().join("nigel.db"))?;
         let mut dashboard = Dashboard::new(user_name.clone());
+        dashboard.update_notification = update_notification.clone();
         dashboard.load_data(&conn)?;
 
         let mut terminal = ratatui::init();
