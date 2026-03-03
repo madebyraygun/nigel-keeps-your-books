@@ -196,15 +196,19 @@ impl Splash {
         }
     }
 
-    /// Validate password against the database. Returns true if correct.
-    fn try_password(&mut self) -> bool {
+    /// Attempt to unlock the database with the current password.
+    /// On success, sets the global database password and returns `Ok(true)`.
+    /// On wrong password, increments the attempt counter, sets an error message,
+    /// clears the password field, and returns `Ok(false)`.
+    /// Infrastructure errors (I/O, permissions) are propagated as `Err`.
+    fn try_password(&mut self) -> Result<bool> {
         if let Some(ref db_path) = self.db_path {
             match crate::db::validate_password(db_path, &self.password) {
                 Ok(true) => {
                     crate::db::set_db_password(Some(self.password.clone()));
-                    return true;
+                    return Ok(true);
                 }
-                _ => {
+                Ok(false) => {
                     self.attempts += 1;
                     if self.attempts >= MAX_PASSWORD_ATTEMPTS {
                         self.error_msg = Some("Failed to unlock database after 3 attempts.".into());
@@ -216,9 +220,10 @@ impl Splash {
                     self.password = String::new();
                     self.cursor = 0;
                 }
+                Err(e) => return Err(e),
             }
         }
-        false
+        Ok(false)
     }
 }
 
@@ -263,7 +268,7 @@ pub fn run() -> Result<()> {
 
 /// Run the splash screen with inline password input for encrypted databases.
 /// Holds the screen until correct password is entered or 3 attempts are exhausted.
-/// Sets the global database password on success.
+/// Sets the global database password on success. Esc cancels and returns an error.
 pub fn run_with_password(db_path: &Path) -> Result<()> {
     let mut splash = Splash::new_with_password(db_path);
     let mut terminal = ratatui::init();
@@ -289,13 +294,16 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                             if splash.password.is_empty() {
                                 continue;
                             }
-                            if splash.try_password() {
-                                break Ok(());
-                            }
-                            if splash.attempts >= MAX_PASSWORD_ATTEMPTS {
-                                break Err(crate::error::NigelError::Other(
-                                    "Failed to unlock database after 3 attempts.".into(),
-                                ));
+                            match splash.try_password() {
+                                Ok(true) => break Ok(()),
+                                Ok(false) => {
+                                    if splash.attempts >= MAX_PASSWORD_ATTEMPTS {
+                                        break Err(crate::error::NigelError::Other(
+                                            "Failed to unlock database after 3 attempts.".into(),
+                                        ));
+                                    }
+                                }
+                                Err(e) => break Err(e),
                             }
                         }
                         KeyCode::Char(c) => {
@@ -405,10 +413,15 @@ mod tests {
 
         let mut splash = Splash::new_with_password(&db_path);
         splash.password = "wrong".into();
-        assert!(!splash.try_password());
+        assert!(!splash.try_password().unwrap());
         assert_eq!(splash.attempts, 1);
-        assert!(splash.error_msg.is_some());
+        assert!(splash
+            .error_msg
+            .as_ref()
+            .unwrap()
+            .contains("Try again (1/3)"));
         assert!(splash.password.is_empty());
+        assert_eq!(splash.cursor, 0);
     }
 
     #[test]
@@ -419,7 +432,7 @@ mod tests {
 
         let mut splash = Splash::new_with_password(&db_path);
         splash.password = "secret".into();
-        assert!(splash.try_password());
+        assert!(splash.try_password().unwrap());
         assert_eq!(splash.attempts, 0);
         // try_password sets the global password on success; clean up immediately
         crate::db::set_db_password(None);
@@ -434,10 +447,19 @@ mod tests {
         let mut splash = Splash::new_with_password(&db_path);
         for i in 1..=3 {
             splash.password = "wrong".into();
-            assert!(!splash.try_password());
+            assert!(!splash.try_password().unwrap());
             assert_eq!(splash.attempts, i);
         }
         assert!(splash.error_msg.as_ref().unwrap().contains("3 attempts"));
+    }
+
+    #[test]
+    fn try_password_without_db_path_returns_false() {
+        let mut splash = Splash::new();
+        splash.password = "test".into();
+        assert!(!splash.try_password().unwrap());
+        assert_eq!(splash.attempts, 0);
+        assert!(splash.error_msg.is_none());
     }
 
     #[test]
