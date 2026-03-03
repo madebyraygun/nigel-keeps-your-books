@@ -3,4 +3,5 @@ target/
 data/
 storage
 .worktrees/
+.claude/worktrees/
 scratchpads/
