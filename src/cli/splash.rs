@@ -13,7 +13,6 @@ use crate::tui;
 const SPLASH_DURATION: Duration = Duration::from_millis(1500);
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
 const REVEAL_MS: f64 = 500.0;
-const DISSOLVE_MS: f64 = 400.0;
 
 struct Splash {
     phase: f64,
@@ -52,8 +51,6 @@ impl Splash {
         self.height = area.height;
 
         let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
-        let total_ms = SPLASH_DURATION.as_secs_f64() * 1000.0;
-        let remaining_ms = total_ms - elapsed_ms;
 
         effects::render_particles(&self.particles, frame, area);
 
@@ -70,9 +67,6 @@ impl Splash {
         let chars_visible = if elapsed_ms < REVEAL_MS {
             let progress = elapsed_ms / REVEAL_MS;
             (progress * total_chars as f64) as usize
-        } else if remaining_ms < DISSOLVE_MS {
-            let progress = (remaining_ms / DISSOLVE_MS).max(0.0);
-            (progress * total_chars as f64) as usize
         } else {
             total_chars
         };
@@ -84,8 +78,8 @@ impl Splash {
             Some((&self.reveal_order, chars_visible)),
         );
 
-        // Show version during the fully-revealed phase (not during reveal/dissolve)
-        if elapsed_ms >= REVEAL_MS && remaining_ms >= DISSOLVE_MS {
+        // Show version once the logo is fully revealed
+        if elapsed_ms >= REVEAL_MS {
             tui::render_version(frame, version_area);
         }
     }

@@ -6,6 +6,7 @@
 - **Interactive TUI dashboard** — running `nigel` with no arguments launches a full-screen dashboard with YTD P&L, account balances, monthly income/expense bar chart, and single-key command menu
 - **First-run onboarding** — guided setup screen with animated logo, collects user name, business name, optional password, and offers demo/fresh/load options
 - **Splash screen** — rainbow gradient ASCII logo with floating particle effects on launch
+- **Goodbye screen** — reverse logo animation with "Goodbye!" text and particle effects on dashboard quit
 - **Database encryption** — SQLCipher encryption with `nigel password set/change/remove` commands; password prompted at launch, never persisted to disk
 - **Schema migration system** — sequential versioned migrations run automatically on startup with savepoint transactions
 - **Import enhancements** — `--dry-run` preview mode, malformed row tracking, generic CSV format auto-detection
@@ -37,6 +38,7 @@
 - BofA importers refactored to share parsing helpers
 
 ### Fixed
+- Splash screen no longer dissolves out before transitioning to dashboard — logo stays solid after reveal
 - BofA CSV parsing when cardholder names contain commas
 - Scroll-to-today bounds in short terminals
 - Report parameter panics on empty date filters
