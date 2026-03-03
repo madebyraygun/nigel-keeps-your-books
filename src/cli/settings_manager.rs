@@ -203,7 +203,16 @@ impl SettingsManager {
                     PasswordAction::Close => {
                         // Refresh encrypted status when returning from password manager
                         let db_path = get_data_dir().join("nigel.db");
-                        self.encrypted = db::is_encrypted(&db_path).unwrap_or(false);
+                        match db::is_encrypted(&db_path) {
+                            Ok(enc) => self.encrypted = enc,
+                            Err(e) => {
+                                // Preserve previous state rather than defaulting to false
+                                self.set_status(
+                                    format!("Could not verify encryption status: {e}"),
+                                    false,
+                                );
+                            }
+                        }
                         self.screen = Screen::Main;
                     }
                     PasswordAction::Continue => {}
@@ -233,7 +242,10 @@ impl SettingsManager {
                     MENU_PASSWORD => {
                         match PasswordManager::new(&self.greeting) {
                             Ok(mgr) => self.screen = Screen::Password(mgr),
-                            Err(e) => self.set_status(format!("Error: {e}"), false),
+                            Err(e) => self.set_status(
+                                format!("Could not open password settings: {e}"),
+                                false,
+                            ),
                         }
                     }
                     _ => {}
@@ -258,7 +270,10 @@ impl SettingsManager {
                         self.set_status("Business name saved.".into(), true);
                     }
                     Err(e) => {
-                        self.set_status(format!("Error saving: {e}"), false);
+                        self.set_status(
+                            format!("Could not save business name: {e}"),
+                            false,
+                        );
                     }
                 }
                 self.edit_buffer.clear();
@@ -407,5 +422,68 @@ mod tests {
         // Esc returns to main
         mgr.handle_key(KeyCode::Esc, &conn);
         assert!(matches!(mgr.screen, Screen::Main));
+    }
+
+    #[test]
+    fn edit_trims_whitespace() {
+        let (_dir, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+
+        mgr.handle_key(KeyCode::Enter, &conn);
+        for c in "  Acme LLC  ".chars() {
+            mgr.handle_key(KeyCode::Char(c), &conn);
+        }
+        mgr.handle_key(KeyCode::Enter, &conn);
+        assert_eq!(mgr.company_name, "Acme LLC");
+        assert_eq!(db::get_metadata(&conn, "company_name").unwrap(), "Acme LLC");
+    }
+
+    #[test]
+    fn edit_empty_name_saves() {
+        let (_dir, conn) = test_db();
+        db::set_metadata(&conn, "company_name", "Old Name").unwrap();
+        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+
+        // Enter edit, clear, save empty
+        mgr.handle_key(KeyCode::Enter, &conn);
+        // Buffer is pre-populated; clear it
+        for _ in 0..mgr.edit_buffer.len() {
+            mgr.handle_key(KeyCode::Backspace, &conn);
+        }
+        mgr.handle_key(KeyCode::Enter, &conn);
+        assert_eq!(mgr.company_name, "");
+    }
+
+    #[test]
+    fn edit_prepopulates_buffer() {
+        let (_dir, conn) = test_db();
+        db::set_metadata(&conn, "company_name", "Existing Corp").unwrap();
+        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+
+        mgr.handle_key(KeyCode::Enter, &conn);
+        assert!(matches!(mgr.screen, Screen::EditingName));
+        assert_eq!(mgr.edit_buffer, "Existing Corp");
+    }
+
+    #[test]
+    fn status_message_ttl() {
+        let (_dir, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+
+        // Save a name to trigger status message
+        mgr.handle_key(KeyCode::Enter, &conn);
+        for c in "Test".chars() {
+            mgr.handle_key(KeyCode::Char(c), &conn);
+        }
+        mgr.handle_key(KeyCode::Enter, &conn);
+        assert!(mgr.status_message.is_some());
+
+        // 3 more keypresses should keep status alive (TTL decrements from 3)
+        mgr.handle_key(KeyCode::Down, &conn); // tick 3->2
+        assert!(mgr.status_message.is_some());
+        mgr.handle_key(KeyCode::Up, &conn); // tick 2->1
+        assert!(mgr.status_message.is_some());
+        mgr.handle_key(KeyCode::Down, &conn); // tick 1->0, cleared
+        assert!(mgr.status_message.is_none());
     }
 }
