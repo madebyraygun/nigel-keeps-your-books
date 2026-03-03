@@ -617,7 +617,7 @@ impl RegisterBrowser {
             self.offset = row_idx.saturating_sub(self.visible_count / 2);
             let max_offset = self.rows.len().saturating_sub(self.visible_count);
             self.offset = self.offset.min(max_offset);
-            self.selected = row_idx - self.offset;
+            self.selected = row_idx.saturating_sub(self.offset);
         }
     }
 
@@ -1505,5 +1505,40 @@ mod tests {
 
         browser.handle_key_event(KeyCode::Char('i'));
         assert!(matches!(browser.mode, BrowseMode::FindId(_)));
+    }
+
+    #[test]
+    fn test_scroll_to_row_centers_offscreen_match() {
+        let rows = make_rows(50);
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        browser.visible_count = 20;
+
+        browser.scroll_to_row(40);
+        assert_eq!(browser.offset, 30); // 40 - 20/2 = 30
+        assert_eq!(browser.selected, 10); // 40 - 30 = 10
+    }
+
+    #[test]
+    fn test_scroll_to_row_visible_row_moves_selection() {
+        let rows = make_rows(50);
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        browser.visible_count = 20;
+        browser.offset = 0;
+
+        browser.scroll_to_row(5);
+        assert_eq!(browser.offset, 0);
+        assert_eq!(browser.selected, 5);
+    }
+
+    #[test]
+    fn test_scroll_to_row_clamps_near_end() {
+        let rows = make_rows(50);
+        let mut browser = RegisterBrowser::new(rows, 0.0, String::new(), vec![]);
+        browser.visible_count = 20;
+
+        // Row 48: centering would want offset=38 but max is 30
+        browser.scroll_to_row(48);
+        assert_eq!(browser.offset, 30); // clamped to 50-20
+        assert_eq!(browser.selected, 18); // 48-30
     }
 }
