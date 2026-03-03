@@ -133,6 +133,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: PasswordCommand,
     },
+    /// Generate shell completions script.
+    Completions {
+        /// Shell: bash, zsh, fish, powershell
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -163,6 +168,18 @@ pub enum AccountsCommands {
     },
     /// List all accounts.
     List,
+    /// Rename an account by ID.
+    Rename {
+        /// Account ID
+        id: i64,
+        /// New name
+        name: String,
+    },
+    /// Delete an account by ID (blocked if account has transactions).
+    Delete {
+        /// Account ID
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -258,6 +275,14 @@ pub enum RulesCommands {
     Delete {
         /// Rule ID (shown in `nigel rules list`)
         id: i64,
+    },
+    /// Test a pattern against existing transactions without creating a rule.
+    Test {
+        /// Pattern to match against transaction descriptions
+        pattern: String,
+        /// Match type: contains, starts_with, regex
+        #[arg(long = "match-type", default_value = "contains")]
+        match_type: String,
     },
 }
 

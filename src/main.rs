@@ -16,7 +16,7 @@ mod reviewer;
 mod settings;
 mod tui;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use cli::{
     AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
@@ -48,7 +48,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
     if !matches!(
         command,
-        Commands::Init { .. } | Commands::Demo | Commands::Password { .. }
+        Commands::Init { .. } | Commands::Demo | Commands::Password { .. } | Commands::Completions { .. }
     ) {
         let data_dir = crate::settings::get_data_dir();
         let db_path = data_dir.join("nigel.db");
@@ -72,6 +72,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 last_four.as_deref(),
             ),
             AccountsCommands::List => cli::accounts::list(),
+            AccountsCommands::Rename { id, name } => cli::accounts::rename(id, &name),
+            AccountsCommands::Delete { id } => cli::accounts::delete(id),
         },
         Commands::Categories { command } => match command {
             CategoriesCommands::List => cli::categories::list(),
@@ -133,6 +135,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 priority,
             } => cli::rules::update(id, pattern, category, vendor, match_type, priority),
             RulesCommands::Delete { id } => cli::rules::delete(id),
+            RulesCommands::Test { pattern, match_type } => cli::rules::test(&pattern, &match_type),
         },
         Commands::Review { id } => cli::review::run(id),
         Commands::Report { command } => cli::report::dispatch(command),
@@ -158,5 +161,14 @@ fn dispatch(command: Commands) -> error::Result<()> {
             PasswordCommand::Change => cli::password::run_change(),
             PasswordCommand::Remove => cli::password::run_remove(),
         },
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut cli::Cli::command(),
+                "nigel",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
     }
 }
