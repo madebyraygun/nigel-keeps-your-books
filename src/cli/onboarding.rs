@@ -74,6 +74,8 @@ struct Onboarding {
     confirm_password: String,
     confirm_cursor: usize,
     confirm_mismatch: bool,
+    #[cfg(feature = "totp")]
+    totp_opted_in: bool,
     active_field: usize,
     cursor_pos: usize,
     action_selection: usize,
@@ -109,6 +111,8 @@ impl Onboarding {
             confirm_password: String::new(),
             confirm_cursor: 0,
             confirm_mismatch: false,
+            #[cfg(feature = "totp")]
+            totp_opted_in: false,
             active_field: 0,
             cursor_pos: 0,
             action_selection: 0,
@@ -352,7 +356,11 @@ impl Onboarding {
     fn draw_confirm_password(&self, frame: &mut Frame, area: Rect) {
         let logo_height = LOGO.len() as u16;
         let error_height = if self.confirm_mismatch { 1 } else { 0 };
-        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, field_area, error_area, _gap3, hints_area, _bottom_pad, version_area] =
+        #[cfg(feature = "totp")]
+        let totp_height = 2u16; // gap + checkbox
+        #[cfg(not(feature = "totp"))]
+        let totp_height = 0u16;
+        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, field_area, error_area, totp_area, _gap3, hints_area, _bottom_pad, version_area] =
             Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(logo_height),
@@ -361,6 +369,7 @@ impl Onboarding {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(error_height),
+                Constraint::Length(totp_height),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Fill(1),
@@ -413,8 +422,24 @@ impl Onboarding {
             );
         }
 
+        #[cfg(feature = "totp")]
+        {
+            let [_totp_gap, checkbox_area] =
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(totp_area);
+            let centered_checkbox =
+                Rect::new(form_x, checkbox_area.y, form_width, checkbox_area.height);
+            let check = if self.totp_opted_in { "x" } else { " " };
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    format!("[{check}] Enable two-factor authentication"),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                centered_checkbox,
+            );
+        }
+
         frame.render_widget(
-            Paragraph::new(" Enter=confirm  Esc=back")
+            Paragraph::new(" Enter=confirm  Tab=toggle 2FA  Esc=back")
                 .style(FOOTER_STYLE)
                 .alignment(ratatui::layout::Alignment::Center),
             hints_area,
@@ -557,6 +582,10 @@ impl Onboarding {
                 self.confirm_password.zeroize();
                 self.confirm_cursor = 0;
             }
+            #[cfg(feature = "totp")]
+            KeyCode::Tab => {
+                self.totp_opted_in = !self.totp_opted_in;
+            }
             KeyCode::Esc => {
                 self.confirm_password.zeroize();
                 self.confirm_cursor = 0;
@@ -671,15 +700,15 @@ impl Onboarding {
     #[cfg(feature = "totp")]
     fn draw_recovery_codes(&self, frame: &mut Frame, area: Rect) {
         let logo_height = LOGO.len() as u16;
-        let code_count = self.recovery_codes.len() as u16;
+        let rows = (self.recovery_codes.len() as u16).div_ceil(2); // two columns
         let [_top_pad, logo_area, _gap1, title_area, _gap2, codes_area, _gap3, inst_area, _gap4, hints_area, _bottom_pad, version_area] =
             Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(logo_height),
                 Constraint::Length(1),
+                Constraint::Length(2),
                 Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(code_count),
+                Constraint::Length(rows),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
@@ -692,25 +721,41 @@ impl Onboarding {
         effects::render_logo(self.phase, frame, logo_area);
 
         frame.render_widget(
-            Paragraph::new(Span::styled("Save these recovery codes", HEADER_STYLE))
-                .alignment(ratatui::layout::Alignment::Center),
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "Save these recovery codes in case you lose access to",
+                    HEADER_STYLE,
+                )),
+                Line::from(Span::styled(
+                    "your authenticator app. They will not be displayed again.",
+                    HEADER_STYLE,
+                )),
+            ])
+            .alignment(ratatui::layout::Alignment::Center),
             title_area,
         );
 
         let form_width = 50u16.min(area.width.saturating_sub(4));
         let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
-        let codes_rect = Rect::new(form_x, codes_area.y, form_width, code_count);
+        let codes_rect = Rect::new(form_x, codes_area.y, form_width, rows);
 
+        let code_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
         let code_lines: Vec<Line> = self
             .recovery_codes
-            .iter()
-            .map(|c| {
-                Line::from(Span::styled(
-                    format!("  {c}"),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
+            .chunks(2)
+            .map(|pair| {
+                let left = format!("  {:<14}", pair[0]);
+                let right = if pair.len() > 1 {
+                    pair[1].to_string()
+                } else {
+                    String::new()
+                };
+                Line::from(vec![
+                    Span::styled(left, code_style),
+                    Span::styled(right, code_style),
+                ])
             })
             .collect();
         frame.render_widget(Paragraph::new(code_lines), codes_rect);
@@ -921,7 +966,12 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                             }
                             Screen::ConfirmPassword => {
                                 #[cfg(feature = "totp")]
-                                {
+                                let go_to_totp = onboarding.totp_opted_in;
+                                #[cfg(not(feature = "totp"))]
+                                let go_to_totp = false;
+
+                                if go_to_totp {
+                                    #[cfg(feature = "totp")]
                                     match crate::totp::generate_secret(
                                         "Nigel",
                                         &onboarding.company_name,
@@ -937,9 +987,7 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                             onboarding.screen = Screen::ActionPicker;
                                         }
                                     }
-                                }
-                                #[cfg(not(feature = "totp"))]
-                                {
+                                } else {
                                     onboarding.screen = Screen::ActionPicker;
                                 }
                             }
@@ -1010,6 +1058,8 @@ mod tests {
             confirm_password: String::new(),
             confirm_cursor: 0,
             confirm_mismatch: false,
+            #[cfg(feature = "totp")]
+            totp_opted_in: false,
             active_field: 0,
             cursor_pos: 0,
             action_selection: 0,

@@ -415,49 +415,59 @@ impl PasswordManager {
 
     #[cfg(feature = "totp")]
     fn draw_recovery_codes(&self, frame: &mut Frame, area: Rect, codes: &[String]) {
-        let lines_needed = 2 + codes.len() as u16 + 1; // title + gap + codes + instruction
-        let constraints: Vec<Constraint> =
-            std::iter::once(Constraint::Length(1)) // title
-                .chain(std::iter::once(Constraint::Length(1))) // gap
-                .chain((0..codes.len()).map(|_| Constraint::Length(1)))
-                .chain(std::iter::once(Constraint::Length(1))) // gap
-                .chain(std::iter::once(Constraint::Length(1))) // instruction
-                .chain(std::iter::once(Constraint::Fill(1)))
-                .collect();
-        let _ = lines_needed;
+        let rows = (codes.len() as u16).div_ceil(2); // two columns
+        let constraints: Vec<Constraint> = vec![
+            Constraint::Length(2), // title (two lines)
+            Constraint::Length(1), // gap
+            Constraint::Length(rows),
+            Constraint::Length(1), // gap
+            Constraint::Length(1), // instruction
+            Constraint::Fill(1),
+        ];
 
         let areas = Layout::vertical(constraints).split(area);
 
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "Save these recovery codes:",
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "Save these recovery codes in case you lose access to",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "your authenticator app. They will not be displayed again.",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+            ]),
             areas[0],
         );
 
-        for (i, code) in codes.iter().enumerate() {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    format!("  {code}"),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                areas[2 + i],
-            );
-        }
+        let code_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let code_lines: Vec<Line> = codes
+            .chunks(2)
+            .map(|pair| {
+                let left = format!("  {:<14}", pair[0]);
+                let right = if pair.len() > 1 {
+                    pair[1].to_string()
+                } else {
+                    String::new()
+                };
+                Line::from(vec![
+                    Span::styled(left, code_style),
+                    Span::styled(right, code_style),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(code_lines), areas[2]);
 
-        let inst_idx = 2 + codes.len() + 1;
-        if inst_idx < areas.len() {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    "Each code can only be used once.",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                areas[inst_idx],
-            );
-        }
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Each code can only be used once.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            areas[4],
+        );
     }
 
     #[cfg(feature = "totp")]

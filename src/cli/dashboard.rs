@@ -989,7 +989,18 @@ pub fn run() -> Result<()> {
     let backups_dir = data_dir.join("backups");
     std::fs::create_dir_all(&backups_dir)?;
     crate::settings::restrict_dir_permissions(&backups_dir)?;
-    let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
+    let db_path = data_dir.join("nigel.db");
+
+    // If DB already exists unencrypted but user set a password during onboarding,
+    // open without password first, init, then encrypt afterwards.
+    let onboarding_pw = crate::db::get_db_password();
+    let needs_post_encrypt =
+        onboarding_pw.is_some() && db_path.exists() && !crate::db::is_encrypted(&db_path)?;
+    if needs_post_encrypt {
+        crate::db::set_db_password(None);
+    }
+
+    let conn = crate::db::get_connection(&db_path)?;
     crate::db::init_db(&conn)?;
 
     // Save company_name from onboarding to DB metadata
@@ -997,10 +1008,20 @@ pub fn run() -> Result<()> {
         crate::db::set_metadata(&conn, "company_name", &company)?;
     }
 
+    // Encrypt existing unencrypted DB with the onboarding password
+    let conn = if needs_post_encrypt {
+        drop(conn);
+        let pw = onboarding_pw.as_ref().unwrap();
+        super::password::encrypt_database(&db_path, pw)?;
+        crate::db::set_db_password(Some(pw.clone()));
+        crate::db::get_connection(&db_path)?
+    } else {
+        conn
+    };
+
     // Store TOTP secret from onboarding in OS keychain
     #[cfg(feature = "totp")]
     if let Some(ref secret) = onboarding_totp_secret {
-        let db_path = data_dir.join("nigel.db");
         crate::totp::enable(&conn, &db_path, secret)?;
         if let Some(ref json) = onboarding_recovery_json {
             crate::totp::store_recovery_codes(&conn, json)?;
