@@ -561,6 +561,7 @@ h2 {
 /* Download */
 .download {
     text-align: center;
+    margin-inline: auto;
 }
 .download-options {
     display: flex;
