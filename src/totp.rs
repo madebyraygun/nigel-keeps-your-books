@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use std::path::Path;
+use zeroize::Zeroize;
 
 use crate::db;
 use crate::error::Result;
@@ -109,20 +110,24 @@ pub fn prompt_totp_if_needed(db_path: &Path) -> Result<()> {
     if !is_enabled(&conn) {
         return Ok(());
     }
-    let secret = get_secret(db_path)?;
-    for attempt in 1..=3 {
-        let code = rpassword::prompt_password("Authenticator code: ")
-            .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
-        if verify_code(&secret, code.trim()) {
-            return Ok(());
+    let mut secret = get_secret(db_path)?;
+    let result = (|| {
+        for attempt in 1..=3 {
+            let code = rpassword::prompt_password("Authenticator code: ")
+                .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+            if verify_code(&secret, code.trim()) {
+                return Ok(());
+            }
+            if attempt < 3 {
+                eprintln!("Invalid code. Try again ({attempt}/3).");
+            }
         }
-        if attempt < 3 {
-            eprintln!("Invalid code. Try again ({attempt}/3).");
-        }
-    }
-    Err(crate::error::NigelError::Other(
-        "Failed TOTP verification after 3 attempts.".into(),
-    ))
+        Err(crate::error::NigelError::Other(
+            "Failed TOTP verification after 3 attempts.".into(),
+        ))
+    })();
+    secret.zeroize();
+    result
 }
 
 #[cfg(test)]

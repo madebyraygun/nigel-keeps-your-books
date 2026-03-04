@@ -187,6 +187,14 @@ impl PasswordManager {
     }
 
     fn do_remove(&self, db_path: &std::path::Path) -> std::result::Result<String, String> {
+        #[cfg(feature = "totp")]
+        {
+            if let Ok(conn) = db::open_connection(db_path, Some(self.current_pw.trim())) {
+                if crate::totp::is_enabled(&conn) {
+                    let _ = crate::totp::disable(&conn, db_path);
+                }
+            }
+        }
         super::password::decrypt_database(db_path, self.current_pw.trim())
             .map_err(|e| e.to_string())?;
         db::set_db_password(None);

@@ -1,5 +1,8 @@
 use std::path::Path;
 
+#[cfg(feature = "totp")]
+use zeroize::Zeroize;
+
 use crate::db::{is_encrypted, open_connection, set_db_password};
 use crate::error::Result;
 use crate::settings::get_data_dir;
@@ -116,6 +119,13 @@ pub fn run_remove() -> Result<()> {
         return Ok(());
     }
     let current_pw = prompt("Current password: ")?;
+    #[cfg(feature = "totp")]
+    {
+        let conn = crate::db::open_connection(&db_path, Some(current_pw.trim()))?;
+        if crate::totp::is_enabled(&conn) {
+            let _ = crate::totp::disable(&conn, &db_path);
+        }
+    }
     decrypt_database(&db_path, current_pw.trim())?;
     set_db_password(None);
     println!("Database decrypted successfully. Password removed.");
@@ -136,17 +146,19 @@ pub fn run_totp_enable() -> Result<()> {
         return Ok(());
     }
     let company = crate::db::get_metadata(&conn, "company_name").unwrap_or_else(|| "Nigel".to_string());
-    let (base32, _uri) = crate::totp::generate_secret(&company, "database")?;
+    let (mut base32, _uri) = crate::totp::generate_secret(&company, "database")?;
     println!("\nTOTP Secret (add to your authenticator app):\n");
     println!("  {base32}\n");
     println!("Enter the 6-digit code from your authenticator to verify:");
     let code = rpassword::prompt_password("Code: ")
         .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
     if !crate::totp::verify_code(&base32, code.trim()) {
+        base32.zeroize();
         eprintln!("Invalid code. 2FA was not enabled.");
         return Ok(());
     }
     crate::totp::enable(&conn, &db_path, &base32)?;
+    base32.zeroize();
     println!("Two-factor authentication enabled.");
     Ok(())
 }

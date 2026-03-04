@@ -231,23 +231,21 @@ impl Splash {
                     crate::db::set_db_password(Some(self.password.clone()));
                     #[cfg(feature = "totp")]
                     {
-                        if let Some(ref db_path) = self.db_path {
-                            if let Ok(conn) = crate::db::get_connection(db_path) {
-                                if crate::totp::is_enabled(&conn) {
-                                    match crate::totp::get_secret(db_path) {
-                                        Ok(secret) => {
-                                            self.totp_mode = true;
-                                            self.totp_secret = Some(secret);
-                                            self.error_msg = None;
-                                            return Ok(false); // Don't close — need TOTP
-                                        }
-                                        Err(_) => {
-                                            self.error_msg = Some(
-                                                "Could not read TOTP secret from keychain.".into(),
-                                            );
-                                            crate::db::set_db_password(None);
-                                            return Ok(false);
-                                        }
+                        if let Ok(conn) = crate::db::get_connection(db_path) {
+                            if crate::totp::is_enabled(&conn) {
+                                match crate::totp::get_secret(db_path) {
+                                    Ok(secret) => {
+                                        self.totp_mode = true;
+                                        self.totp_secret = Some(secret);
+                                        self.error_msg = None;
+                                        return Ok(false); // Don't close — need TOTP
+                                    }
+                                    Err(_) => {
+                                        self.error_msg = Some(
+                                            "Could not read TOTP secret from keychain.".into(),
+                                        );
+                                        crate::db::set_db_password(None);
+                                        return Ok(false);
                                     }
                                 }
                             }
