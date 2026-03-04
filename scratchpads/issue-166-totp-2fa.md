@@ -6,8 +6,8 @@
 
 ## Tasks
 
-- [ ] 1. Add `totp-rs` dependency and `totp` feature flag to Cargo.toml
-- [ ] 2. Create `src/totp.rs` module with core TOTP logic
+- [ ] 1. Add `totp-rs` and `keyring` dependencies, `totp` feature flag to Cargo.toml
+- [ ] 2. Create `src/totp.rs` module with core TOTP logic + keychain storage
 - [ ] 3. Wire up `mod totp` in `main.rs`
 - [ ] 4. Add `TotpEnable`/`TotpDisable` CLI subcommands (`cli/mod.rs`, `cli/password.rs`)
 - [ ] 5. Extend `prompt_password_if_needed()` in `db.rs` to prompt for TOTP
@@ -21,7 +21,8 @@
 
 ## Notes
 
-- TOTP secret stored in `metadata` table (no migration needed)
+- TOTP secret stored in OS keychain via `keyring` crate (true second factor)
+- `totp_enabled` flag stored in `metadata` table (signals TOTP is required)
 - Feature gated behind `totp` cargo feature flag
-- No recovery mechanism — restore from backup if authenticator lost
-- App-level convenience lock, not cryptographic second factor
+- No recovery mechanism — device-bound, restore from backup if authenticator lost
+- Cross-platform: macOS Keychain, Windows Credential Store, Linux keyutils/Secret Service
