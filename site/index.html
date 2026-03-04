@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Nigel — Bookkeeping for normal people</title>
+        <meta
+            name="description"
+            content="Nigel is an open-source terminal-based bookkeeping tool for freelancers and small consultancies. Import bank statements, auto-categorize, and generate reports."
+        />
+        <meta
+            property="og:title"
+            content="Nigel — Bookkeeping for normal people"
+        />
+        <meta
+            property="og:description"
+            content="An open-source bookkeeping application with a beautifully simple local workflow. Import, categorize, report."
+        />
+        <meta
+            property="og:image"
+            content="https://nigel.rygn.io/social-card.png"
+        />
+        <meta property="og:url" content="https://nigel.rygn.io" />
+        <meta property="og:type" content="website" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <link rel="stylesheet" href="styles.css" />
+    </head>
+    <body>
+        <div class="content-wrapper">
+            <!-- ===== HERO ===== -->
+            <section class="hero">
+                <div class="logo-container" aria-hidden="true">
+                    <pre id="ascii-logo"></pre>
+                </div>
+
+                <div class="tagline hero-reveal">
+                    Bookkeeping for <em>normal people</em>.
+                </div>
+                <div class="sub-tagline hero-reveal">
+                    An open-source bookkeeping application with a beautifully
+                    simple and lightning-fast local workflow. Escape from
+                    financial surveillance and subscription fees with exactly
+                    the features and reports you need to run your business.
+                    Nigel comes with an easy-to-use dashboard and a fully
+                    scriptable CLI.
+                </div>
+
+                <div class="hero-cta hero-reveal">
+                    <a href="#download" class="btn btn-primary"
+                        >&#8595; Download v1.0</a
+                    >
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books"
+                        class="btn btn-secondary"
+                        >View on GitHub</a
+                    >
+                </div>
+
+                <div class="scroll-hint hero-reveal">
+                    &#8595; scroll &#8595;
+                </div>
+            </section>
+
+            <!-- ===== DASHBOARD PREVIEW ===== -->
+            <section class="dashboard-preview reveal">
+                <div class="section-label">dashboard</div>
+                <h2>See the big picture.</h2>
+                <div class="screenshot-window">
+                    <div class="window-chrome">
+                        <div class="window-dot red"></div>
+                        <div class="window-dot yellow"></div>
+                        <div class="window-dot green"></div>
+                        <span class="window-title">default (nigel)</span>
+                    </div>
+                    <img src="dashboard.png" alt="Nigel dashboard screenshot" />
+                    <div class="window-content window-content--caption">
+                        <div class="window-caption">Nigel's Dashboard</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== PITCH ===== -->
+            <section class="pitch reveal">
+                <div class="section-label">about</div>
+                <h2>A reliable bloke who does his job well.</h2>
+                <div class="pitch-text">
+                    <p>
+                        Nigel is a terminal-based bookkeeping tool built for
+                        freelancers and small consultancies. Import your bank
+                        statements, auto-categorize transactions with simple
+                        rules, review flagged transactions, and instantly
+                        generate the reports you actually need &mdash;
+                        <span class="highlight"
+                            >P&amp;L, expenses, tax summaries, cash flow</span
+                        >.
+                    </p>
+                    <p>
+                        No cloud. No subscription. No 47-step setup wizard. Just
+                        a single password-protected database file, your
+                        transactions, and a bloke named Nigel who gets things
+                        done.
+                    </p>
+                </div>
+            </section>
+
+            <!-- ===== FEATURES ===== -->
+            <section class="features reveal">
+                <div class="section-label">features</div>
+                <h2>Everything you need. Nothing you don't.</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128229;</span>
+                        <h3>Bank imports</h3>
+                        <p>
+                            CSV and XLSX with format auto-detection. Drop your
+                            statement in, Nigel figures out the rest.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#127991;&#65039;</span>
+                        <h3>Rules engine</h3>
+                        <p>
+                            Pattern-based auto-categorization. Contains,
+                            starts_with, regex &mdash; with priority ordering.
+                            Teach Nigel once, he remembers.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128269;</span>
+                        <h3>Interactive review</h3>
+                        <p>
+                            Step through flagged transactions one by one. Assign
+                            categories, create rules on the fly. No surprises at
+                            tax time.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128202;</span>
+                        <h3>Reports</h3>
+                        <p>
+                            P&amp;L, expense breakdown, tax summary (Schedule C
+                            / 1120-S), cash flow, and cash balance. Export to
+                            PDF.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128268;</span>
+                        <h3>Modular design</h3>
+                        <p>
+                            Importers, reports, and exports are all modular.
+                            Built-in support for multiple banks, report types,
+                            and output formats.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128452;&#65039;</span>
+                        <h3>Local-first</h3>
+                        <p>
+                            Single SQLite file. No server, no account, no
+                            cloud sync. Your books stay on your machine.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128272;</span>
+                        <h3>Encryption &amp; 2FA</h3>
+                        <p>
+                            SQLCipher database encryption with optional TOTP
+                            two-factor authentication. Your financial data is
+                            locked down tight.
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <span class="feature-icon">&#128013;</span>
+                        <h3>Snake</h3>
+                        <p>
+                            Everyone needs a break from charts from time to
+                            time.
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== SCREENSHOTS ===== -->
+            <section class="screenshots reveal">
+                <div class="section-label">see it</div>
+                <h2>Nigel in action.</h2>
+                <div class="screenshot-container">
+                    <div class="screenshot-tabs" role="tablist">
+                        <button
+                            class="screenshot-tab active"
+                            data-tab="import"
+                            role="tab"
+                            aria-selected="true"
+                            aria-controls="panel-import"
+                        >
+                            import
+                        </button>
+                        <button
+                            class="screenshot-tab"
+                            data-tab="review"
+                            role="tab"
+                            aria-selected="false"
+                            aria-controls="panel-review"
+                        >
+                            review
+                        </button>
+                        <button
+                            class="screenshot-tab"
+                            data-tab="report"
+                            role="tab"
+                            aria-selected="false"
+                            aria-controls="panel-report"
+                        >
+                            report
+                        </button>
+                        <button
+                            class="screenshot-tab"
+                            data-tab="rules"
+                            role="tab"
+                            aria-selected="false"
+                            aria-controls="panel-rules"
+                        >
+                            rules
+                        </button>
+                    </div>
+                    <div class="screenshot-window">
+                        <div class="window-chrome">
+                            <div class="window-dot red"></div>
+                            <div class="window-dot yellow"></div>
+                            <div class="window-dot green"></div>
+                            <span class="window-title">default (nigel)</span>
+                        </div>
+                        <div class="window-content">
+                            <div
+                                class="screenshot-panel active"
+                                id="panel-import"
+                                role="tabpanel"
+                                aria-labelledby="tab-import"
+                            >
+                                <div class="terminal-line">
+                                    <span class="prompt">&#10095;</span>
+                                    <span class="cmd"
+                                        >nigel import bofa-march-2025.csv
+                                        --account "BofA Checking"</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Detected format: Bank of America
+                                        Checking (CSV)</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Parsing transactions...</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="success">
+                                        &#10003; 47 transactions imported</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        &#9500;&#9472;&#9472; 38
+                                        auto-categorized via rules</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="flag">
+                                        &#9500;&#9472;&#9472; 6 flagged for
+                                        review</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim">
+                                        &#9492;&#9472;&#9472; 3 duplicates
+                                        skipped</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="output"> Run </span
+                                    ><span class="cmd">nigel review</span
+                                    ><span class="output">
+                                        to categorize flagged
+                                        transactions.</span
+                                    >
+                                </div>
+                            </div>
+                            <div
+                                class="screenshot-panel"
+                                id="panel-review"
+                                role="tabpanel"
+                                aria-labelledby="tab-review"
+                            >
+                                <div class="terminal-line">
+                                    <span class="prompt">&#10095;</span>
+                                    <span class="cmd">nigel review</span>
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="header-line">
+                                        ── Transaction 1 of 6
+                                        ──────────────────────────</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Date: 2025-03-14</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Desc: TRANSFERWISE LTD</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="amount-neg">
+                                        Amount: -$2,400.00</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Account: BofA Checking</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="flag"> ? Category: </span
+                                    ><span class="category">Contract Labor</span
+                                    ><span class="cursor"></span>
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="dim">
+                                        &#8593;&#8595; browse &#9166; select r
+                                        create rule s skip q quit</span
+                                    >
+                                </div>
+                            </div>
+                            <div
+                                class="screenshot-panel"
+                                id="panel-report"
+                                role="tabpanel"
+                                aria-labelledby="tab-report"
+                            >
+                                <div class="terminal-line">
+                                    <span class="prompt">&#10095;</span>
+                                    <span class="cmd"
+                                        >nigel report pnl --month 2025-03</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="header-line">
+                                        ══════════════════════════════════════════════════</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="header-line">
+                                        PROFIT &amp; LOSS — March 2025</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="header-line">
+                                        ══════════════════════════════════════════════════</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="output"> INCOME</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Consulting Revenue </span
+                                    ><span class="amount-pos"> $28,500.00</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output"> Hosting Revenue </span
+                                    ><span class="amount-pos"> $1,200.00</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="divider"> ──────────────</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output"> Total Income </span
+                                    ><span class="amount-pos"> $29,700.00</span>
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="output"> EXPENSES</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output"> Contract Labor </span
+                                    ><span class="amount-neg">
+                                        ($4,800.00)</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Software &amp; Subscriptions </span
+                                    ><span class="amount-neg"> ($847.00)</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output">
+                                        Server &amp; Infrastructure </span
+                                    ><span class="amount-neg"> ($312.00)</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output"> Office Supplies </span
+                                    ><span class="amount-neg"> ($156.23)</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="divider"> ──────────────</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output"> Total Expenses </span
+                                    ><span class="amount-neg">
+                                        ($6,115.23)</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="divider"> ══════════════</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="output"> NET PROFIT </span
+                                    ><span class="amount-pos"> $23,584.77</span>
+                                </div>
+                            </div>
+                            <div
+                                class="screenshot-panel"
+                                id="panel-rules"
+                                role="tabpanel"
+                                aria-labelledby="tab-rules"
+                            >
+                                <div class="terminal-line">
+                                    <span class="prompt">&#10095;</span>
+                                    <span class="cmd">nigel rules list</span>
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="header-line">
+                                        ── Categorization Rules
+                                        ──────────────────────────</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="dim"> # </span
+                                    ><span class="output"
+                                        >Pattern Type Category</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="divider">
+                                        ── ──────────────────── ──────────
+                                        ──────────────────────</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim"> 1 </span
+                                    ><span class="output">ADOBE contains </span
+                                    ><span class="category"
+                                        >Software &amp; Subscriptions</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim"> 2 </span
+                                    ><span class="output">GITHUB contains </span
+                                    ><span class="category"
+                                        >Software &amp; Subscriptions</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim"> 3 </span
+                                    ><span class="output"
+                                        >HETZNER contains </span
+                                    ><span class="category"
+                                        >Server &amp; Infrastructure</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim"> 4 </span
+                                    ><span class="output"
+                                        >TRANSFERWISE contains </span
+                                    ><span class="category"
+                                        >Contract Labor</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim"> 5 </span
+                                    ><span class="output"
+                                        >GUSTO.*PAYROLL regex </span
+                                    ><span class="category">Payroll</span>
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="dim"> 6 </span
+                                    ><span class="output"
+                                        >CHECK DEPOSIT starts_with</span
+                                    ><span class="category"> Income</span>
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="dim">
+                                        6 rules · 94% auto-categorization
+                                        rate</span
+                                    >
+                                </div>
+                                <div class="terminal-line"></div>
+                                <div class="terminal-line">
+                                    <span class="prompt">&#10095;</span>
+                                    <span class="cmd"
+                                        >nigel rules add "CLOUDFLARE" --category
+                                        "Server &amp; Infrastructure"</span
+                                    >
+                                </div>
+                                <div class="terminal-line">
+                                    <span class="success">
+                                        &#10003; Rule added: CLOUDFLARE &#8594;
+                                        Server &amp; Infrastructure</span
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== HOW IT WORKS ===== -->
+            <section class="how-it-works reveal">
+                <div class="section-label">workflow</div>
+                <h2>Three commands. That's the whole workflow.</h2>
+                <div class="steps">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <div>
+                            <h3>Import your bank statements</h3>
+                            <p>
+                                Download a CSV from your bank. Nigel
+                                auto-detects the format and imports your
+                                transactions.
+                            </p>
+                            <code
+                                >nigel import statement.csv --account "BofA
+                                Checking"</code
+                            >
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <div>
+                            <h3>Review the flagged ones</h3>
+                            <p>
+                                Most transactions get categorized automatically
+                                by your rules. Walk through anything Nigel isn't
+                                sure about.
+                            </p>
+                            <code>nigel review</code>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <div>
+                            <h3>Run your reports</h3>
+                            <p>
+                                P&amp;L, expenses, tax prep, cash flow. Export
+                                to PDF when your accountant asks for them.
+                            </p>
+                            <code>nigel report pnl --year 2025</code>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== BUILT-IN FEATURES ===== -->
+            <section class="plugins reveal">
+                <div class="section-label">built-in</div>
+                <h2>Batteries included.</h2>
+                <p class="section-intro">
+                    Nigel ships with importers, reports, and export formats
+                    ready to go. Plus a generic CSV importer for any bank.
+                </p>
+                <div class="plugin-grid">
+                    <div class="plugin-card">
+                        <div class="plugin-type">importer</div>
+                        <div class="plugin-name">Bank of America</div>
+                        <div class="plugin-desc">
+                            Checking, credit card, and line of credit CSV
+                            formats
+                        </div>
+                    </div>
+                    <div class="plugin-card">
+                        <div class="plugin-type">importer</div>
+                        <div class="plugin-name">Gusto Payroll</div>
+                        <div class="plugin-desc">
+                            XLSX payroll imports with auto-categorization
+                        </div>
+                    </div>
+                    <div class="plugin-card">
+                        <div class="plugin-type">importer</div>
+                        <div class="plugin-name">Generic CSV</div>
+                        <div class="plugin-desc">
+                            Custom column mappings for any bank. Save as
+                            reusable profiles.
+                        </div>
+                    </div>
+                    <div class="plugin-card">
+                        <div class="plugin-type">report</div>
+                        <div class="plugin-name">K-1 Prep</div>
+                        <div class="plugin-desc">
+                            K-1 prep worksheet for 1120-S / Schedule K
+                        </div>
+                    </div>
+                    <div class="plugin-card">
+                        <div class="plugin-type">export</div>
+                        <div class="plugin-name">PDF Export</div>
+                        <div class="plugin-desc">
+                            Print-ready PDF export for any report
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== AI WORKFLOWS ===== -->
+            <section class="ai-workflows reveal">
+                <div class="section-label">automate</div>
+                <h2>Automation-ready by design.</h2>
+                <div class="pitch-text">
+                    <p>
+                        Nigel contains no AI features, but every command is
+                        fully scriptable via CLI, which means it plays
+                        beautifully with AI agents and automation tools.
+                    </p>
+                    <p>
+                        The repo includes
+                        <span class="highlight">Claude Code skills</span> for
+                        adding new importers and intelligently creating
+                        categorization rules from your statements. With a tool
+                        like Claude Cowork, point it at a CSV and say:
+                    </p>
+                </div>
+                <div class="ai-demo">
+                    <div class="screenshot-window screenshot-window--narrow">
+                        <div class="window-chrome">
+                            <div class="window-dot red"></div>
+                            <div class="window-dot yellow"></div>
+                            <div class="window-dot green"></div>
+                            <span class="window-title">cowork</span>
+                        </div>
+                        <div class="window-content window-content--compact">
+                            <div class="terminal-line">
+                                <span class="flag"
+                                    >"Import my latest statements into Nigel and
+                                    generate my monthly P&amp;L"</span
+                                >
+                            </div>
+                            <div class="terminal-line">
+                                <span class="flag"
+                                    >"Create a list of categorization rules for
+                                    new accounts in this statement."</span
+                                >
+                            </div>
+                            <div class="terminal-line"></div>
+                            <div class="terminal-line">
+                                <span class="flag"
+                                    >"Generate a Schedule K-1 prep report for
+                                    2025"</span
+                                >
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== DOWNLOAD ===== -->
+            <section class="download reveal" id="download">
+                <div class="section-label">install</div>
+                <h2>Get Nigel.</h2>
+                <p class="section-intro">
+                    No dependencies, download a native binary for your platform:
+                </p>
+                <div class="download-options">
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books/releases/latest"
+                        class="download-card"
+                    >
+                        <div class="os">&#127822;</div>
+                        <div class="os-name">macOS</div>
+                        <div class="os-detail">Apple Silicon &amp; Intel</div>
+                    </a>
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books/releases/latest"
+                        class="download-card"
+                    >
+                        <div class="os">&#128039;</div>
+                        <div class="os-name">Linux</div>
+                        <div class="os-detail">x86_64</div>
+                    </a>
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books/releases/latest"
+                        class="download-card"
+                    >
+                        <div class="os">&#129695;</div>
+                        <div class="os-name">Windows</div>
+                        <div class="os-detail">64-bit</div>
+                    </a>
+                </div>
+                <div class="download-note">
+                    Or clone and build from source:
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books"
+                        >github.com/madebyraygun/nigel-keeps-your-books</a
+                    >
+                </div>
+            </section>
+
+            <!-- ===== FOOTER ===== -->
+            <footer>
+                <div class="footer-links">
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books"
+                        >GitHub</a
+                    >
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books/blob/main/README.md"
+                        >Docs</a
+                    >
+                    <a
+                        href="https://github.com/madebyraygun/nigel-keeps-your-books/releases"
+                        >Releases</a
+                    >
+                    <a id="contact-link" href="#">Contact</a>
+                </div>
+                <div class="footer-made">
+                    Made by <a href="https://madebyraygun.com">Raygun</a> · MIT
+                    License · A reliable bloke who does his job well.
+                </div>
+            </footer>
+        </div>
+
+        <script src="main.js"></script>
+    </body>
+</html>
