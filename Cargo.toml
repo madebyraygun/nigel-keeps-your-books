@@ -5,9 +5,10 @@ edition = "2021"
 description = "Cash-basis bookkeeping CLI for small consultancies"
 
 [features]
-default = ["gusto", "pdf"]
+default = ["gusto", "pdf", "totp"]
 gusto = ["dep:calamine"]
 pdf = ["dep:printpdf"]
+totp = ["dep:totp-rs", "dep:keyring"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -33,6 +34,8 @@ anyhow = "1"
 thiserror = "1"
 rpassword = "7"
 zeroize = "1.8.2"
+totp-rs = { version = "5", features = ["rand"], optional = true }
+keyring = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
