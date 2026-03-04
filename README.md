@@ -27,7 +27,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 - **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen; backups preserve encryption state
-- **Two-factor authentication** — optional TOTP 2FA for encrypted databases; TOTP secret stored in OS keychain (macOS Keychain, Windows Credential Store, Linux Secret Service) as a true second factor; enable during onboarding, via Settings, or `nigel password totp-enable`; works with any authenticator app (Google Authenticator, Authy, 1Password, etc.)
+- **Two-factor authentication** — optional TOTP 2FA for encrypted databases; TOTP secret stored in OS keychain (macOS Keychain, Windows Credential Store, Linux Secret Service) as a true second factor; enable during onboarding, via Settings, or `nigel password totp-enable`; works with any authenticator app (Google Authenticator, Authy, 1Password, etc.); 8 single-use recovery codes generated at setup for account recovery if the authenticator is lost or the keychain is unavailable
 - **Settings screen** — edit business name, manage database password, and configure two-factor authentication from the dashboard (`p` key)
 - **Snake** - 🍎 🐍
 
@@ -135,6 +135,7 @@ nigel password remove                             # Decrypt database (remove pas
 # Two-factor authentication (requires encrypted database)
 nigel password totp-enable                        # Enable TOTP 2FA
 nigel password totp-disable                       # Disable TOTP 2FA
+nigel password totp-recover                       # Recover access via recovery code
 
 # Shell completions
 nigel completions bash                            # Also: zsh, fish, powershell

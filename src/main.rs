@@ -11,11 +11,11 @@ mod models;
 #[cfg(feature = "pdf")]
 mod pdf;
 mod reconciler;
-#[cfg(feature = "totp")]
-mod totp;
 mod reports;
 mod reviewer;
 mod settings;
+#[cfg(feature = "totp")]
+mod totp;
 mod tui;
 
 use clap::{CommandFactory, Parser};
@@ -205,6 +205,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
             PasswordCommand::TotpEnable => cli::password::run_totp_enable(),
             #[cfg(feature = "totp")]
             PasswordCommand::TotpDisable => cli::password::run_totp_disable(),
+            #[cfg(feature = "totp")]
+            PasswordCommand::TotpRecover => cli::password::run_totp_recover(),
         },
         Commands::Completions { shell } => {
             clap_complete::generate(

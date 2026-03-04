@@ -36,6 +36,10 @@ enum Phase {
     TotpVerify, // user enters code to verify
     #[cfg(feature = "totp")]
     TotpConfirmDisable, // user enters code to confirm disable
+    #[cfg(feature = "totp")]
+    TotpRecoveryCodes(Vec<String>), // recovery codes shown after enable
+    #[cfg(feature = "totp")]
+    TotpRecoveryInput, // recovery code input when keychain unavailable
 }
 
 pub struct PasswordManager {
@@ -54,6 +58,8 @@ pub struct PasswordManager {
     totp_secret: String,
     #[cfg(feature = "totp")]
     totp_code: String,
+    #[cfg(feature = "totp")]
+    recovery_input: String,
 }
 
 pub enum PasswordAction {
@@ -91,6 +97,8 @@ impl PasswordManager {
             totp_secret: String::new(),
             #[cfg(feature = "totp")]
             totp_code: String::new(),
+            #[cfg(feature = "totp")]
+            recovery_input: String::new(),
         })
     }
 
@@ -274,6 +282,14 @@ impl PasswordManager {
                     "Enter authenticator code to disable 2FA:",
                 );
             }
+            #[cfg(feature = "totp")]
+            Phase::TotpRecoveryCodes(ref codes) => {
+                self.draw_recovery_codes(frame, centered, codes);
+            }
+            #[cfg(feature = "totp")]
+            Phase::TotpRecoveryInput => {
+                self.draw_recovery_input(frame, centered);
+            }
         }
 
         let hints = match &self.phase {
@@ -286,6 +302,10 @@ impl PasswordManager {
             Phase::TotpDisplay(_) => "Enter=continue  Esc=cancel",
             #[cfg(feature = "totp")]
             Phase::TotpVerify | Phase::TotpConfirmDisable => "Enter=confirm  Esc=cancel",
+            #[cfg(feature = "totp")]
+            Phase::TotpRecoveryCodes(_) => "Enter=done",
+            #[cfg(feature = "totp")]
+            Phase::TotpRecoveryInput => "Enter=confirm  Esc=cancel",
         };
         frame.render_widget(
             Paragraph::new(format!(" {hints}"))
@@ -393,6 +413,75 @@ impl PasswordManager {
         );
     }
 
+    #[cfg(feature = "totp")]
+    fn draw_recovery_codes(&self, frame: &mut Frame, area: Rect, codes: &[String]) {
+        let lines_needed = 2 + codes.len() as u16 + 1; // title + gap + codes + instruction
+        let constraints: Vec<Constraint> =
+            std::iter::once(Constraint::Length(1)) // title
+                .chain(std::iter::once(Constraint::Length(1))) // gap
+                .chain((0..codes.len()).map(|_| Constraint::Length(1)))
+                .chain(std::iter::once(Constraint::Length(1))) // gap
+                .chain(std::iter::once(Constraint::Length(1))) // instruction
+                .chain(std::iter::once(Constraint::Fill(1)))
+                .collect();
+        let _ = lines_needed;
+
+        let areas = Layout::vertical(constraints).split(area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Save these recovery codes:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            areas[0],
+        );
+
+        for (i, code) in codes.iter().enumerate() {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    format!("  {code}"),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                areas[2 + i],
+            );
+        }
+
+        let inst_idx = 2 + codes.len() + 1;
+        if inst_idx < areas.len() {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "Each code can only be used once.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                areas[inst_idx],
+            );
+        }
+    }
+
+    #[cfg(feature = "totp")]
+    fn draw_recovery_input(&self, frame: &mut Frame, area: Rect) {
+        let [label_area, input_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Authenticator unavailable. Enter a recovery code:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            label_area,
+        );
+
+        let cursor_display = format!("{}\u{2588}", self.recovery_input);
+        let width = input_area.width as usize;
+        let padded = format!("{:<width$}", cursor_display, width = width);
+        frame.render_widget(
+            Paragraph::new(Span::styled(padded, SELECTED_STYLE)),
+            input_area,
+        );
+    }
+
     pub fn handle_key(&mut self, code: KeyCode) -> PasswordAction {
         match &self.phase {
             Phase::Menu => self.handle_menu_key(code),
@@ -406,9 +495,11 @@ impl PasswordManager {
                 PasswordAction::Continue
             }
             #[cfg(feature = "totp")]
-            Phase::TotpDisplay(_) | Phase::TotpVerify | Phase::TotpConfirmDisable => {
-                self.handle_totp_key(code)
-            }
+            Phase::TotpDisplay(_)
+            | Phase::TotpVerify
+            | Phase::TotpConfirmDisable
+            | Phase::TotpRecoveryCodes(_)
+            | Phase::TotpRecoveryInput => self.handle_totp_key(code),
         }
     }
 
@@ -454,7 +545,16 @@ impl PasswordManager {
                         }
                     }
                     #[cfg(feature = "totp")]
-                    Action::TotpDisable => Phase::TotpConfirmDisable,
+                    Action::TotpDisable => {
+                        let db_path = get_data_dir().join("nigel.db");
+                        match crate::totp::get_secret(&db_path) {
+                            Ok(_) => Phase::TotpConfirmDisable,
+                            Err(_) => {
+                                self.recovery_input.clear();
+                                Phase::TotpRecoveryInput
+                            }
+                        }
+                    }
                 };
                 self.chosen_action = Some(action);
                 self.phase = first_phase;
@@ -521,10 +621,11 @@ impl PasswordManager {
                                 match crate::totp::enable(&conn, &db_path, &self.totp_secret) {
                                     Ok(()) => {
                                         self.totp_enabled = true;
-                                        self.phase = Phase::Result(
-                                            "Two-factor authentication enabled.".into(),
-                                            true,
-                                        );
+                                        let (codes, hashed_json) =
+                                            crate::totp::generate_recovery_codes();
+                                        let _ =
+                                            crate::totp::store_recovery_codes(&conn, &hashed_json);
+                                        self.phase = Phase::TotpRecoveryCodes(codes);
                                     }
                                     Err(e) => {
                                         self.phase = Phase::Result(
@@ -534,9 +635,7 @@ impl PasswordManager {
                                     }
                                 }
                             }
-                            Err(e) => {
-                                self.phase = Phase::Result(format!("DB error: {e}"), false)
-                            }
+                            Err(e) => self.phase = Phase::Result(format!("DB error: {e}"), false),
                         }
                     } else {
                         self.phase =
@@ -548,8 +647,10 @@ impl PasswordManager {
                     let db_path = get_data_dir().join("nigel.db");
                     let secret = match crate::totp::get_secret(&db_path) {
                         Ok(s) => s,
-                        Err(e) => {
-                            self.phase = Phase::Result(format!("Keychain error: {e}"), false);
+                        Err(_) => {
+                            // Keychain unavailable — offer recovery code input
+                            self.recovery_input.clear();
+                            self.phase = Phase::TotpRecoveryInput;
                             return PasswordAction::Continue;
                         }
                     };
@@ -564,21 +665,60 @@ impl PasswordManager {
                                     );
                                 }
                                 Err(e) => {
-                                    self.phase = Phase::Result(
-                                        format!("Failed to disable 2FA: {e}"),
-                                        false,
-                                    )
+                                    self.phase =
+                                        Phase::Result(format!("Failed to disable 2FA: {e}"), false)
                                 }
                             },
-                            Err(e) => {
-                                self.phase = Phase::Result(format!("DB error: {e}"), false)
-                            }
+                            Err(e) => self.phase = Phase::Result(format!("DB error: {e}"), false),
                         }
                     } else {
                         self.phase =
                             Phase::Result("Invalid code. 2FA was not disabled.".into(), false);
                     }
                     self.totp_code.clear();
+                }
+                Phase::TotpRecoveryCodes(_) => {
+                    self.phase = Phase::Result("Two-factor authentication enabled.".into(), true);
+                }
+                Phase::TotpRecoveryInput => {
+                    let db_path = get_data_dir().join("nigel.db");
+                    match crate::db::get_connection(&db_path) {
+                        Ok(conn) => {
+                            if let Some(json) = crate::totp::get_recovery_codes(&conn) {
+                                if let Some(index) = crate::totp::verify_recovery_code(
+                                    self.recovery_input.trim(),
+                                    &json,
+                                ) {
+                                    let _ = crate::totp::spend_recovery_code(&conn, index);
+                                    match crate::totp::disable(&conn, &db_path) {
+                                        Ok(()) => {
+                                            self.totp_enabled = false;
+                                            self.phase = Phase::Result(
+                                                "Recovery code accepted. 2FA disabled.".into(),
+                                                true,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            self.phase = Phase::Result(
+                                                format!("Failed to disable 2FA: {e}"),
+                                                false,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    self.phase =
+                                        Phase::Result("Invalid recovery code.".into(), false);
+                                }
+                            } else {
+                                self.phase =
+                                    Phase::Result("No recovery codes found.".into(), false);
+                            }
+                        }
+                        Err(e) => {
+                            self.phase = Phase::Result(format!("DB error: {e}"), false);
+                        }
+                    }
+                    self.recovery_input.clear();
                 }
                 _ => {}
             },
@@ -589,10 +729,19 @@ impl PasswordManager {
                 {
                     self.totp_code.push(c);
                 }
+                if matches!(self.phase, Phase::TotpRecoveryInput)
+                    && (c.is_ascii_alphanumeric() || c == '-')
+                    && self.recovery_input.len() < 9
+                {
+                    self.recovery_input.push(c);
+                }
             }
             KeyCode::Backspace => {
                 if matches!(self.phase, Phase::TotpVerify | Phase::TotpConfirmDisable) {
                     self.totp_code.pop();
+                }
+                if matches!(self.phase, Phase::TotpRecoveryInput) {
+                    self.recovery_input.pop();
                 }
             }
             _ => {}
@@ -612,6 +761,7 @@ impl PasswordManager {
         {
             self.totp_secret.zeroize();
             self.totp_code.zeroize();
+            self.recovery_input.zeroize();
         }
     }
 }
@@ -625,6 +775,7 @@ impl Drop for PasswordManager {
         {
             self.totp_secret.zeroize();
             self.totp_code.zeroize();
+            self.recovery_input.zeroize();
         }
     }
 }

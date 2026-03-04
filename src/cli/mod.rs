@@ -184,6 +184,9 @@ pub enum PasswordCommand {
     /// Disable TOTP two-factor authentication.
     #[cfg(feature = "totp")]
     TotpDisable,
+    /// Recover access when authenticator is unavailable (uses recovery code).
+    #[cfg(feature = "totp")]
+    TotpRecover,
 }
 
 #[derive(Subcommand)]

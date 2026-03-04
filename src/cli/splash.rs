@@ -42,6 +42,10 @@ struct Splash {
     totp_attempts: u8,
     #[cfg(feature = "totp")]
     totp_secret: Option<String>,
+    #[cfg(feature = "totp")]
+    recovery_mode: bool,
+    #[cfg(feature = "totp")]
+    recovery_input: String,
 }
 
 impl Splash {
@@ -68,6 +72,10 @@ impl Splash {
             totp_attempts: 0,
             #[cfg(feature = "totp")]
             totp_secret: None,
+            #[cfg(feature = "totp")]
+            recovery_mode: false,
+            #[cfg(feature = "totp")]
+            recovery_input: String::new(),
         }
     }
 
@@ -135,7 +143,9 @@ impl Splash {
             if elapsed_ms >= REVEAL_MS {
                 tui::render_version(frame, version_area);
                 #[cfg(feature = "totp")]
-                if self.totp_mode {
+                if self.recovery_mode {
+                    self.draw_recovery_code_input(frame, pw_area);
+                } else if self.totp_mode {
                     self.draw_totp_input(frame, pw_area);
                 } else {
                     self.draw_password_input(frame, pw_area);
@@ -241,10 +251,10 @@ impl Splash {
                                         return Ok(false); // Don't close — need TOTP
                                     }
                                     Err(_) => {
-                                        self.error_msg = Some(
-                                            "Could not read TOTP secret from keychain.".into(),
-                                        );
-                                        crate::db::set_db_password(None);
+                                        // Keychain unavailable — offer recovery code
+                                        self.recovery_mode = true;
+                                        self.recovery_input.clear();
+                                        self.error_msg = None;
                                         return Ok(false);
                                     }
                                 }
@@ -279,7 +289,11 @@ impl Splash {
             }
             self.totp_attempts += 1;
             if self.totp_attempts >= MAX_PASSWORD_ATTEMPTS {
-                self.error_msg = Some("Failed TOTP verification after 3 attempts.".into());
+                // Transition to recovery mode instead of hard error
+                self.totp_mode = false;
+                self.recovery_mode = true;
+                self.recovery_input.clear();
+                self.error_msg = Some("3 failed attempts. Enter a recovery code.".into());
             } else {
                 self.error_msg = Some(format!(
                     "Invalid code. Try again ({}/3).",
@@ -289,6 +303,70 @@ impl Splash {
             self.totp_input.clear();
         }
         Ok(false)
+    }
+
+    #[cfg(feature = "totp")]
+    fn try_recovery(&mut self) -> Result<bool> {
+        if let Some(ref db_path) = self.db_path {
+            if let Ok(conn) = crate::db::get_connection(db_path) {
+                if let Some(json) = crate::totp::get_recovery_codes(&conn) {
+                    if let Some(index) =
+                        crate::totp::verify_recovery_code(self.recovery_input.trim(), &json)
+                    {
+                        let _ = crate::totp::spend_recovery_code(&conn, index);
+                        let _ = crate::totp::disable(&conn, db_path);
+                        return Ok(true);
+                    }
+                }
+                self.error_msg = Some("Invalid recovery code.".into());
+            } else {
+                self.error_msg = Some("Could not open database.".into());
+            }
+        }
+        self.recovery_input.clear();
+        Ok(false)
+    }
+
+    #[cfg(feature = "totp")]
+    fn draw_recovery_code_input(&self, frame: &mut Frame, area: Rect) {
+        let form_width = 40u16.min(area.width.saturating_sub(4));
+        let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
+        let centered = Rect::new(form_x, area.y, form_width, area.height);
+
+        let [label_area, input_area, _gap, error_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(centered);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Enter recovery code:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            label_area,
+        );
+
+        let cursor_display = format!("{}\u{2588}", self.recovery_input);
+        let width = input_area.width as usize;
+        let padded = format!("{:<width$}", cursor_display, width = width);
+        frame.render_widget(
+            Paragraph::new(Span::styled(padded, tui::SELECTED_STYLE)).alignment(Alignment::Left),
+            input_area,
+        );
+
+        if let Some(ref msg) = self.error_msg {
+            frame.render_widget(
+                Paragraph::new(Span::styled(msg.as_str(), Style::default().fg(Color::Red)))
+                    .alignment(Alignment::Center),
+                error_area,
+            );
+        }
     }
 
     #[cfg(feature = "totp")]
@@ -320,8 +398,7 @@ impl Splash {
         let width = input_area.width as usize;
         let padded = format!("{:<width$}", cursor_display, width = width);
         frame.render_widget(
-            Paragraph::new(Span::styled(padded, tui::SELECTED_STYLE))
-                .alignment(Alignment::Left),
+            Paragraph::new(Span::styled(padded, tui::SELECTED_STYLE)).alignment(Alignment::Left),
             input_area,
         );
 
@@ -341,6 +418,7 @@ impl Drop for Splash {
         #[cfg(feature = "totp")]
         {
             self.totp_input.zeroize();
+            self.recovery_input.zeroize();
             if let Some(ref mut s) = self.totp_secret {
                 s.zeroize();
             }
@@ -407,6 +485,17 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                     match key.code {
                         KeyCode::Enter => {
                             #[cfg(feature = "totp")]
+                            if splash.recovery_mode {
+                                if splash.recovery_input.is_empty() {
+                                    continue;
+                                }
+                                match splash.try_recovery() {
+                                    Ok(true) => break Ok(()),
+                                    Ok(false) => continue,
+                                    Err(e) => break Err(e),
+                                }
+                            }
+                            #[cfg(feature = "totp")]
                             if splash.totp_mode {
                                 if splash.totp_input.is_empty() {
                                     continue;
@@ -414,12 +503,7 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                                 match splash.try_totp() {
                                     Ok(true) => break Ok(()),
                                     Ok(false) => {
-                                        if splash.totp_attempts >= MAX_PASSWORD_ATTEMPTS {
-                                            break Err(crate::error::NigelError::Other(
-                                                "Failed TOTP verification after 3 attempts."
-                                                    .into(),
-                                            ));
-                                        }
+                                        // try_totp transitions to recovery_mode on max attempts
                                         continue;
                                     }
                                     Err(e) => break Err(e),
@@ -442,6 +526,15 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                         }
                         KeyCode::Char(c) => {
                             #[cfg(feature = "totp")]
+                            if splash.recovery_mode {
+                                if (c.is_ascii_alphanumeric() || c == '-')
+                                    && splash.recovery_input.len() < 9
+                                {
+                                    splash.recovery_input.push(c);
+                                }
+                                continue;
+                            }
+                            #[cfg(feature = "totp")]
                             if splash.totp_mode {
                                 if c.is_ascii_digit() && splash.totp_input.len() < 6 {
                                     splash.totp_input.push(c);
@@ -452,6 +545,11 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                             splash.cursor += 1;
                         }
                         KeyCode::Backspace => {
+                            #[cfg(feature = "totp")]
+                            if splash.recovery_mode {
+                                splash.recovery_input.pop();
+                                continue;
+                            }
                             #[cfg(feature = "totp")]
                             if splash.totp_mode {
                                 splash.totp_input.pop();

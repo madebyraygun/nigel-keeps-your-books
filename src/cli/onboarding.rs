@@ -44,6 +44,8 @@ enum Screen {
     ConfirmPassword,
     #[cfg(feature = "totp")]
     TotpSetup,
+    #[cfg(feature = "totp")]
+    TotpRecoveryCodes,
     ActionPicker,
 }
 
@@ -60,6 +62,8 @@ pub struct OnboardingResult {
     pub password: Option<String>,
     #[cfg(feature = "totp")]
     pub totp_secret: Option<String>,
+    #[cfg(feature = "totp")]
+    pub recovery_codes_json: Option<String>,
     pub action: PostSetupAction,
 }
 
@@ -89,6 +93,10 @@ struct Onboarding {
     totp_cursor: usize,
     #[cfg(feature = "totp")]
     totp_error: bool,
+    #[cfg(feature = "totp")]
+    recovery_codes: Vec<String>,
+    #[cfg(feature = "totp")]
+    recovery_codes_json: String,
 }
 
 impl Onboarding {
@@ -120,6 +128,10 @@ impl Onboarding {
             totp_cursor: 0,
             #[cfg(feature = "totp")]
             totp_error: false,
+            #[cfg(feature = "totp")]
+            recovery_codes: Vec::new(),
+            #[cfg(feature = "totp")]
+            recovery_codes_json: String::new(),
         }
     }
 
@@ -165,6 +177,8 @@ impl Onboarding {
             Screen::ConfirmPassword => self.draw_confirm_password(frame, area),
             #[cfg(feature = "totp")]
             Screen::TotpSetup => self.draw_totp_setup(frame, area),
+            #[cfg(feature = "totp")]
+            Screen::TotpRecoveryCodes => self.draw_recovery_codes(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
         }
     }
@@ -603,11 +617,22 @@ impl Onboarding {
     }
 
     #[cfg(feature = "totp")]
+    fn handle_recovery_codes_key(&mut self, code: KeyCode) -> StepResult {
+        match code {
+            KeyCode::Enter | KeyCode::Esc => StepResult::NextScreen,
+            _ => StepResult::Continue,
+        }
+    }
+
+    #[cfg(feature = "totp")]
     fn handle_totp_key(&mut self, code: KeyCode) -> StepResult {
         match code {
             KeyCode::Enter => {
                 if crate::totp::verify_code(&self.totp_secret, self.totp_code.trim()) {
                     self.totp_error = false;
+                    let (codes, json) = crate::totp::generate_recovery_codes();
+                    self.recovery_codes = codes;
+                    self.recovery_codes_json = json;
                     StepResult::NextScreen
                 } else {
                     self.totp_error = true;
@@ -644,6 +669,72 @@ impl Onboarding {
     }
 
     #[cfg(feature = "totp")]
+    fn draw_recovery_codes(&self, frame: &mut Frame, area: Rect) {
+        let logo_height = LOGO.len() as u16;
+        let code_count = self.recovery_codes.len() as u16;
+        let [_top_pad, logo_area, _gap1, title_area, _gap2, codes_area, _gap3, inst_area, _gap4, hints_area, _bottom_pad, version_area] =
+            Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(logo_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(code_count),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+        effects::render_logo(self.phase, frame, logo_area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled("Save these recovery codes", HEADER_STYLE))
+                .alignment(ratatui::layout::Alignment::Center),
+            title_area,
+        );
+
+        let form_width = 50u16.min(area.width.saturating_sub(4));
+        let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
+        let codes_rect = Rect::new(form_x, codes_area.y, form_width, code_count);
+
+        let code_lines: Vec<Line> = self
+            .recovery_codes
+            .iter()
+            .map(|c| {
+                Line::from(Span::styled(
+                    format!("  {c}"),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(code_lines), codes_rect);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Each code can only be used once.",
+                Style::default().fg(Color::DarkGray),
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
+            inst_area,
+        );
+
+        frame.render_widget(
+            Paragraph::new(" Enter=continue")
+                .style(FOOTER_STYLE)
+                .alignment(ratatui::layout::Alignment::Center),
+            hints_area,
+        );
+
+        tui::render_version(frame, version_area);
+    }
+
+    #[cfg(feature = "totp")]
     fn draw_totp_setup(&self, frame: &mut Frame, area: Rect) {
         let logo_height = LOGO.len() as u16;
         let error_height = if self.totp_error { 1 } else { 0 };
@@ -670,8 +761,11 @@ impl Onboarding {
         effects::render_logo(self.phase, frame, logo_area);
 
         frame.render_widget(
-            Paragraph::new(Span::styled("Set up Two-Factor Authentication", HEADER_STYLE))
-                .alignment(ratatui::layout::Alignment::Center),
+            Paragraph::new(Span::styled(
+                "Set up Two-Factor Authentication",
+                HEADER_STYLE,
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
             title_area,
         );
 
@@ -691,7 +785,9 @@ impl Onboarding {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 format!("  {}", self.totp_secret),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )),
             secret_rect,
         );
@@ -805,6 +901,8 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                         Screen::ConfirmPassword => onboarding.handle_confirm_key(key.code),
                         #[cfg(feature = "totp")]
                         Screen::TotpSetup => onboarding.handle_totp_key(key.code),
+                        #[cfg(feature = "totp")]
+                        Screen::TotpRecoveryCodes => onboarding.handle_recovery_codes_key(key.code),
                         Screen::ActionPicker => onboarding.handle_action_key(key.code),
                     };
 
@@ -847,6 +945,14 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                             }
                             #[cfg(feature = "totp")]
                             Screen::TotpSetup => {
+                                if onboarding.recovery_codes.is_empty() {
+                                    onboarding.screen = Screen::ActionPicker;
+                                } else {
+                                    onboarding.screen = Screen::TotpRecoveryCodes;
+                                }
+                            }
+                            #[cfg(feature = "totp")]
+                            Screen::TotpRecoveryCodes => {
                                 onboarding.screen = Screen::ActionPicker;
                             }
                             Screen::ActionPicker => {}
@@ -867,6 +973,12 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                     None
                                 } else {
                                     Some(onboarding.totp_secret.clone())
+                                },
+                                #[cfg(feature = "totp")]
+                                recovery_codes_json: if onboarding.recovery_codes_json.is_empty() {
+                                    None
+                                } else {
+                                    Some(onboarding.recovery_codes_json.clone())
                                 },
                                 action,
                             }));
@@ -917,6 +1029,10 @@ mod tests {
             totp_cursor: 0,
             #[cfg(feature = "totp")]
             totp_error: false,
+            #[cfg(feature = "totp")]
+            recovery_codes: Vec::new(),
+            #[cfg(feature = "totp")]
+            recovery_codes_json: String::new(),
         }
     }
 
@@ -982,6 +1098,12 @@ mod tests {
                 None
             } else {
                 Some(ob.totp_secret.clone())
+            },
+            #[cfg(feature = "totp")]
+            recovery_codes_json: if ob.recovery_codes_json.is_empty() {
+                None
+            } else {
+                Some(ob.recovery_codes_json.clone())
             },
             action,
         }

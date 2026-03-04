@@ -136,16 +136,21 @@ pub fn run_remove() -> Result<()> {
 pub fn run_totp_enable() -> Result<()> {
     let db_path = get_data_dir().join("nigel.db");
     if !is_encrypted(&db_path)? {
-        eprintln!("Database must be encrypted before enabling 2FA. Use `nigel password set` first.");
+        eprintln!(
+            "Database must be encrypted before enabling 2FA. Use `nigel password set` first."
+        );
         return Ok(());
     }
     crate::db::prompt_password_if_needed(&db_path)?;
     let conn = crate::db::get_connection(&db_path)?;
     if crate::totp::is_enabled(&conn) {
-        eprintln!("TOTP 2FA is already enabled. Use `nigel password totp-disable` to remove it first.");
+        eprintln!(
+            "TOTP 2FA is already enabled. Use `nigel password totp-disable` to remove it first."
+        );
         return Ok(());
     }
-    let company = crate::db::get_metadata(&conn, "company_name").unwrap_or_else(|| "Nigel".to_string());
+    let company =
+        crate::db::get_metadata(&conn, "company_name").unwrap_or_else(|| "Nigel".to_string());
     let (mut base32, _uri) = crate::totp::generate_secret(&company, "database")?;
     println!("\nTOTP Secret (add to your authenticator app):\n");
     println!("  {base32}\n");
@@ -159,7 +164,19 @@ pub fn run_totp_enable() -> Result<()> {
     }
     crate::totp::enable(&conn, &db_path, &base32)?;
     base32.zeroize();
-    println!("Two-factor authentication enabled.");
+
+    // Generate and store recovery codes
+    let (codes, hashed_json) = crate::totp::generate_recovery_codes();
+    crate::totp::store_recovery_codes(&conn, &hashed_json)?;
+
+    println!("Two-factor authentication enabled.\n");
+    println!("Save these recovery codes in a safe place.");
+    println!("Each code can only be used once.\n");
+    for code in &codes {
+        println!("  {code}");
+    }
+    println!("\nIf you lose access to your authenticator, use:");
+    println!("  nigel password totp-recover");
     Ok(())
 }
 
@@ -185,6 +202,45 @@ pub fn run_totp_disable() -> Result<()> {
     }
     crate::totp::disable(&conn, &db_path)?;
     println!("Two-factor authentication disabled.");
+    Ok(())
+}
+
+#[cfg(feature = "totp")]
+pub fn run_totp_recover() -> Result<()> {
+    let db_path = get_data_dir().join("nigel.db");
+    if !is_encrypted(&db_path)? {
+        eprintln!("Database is not encrypted. 2FA is not available.");
+        return Ok(());
+    }
+    // Prompt password only (skip TOTP check)
+    crate::db::prompt_password_if_needed_no_totp(&db_path)?;
+    let conn = crate::db::get_connection(&db_path)?;
+    if !crate::totp::is_enabled(&conn) {
+        eprintln!("TOTP 2FA is not enabled.");
+        return Ok(());
+    }
+    let hashed_json = match crate::totp::get_recovery_codes(&conn) {
+        Some(json) => json,
+        None => {
+            eprintln!("No recovery codes found. Cannot recover.");
+            return Ok(());
+        }
+    };
+    let remaining = crate::totp::remaining_recovery_codes(&conn);
+    println!("Enter a recovery code ({remaining} remaining):");
+    let code = rpassword::prompt_password("Recovery code: ")
+        .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+    match crate::totp::verify_recovery_code(code.trim(), &hashed_json) {
+        Some(index) => {
+            crate::totp::spend_recovery_code(&conn, index)?;
+            crate::totp::disable(&conn, &db_path)?;
+            println!("Recovery code accepted. Two-factor authentication has been disabled.");
+            println!("You can re-enable 2FA with: nigel password totp-enable");
+        }
+        None => {
+            eprintln!("Invalid recovery code.");
+        }
+    }
     Ok(())
 }
 

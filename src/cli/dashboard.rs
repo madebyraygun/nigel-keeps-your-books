@@ -948,6 +948,8 @@ pub fn run() -> Result<()> {
     let mut onboarding_company = None;
     #[cfg(feature = "totp")]
     let mut onboarding_totp_secret: Option<String> = None;
+    #[cfg(feature = "totp")]
+    let mut onboarding_recovery_json: Option<String> = None;
     if is_first_run {
         if let Some(result) = super::onboarding::run()? {
             let mut settings = load_settings();
@@ -968,6 +970,7 @@ pub fn run() -> Result<()> {
             #[cfg(feature = "totp")]
             {
                 onboarding_totp_secret = result.totp_secret;
+                onboarding_recovery_json = result.recovery_codes_json;
             }
         }
     }
@@ -999,6 +1002,9 @@ pub fn run() -> Result<()> {
     if let Some(ref secret) = onboarding_totp_secret {
         let db_path = data_dir.join("nigel.db");
         crate::totp::enable(&conn, &db_path, secret)?;
+        if let Some(ref json) = onboarding_recovery_json {
+            crate::totp::store_recovery_codes(&conn, json)?;
+        }
     }
 
     // Migrate legacy company_name from settings.json → DB metadata

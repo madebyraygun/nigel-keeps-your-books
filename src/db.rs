@@ -438,6 +438,31 @@ pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
     ))
 }
 
+/// Like prompt_password_if_needed, but skips the TOTP check.
+/// Used by the recovery flow where TOTP is being bypassed.
+pub fn prompt_password_if_needed_no_totp(db_path: &Path) -> Result<()> {
+    if !is_encrypted(db_path)? {
+        return Ok(());
+    }
+    for attempt in 1..=3 {
+        let pw = rpassword::prompt_password("Database password: ")
+            .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+        set_db_password(Some(pw));
+        match get_connection(db_path) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                set_db_password(None);
+                if attempt < 3 {
+                    eprintln!("Wrong password. Try again ({attempt}/3).");
+                }
+            }
+        }
+    }
+    Err(crate::error::NigelError::Other(
+        "Failed to unlock database after 3 attempts.".into(),
+    ))
+}
+
 pub fn init_db(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
 

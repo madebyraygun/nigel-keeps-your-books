@@ -22,7 +22,7 @@ pub enum SettingsAction {
 enum Screen {
     Main,
     EditingName,
-    Password(PasswordManager),
+    Password(Box<PasswordManager>),
 }
 
 /// Menu items on the main settings screen.
@@ -244,8 +244,7 @@ impl SettingsManager {
                                     if self.encrypted {
                                         match crate::db::get_connection(&db_path) {
                                             Ok(conn) => {
-                                                self.totp_enabled =
-                                                    crate::totp::is_enabled(&conn)
+                                                self.totp_enabled = crate::totp::is_enabled(&conn)
                                             }
                                             Err(_) => self.totp_enabled = false,
                                         }
@@ -301,19 +300,18 @@ impl SettingsManager {
                         self.screen = Screen::EditingName;
                     }
                     MENU_PASSWORD => match PasswordManager::new(&self.greeting) {
-                        Ok(mgr) => self.screen = Screen::Password(mgr),
+                        Ok(mgr) => self.screen = Screen::Password(Box::new(mgr)),
                         Err(e) => {
                             self.set_status(format!("Could not open password settings: {e}"), false)
                         }
                     },
                     #[cfg(feature = "totp")]
-                    MENU_TOTP if self.encrypted => {
-                        match PasswordManager::new(&self.greeting) {
-                            Ok(mgr) => self.screen = Screen::Password(mgr),
-                            Err(e) => self
-                                .set_status(format!("Could not open 2FA settings: {e}"), false),
+                    MENU_TOTP if self.encrypted => match PasswordManager::new(&self.greeting) {
+                        Ok(mgr) => self.screen = Screen::Password(Box::new(mgr)),
+                        Err(e) => {
+                            self.set_status(format!("Could not open 2FA settings: {e}"), false)
                         }
-                    }
+                    },
                     _ => {}
                 }
                 SettingsAction::Continue
