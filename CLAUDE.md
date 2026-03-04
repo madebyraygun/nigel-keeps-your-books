@@ -9,7 +9,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 ## Architecture
 
 - **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, status, password, completions
-- **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `validate_password()` tests a password without side effects; `prompt_password_if_needed()` prompts via rpassword with 3 retries (used by CLI subcommands)
+- **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `validate_password()` tests a password without side effects; `prompt_password_if_needed()` prompts via rpassword with 3 retries, then checks for TOTP if enabled (used by CLI subcommands)
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; `GenericCsvConfig` supports user-defined column mappings stored as profiles in `csv_profiles` table; malformed CSV rows are counted and reported in import output
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
 - **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu with single-key shortcuts (b=Browse, i=Import, r=Review, c=Reconcile, a=Accounts, t=caTegorize, u=rUles, z=Undo, v=View report, e=Export report, l=Load, p=Settings, s=Snake); all commands render as inline TUI screens; outer loop only re-initializes when Load changes the data directory. F5 refreshes dashboard data.
@@ -22,16 +22,17 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Load Screen:** `cli/load_manager.rs` — inline TUI form for switching data directories; validates path and triggers dashboard reload
 - **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout. `TableReportView` supports interactive date navigation: Left/Right arrows page between periods, `m` toggles month/year granularity; each report declares its `DateGranularity` (MonthAndYear, YearOnly, or None)
 - **Effects:** `effects.rs` — shared pastel rainbow gradient palette, `gradient_color()` interpolation, `Particle` struct with `new()`/`seeded()`/`tick()`/`is_dead()`, `pre_seed_particles()`, and `tick_particles()` helpers; used by splash, goodbye, onboarding, and snake screens
-- **Splash:** `cli/splash.rs` — 1.5-second splash screen shown on app launch (skipped during first-run onboarding); displays Nigel ASCII logo with rainbow gradient text and pre-seeded floating particle background; dismissable by any keypress. For encrypted databases, the splash holds indefinitely (no auto-fade) and displays an inline masked password input below the logo; supports up to 3 attempts with error feedback; `run()` for unencrypted, `run_with_password(db_path)` for encrypted
+- **Splash:** `cli/splash.rs` — 1.5-second splash screen shown on app launch (skipped during first-run onboarding); displays Nigel ASCII logo with rainbow gradient text and pre-seeded floating particle background; dismissable by any keypress. For encrypted databases, the splash holds indefinitely (no auto-fade) and displays an inline masked password input below the logo; supports up to 3 attempts with error feedback; after password success, if TOTP is enabled, transitions to a TOTP code input phase (plaintext 6-digit input, 3 attempts); `run()` for unencrypted, `run_with_password(db_path)` for encrypted
 - **Goodbye:** `cli/goodbye.rs` — 1.2-second farewell screen shown when quitting the dashboard; displays Nigel ASCII logo with "Goodbye!" text, plays the reverse of the splash reveal animation (characters disappear), with particle background; dismissable by any keypress
+- **TOTP:** `totp.rs` — optional TOTP two-factor authentication module (feature-gated behind `totp`); uses `totp-rs` for code generation/verification (SHA1, 6-digit, 30s window, 1-step skew) and `keyring` for cross-platform OS keychain storage (macOS Keychain, Windows Credential Store, Linux Secret Service/keyutils); TOTP secret stored in OS keychain (service=`"nigel"`, user=`"totp:<canonical_db_path>"`), `totp_enabled` flag in metadata table; `generate_secret()`, `verify_code()`, `enable()`/`disable()`, `get_secret()`, `is_enabled()`, `prompt_totp_if_needed()`
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, text wrapping, and incremental text search), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases; v2 adds `csv_profiles` table for generic CSV column mappings
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
 - **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`; `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table. Database password is runtime-only (never persisted to disk).
-- **Settings Manager:** `cli/settings_manager.rs` — inline TUI screen for managing app settings; shows editable business name (saved to DB metadata as `company_name`) and password management; password sub-screen delegates to `PasswordManager`
-- **Password Manager:** `cli/password_manager.rs` — TUI screen for managing database encryption; detects current encryption state and shows set/change/remove options; masked password input with confirmation; used as sub-screen within Settings Manager
-- **Onboarding:** `cli/onboarding.rs` — full-screen TUI shown on first launch (when settings.json doesn't exist); collects user name, business name, and optional password (masked input), then offers demo/fresh/load options
+- **Settings Manager:** `cli/settings_manager.rs` — inline TUI screen for managing app settings; shows editable business name (saved to DB metadata as `company_name`), password management, and two-factor authentication (when encrypted); password and 2FA sub-screens delegate to `PasswordManager`
+- **Password Manager:** `cli/password_manager.rs` — TUI screen for managing database encryption; detects current encryption state and shows set/change/remove options; masked password input with confirmation; when encrypted, shows TOTP 2FA enable/disable options (feature-gated behind `totp`); used as sub-screen within Settings Manager
+- **Onboarding:** `cli/onboarding.rs` — full-screen TUI shown on first launch (when settings.json doesn't exist); collects user name, business name, optional password (masked input), and optional TOTP 2FA setup (displays base32 secret for authenticator app, verifies code; feature-gated behind `totp`), then offers demo/fresh/load options
 - **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`; switch with `nigel load <path>`. Contains `backups/` (manual backups) and `snapshots/` (automatic pre-import snapshots)
 - **Demo:** `nigel demo` dynamically generates 18 months of sample transactions (counting backwards from the current date) + 9 rules directly into the DB (no CSV files), then runs categorization; dates are computed at runtime so reports always show current-year data
 
@@ -95,6 +96,8 @@ nigel restore ~/backups/nigel-20250301-120000.db  # Restore from a backup file
 nigel password set                                # Encrypt an unencrypted database
 nigel password change                             # Change password on encrypted database
 nigel password remove                             # Decrypt database (remove password)
+nigel password totp-enable                        # Enable TOTP 2FA (requires encrypted database)
+nigel password totp-disable                       # Disable TOTP 2FA
 nigel completions bash                            # Generate shell completions (bash, zsh, fish, powershell)
 ```
 
@@ -122,6 +125,8 @@ Do not merge or mark work complete if docs are stale.
 - Browse register and reports with no date flags show all transactions (no implicit year filter); the browse view scrolls to today on load
 - Database row deserialization errors are propagated, never silently discarded
 - Database password is never persisted to disk — stored only in runtime `Mutex<Option<String>>`; for the dashboard, password is collected inline on the splash screen (TUI masked input); for CLI subcommands, prompted via rpassword
+- TOTP secret is stored in the OS keychain via `keyring` crate (never in the database); the database stores only a `totp_enabled` flag in the `metadata` table; TOTP enrollment is device-bound (tied to the machine's keychain); no recovery mechanism — if authenticator is lost, restore from backup (which won't have TOTP enabled)
+- TOTP verification happens after password validation: password unlocks the encrypted DB, then `totp_enabled` flag is checked, then the TOTP secret is fetched from the OS keychain to verify the code
 - Demo databases are always unencrypted; `init` and `demo` subcommands skip password detection
 - Backups and snapshots preserve the encryption state of the source database
 - Cross-encryption-state operations (encrypt/decrypt) use `sqlcipher_export` via ATTACH DATABASE; same-encryption operations (backup, rekey) use SQLite backup API or `PRAGMA rekey`
@@ -151,8 +156,8 @@ src/
     categorize.rs       # nigel categorize
     rules.rs            # nigel rules add/list/update/delete/test
     rules_manager.rs    # TUI rules screen (scrollable list + delete)
-    password.rs         # nigel password set/change/remove (encrypt/decrypt/rekey)
-    password_manager.rs # TUI password management screen (set/change/remove via settings)
+    password.rs         # nigel password set/change/remove/totp-enable/totp-disable
+    password_manager.rs # TUI password management screen (set/change/remove + 2FA via settings)
     settings_manager.rs # TUI settings screen (business name + password management)
     reconcile_manager.rs # TUI reconcile screen (account/month/balance form + result)
     load_manager.rs     # TUI load screen (data directory switcher with reload)
@@ -182,6 +187,7 @@ src/
   effects.rs            # Shared gradient/particle effects (used by splash, onboarding, snake)
   tui.rs                # Shared ratatui helpers (styles, money_span, wrap_text, ReportView trait, run_report_view)
   pdf.rs                # PDF rendering engine (feature-gated behind "pdf")
+  totp.rs               # TOTP 2FA module (feature-gated behind "totp") — secret gen, verification, keychain storage
   reconciler.rs         # Monthly reconciliation
   settings.rs           # Settings management (~/.config/nigel/)
   fmt.rs                # Number formatting helpers

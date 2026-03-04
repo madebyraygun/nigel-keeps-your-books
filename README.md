@@ -27,7 +27,8 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 - **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen; backups preserve encryption state
-- **Settings screen** — edit business name and manage database password from the dashboard (`p` key)
+- **Two-factor authentication** — optional TOTP 2FA for encrypted databases; TOTP secret stored in OS keychain (macOS Keychain, Windows Credential Store, Linux Secret Service) as a true second factor; enable during onboarding, via Settings, or `nigel password totp-enable`; works with any authenticator app (Google Authenticator, Authy, 1Password, etc.)
+- **Settings screen** — edit business name, manage database password, and configure two-factor authentication from the dashboard (`p` key)
 - **Snake** - 🍎 🐍
 
 Importers currently include Bank of America and Gusto, but adding a new importer is straightforward. See [docs/importers.md](docs/importers.md) for more information. The repository also contains a Claude skill that can create an importer from any data file. Contributions for importers for widely used import formats are welcome.
@@ -131,6 +132,10 @@ nigel password set                                # Encrypt database with a pass
 nigel password change                             # Change existing password
 nigel password remove                             # Decrypt database (remove password)
 
+# Two-factor authentication (requires encrypted database)
+nigel password totp-enable                        # Enable TOTP 2FA
+nigel password totp-disable                       # Disable TOTP 2FA
+
 # Shell completions
 nigel completions bash                            # Also: zsh, fish, powershell
 ```
@@ -145,6 +150,7 @@ Settings are stored in `~/.config/nigel/settings.json`. The data directory defau
 |------|---------|-------------|
 | `gusto` | Yes | Gusto payroll XLSX importer + auto-categorization |
 | `pdf` | Yes | PDF export via printpdf (built-in Helvetica, no font files needed) |
+| `totp` | Yes | TOTP two-factor authentication via OS keychain (`totp-rs` + `keyring`) |
 
 Build without Gusto support:
 
