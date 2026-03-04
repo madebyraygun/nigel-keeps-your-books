@@ -11,6 +11,8 @@ mod models;
 #[cfg(feature = "pdf")]
 mod pdf;
 mod reconciler;
+#[cfg(feature = "totp")]
+mod totp;
 mod reports;
 mod reviewer;
 mod settings;

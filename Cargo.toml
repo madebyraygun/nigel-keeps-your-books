@@ -34,7 +34,7 @@ anyhow = "1"
 thiserror = "1"
 rpassword = "7"
 zeroize = "1.8.2"
-totp-rs = { version = "5", features = ["rand"], optional = true }
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"], optional = true }
 keyring = { version = "3", optional = true }
 
 [dev-dependencies]
