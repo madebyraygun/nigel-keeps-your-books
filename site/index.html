@@ -4,6 +4,25 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Nigel — Bookkeeping for normal people</title>
+        <meta
+            name="description"
+            content="Nigel is an open-source terminal-based bookkeeping tool for freelancers and small consultancies. Import bank statements, auto-categorize, and generate reports."
+        />
+        <meta
+            property="og:title"
+            content="Nigel — Bookkeeping for normal people"
+        />
+        <meta
+            property="og:description"
+            content="An open-source bookkeeping application with a beautifully simple local workflow. Import, categorize, report."
+        />
+        <meta
+            property="og:image"
+            content="https://nigel.rygn.io/social-card.png"
+        />
+        <meta property="og:url" content="https://nigel.rygn.io" />
+        <meta property="og:type" content="website" />
+        <meta name="twitter:card" content="summary_large_image" />
         <link rel="stylesheet" href="styles.css" />
     </head>
     <body>
@@ -54,21 +73,8 @@
                         <span class="window-title">default (nigel)</span>
                     </div>
                     <img src="dashboard.png" alt="Nigel dashboard screenshot" />
-                    <div
-                        class="window-content"
-                        style="min-height: auto; text-align: center"
-                    >
-                        <div style="text-align: center; color: var(--text-dim)">
-                            <div
-                                style="
-                                    font-size: 0.7rem;
-                                    margin-top: 0.3rem;
-                                    color: var(--teal);
-                                "
-                            >
-                                Nigel's Dashboard
-                            </div>
-                        </div>
+                    <div class="window-content window-content--caption">
+                        <div class="window-caption">Nigel's Dashboard</div>
                     </div>
                 </div>
             </section>
@@ -88,7 +94,6 @@
                             >P&amp;L, expenses, tax summaries, cash flow</span
                         >.
                     </p>
-                    <br />
                     <p>
                         No cloud. No subscription. No 47-step setup wizard. Just
                         a single password-protected database file, your
@@ -134,7 +139,7 @@
                         <h3>Reports</h3>
                         <p>
                             P&amp;L, expense breakdown, tax summary (Schedule C
-                            / 1120-S), cash flow, and balance sheet. Export to
+                            / 1120-S), cash flow, and cash balance. Export to
                             PDF.
                         </p>
                     </div>
@@ -151,9 +156,8 @@
                         <span class="feature-icon">&#128452;&#65039;</span>
                         <h3>Local-first</h3>
                         <p>
-                            Single SQLite file. Industrial-strength encryption.
-                            No server, no account, no cloud sync. Your books
-                            stay on your machine.
+                            Single SQLite file. No server, no account, no
+                            cloud sync. Your books stay on your machine.
                         </p>
                     </div>
                     <div class="feature-card">
@@ -181,17 +185,43 @@
                 <div class="section-label">see it</div>
                 <h2>Nigel in action.</h2>
                 <div class="screenshot-container">
-                    <div class="screenshot-tabs">
-                        <div class="screenshot-tab active" data-tab="import">
+                    <div class="screenshot-tabs" role="tablist">
+                        <button
+                            class="screenshot-tab active"
+                            data-tab="import"
+                            role="tab"
+                            aria-selected="true"
+                            aria-controls="panel-import"
+                        >
                             import
-                        </div>
-                        <div class="screenshot-tab" data-tab="review">
+                        </button>
+                        <button
+                            class="screenshot-tab"
+                            data-tab="review"
+                            role="tab"
+                            aria-selected="false"
+                            aria-controls="panel-review"
+                        >
                             review
-                        </div>
-                        <div class="screenshot-tab" data-tab="report">
+                        </button>
+                        <button
+                            class="screenshot-tab"
+                            data-tab="report"
+                            role="tab"
+                            aria-selected="false"
+                            aria-controls="panel-report"
+                        >
                             report
-                        </div>
-                        <div class="screenshot-tab" data-tab="rules">rules</div>
+                        </button>
+                        <button
+                            class="screenshot-tab"
+                            data-tab="rules"
+                            role="tab"
+                            aria-selected="false"
+                            aria-controls="panel-rules"
+                        >
+                            rules
+                        </button>
                     </div>
                     <div class="screenshot-window">
                         <div class="window-chrome">
@@ -204,6 +234,8 @@
                             <div
                                 class="screenshot-panel active"
                                 id="panel-import"
+                                role="tabpanel"
+                                aria-labelledby="tab-import"
                             >
                                 <div class="terminal-line">
                                     <span class="prompt">&#10095;</span>
@@ -258,7 +290,12 @@
                                     >
                                 </div>
                             </div>
-                            <div class="screenshot-panel" id="panel-review">
+                            <div
+                                class="screenshot-panel"
+                                id="panel-review"
+                                role="tabpanel"
+                                aria-labelledby="tab-review"
+                            >
                                 <div class="terminal-line">
                                     <span class="prompt">&#10095;</span>
                                     <span class="cmd">nigel review</span>
@@ -305,7 +342,12 @@
                                     >
                                 </div>
                             </div>
-                            <div class="screenshot-panel" id="panel-report">
+                            <div
+                                class="screenshot-panel"
+                                id="panel-report"
+                                role="tabpanel"
+                                aria-labelledby="tab-report"
+                            >
                                 <div class="terminal-line">
                                     <span class="prompt">&#10095;</span>
                                     <span class="cmd"
@@ -390,7 +432,12 @@
                                     ><span class="amount-pos"> $23,584.77</span>
                                 </div>
                             </div>
-                            <div class="screenshot-panel" id="panel-rules">
+                            <div
+                                class="screenshot-panel"
+                                id="panel-rules"
+                                role="tabpanel"
+                                aria-labelledby="tab-rules"
+                            >
                                 <div class="terminal-line">
                                     <span class="prompt">&#10095;</span>
                                     <span class="cmd">nigel rules list</span>
@@ -534,13 +581,7 @@
             <section class="plugins reveal">
                 <div class="section-label">built-in</div>
                 <h2>Batteries included.</h2>
-                <p
-                    style="
-                        color: var(--text-dim);
-                        font-size: 0.85rem;
-                        max-width: 550px;
-                    "
-                >
+                <p class="section-intro">
                     Nigel ships with importers, reports, and export formats
                     ready to go. Plus a generic CSV importer for any bank.
                 </p>
@@ -582,13 +623,6 @@
                             Print-ready PDF export for any report
                         </div>
                     </div>
-                    <!--<div class="plugin-card plugin-coming">
-                        <div class="plugin-type">coming soon</div>
-                        <div class="plugin-name">Invoicing</div>
-                        <div class="plugin-desc">
-                            Generate and track invoices directly from Nigel
-                        </div>
-                    </div>-->
                 </div>
             </section>
 
@@ -602,7 +636,6 @@
                         fully scriptable via CLI, which means it plays
                         beautifully with AI agents and automation tools.
                     </p>
-                    <br />
                     <p>
                         The repo includes
                         <span class="highlight">Claude Code skills</span> for
@@ -611,18 +644,15 @@
                         like Claude Cowork, point it at a CSV and say:
                     </p>
                 </div>
-                <div style="margin-top: 1.5rem">
-                    <div class="screenshot-window" style="max-width: 650px">
+                <div class="ai-demo">
+                    <div class="screenshot-window screenshot-window--narrow">
                         <div class="window-chrome">
                             <div class="window-dot red"></div>
                             <div class="window-dot yellow"></div>
                             <div class="window-dot green"></div>
                             <span class="window-title">cowork</span>
                         </div>
-                        <div
-                            class="window-content"
-                            style="min-height: auto; padding: 1.2rem 1.5rem"
-                        >
+                        <div class="window-content window-content--compact">
                             <div class="terminal-line">
                                 <span class="flag"
                                     >"Import my latest statements into Nigel and
@@ -651,7 +681,7 @@
             <section class="download reveal" id="download">
                 <div class="section-label">install</div>
                 <h2>Get Nigel.</h2>
-                <p style="color: var(--text-dim); font-size: 0.85rem">
+                <p class="section-intro">
                     No dependencies, download a native binary for your platform:
                 </p>
                 <div class="download-options">

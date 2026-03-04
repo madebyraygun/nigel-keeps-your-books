@@ -71,7 +71,7 @@ body::after {
     position: relative;
 }
 
-/* Logo container — matches working standalone exactly */
+/* Logo container — fade-in with glow pulse */
 .logo-container {
     position: relative;
     padding: 1rem;
@@ -104,7 +104,6 @@ body::after {
 }
 
 #ascii-logo {
-    font-family: "JetBrains Mono", monospace;
     font-size: clamp(10px, 1.4vw, 16px);
     line-height: 1.25;
     letter-spacing: 0.02em;
@@ -113,7 +112,7 @@ body::after {
     z-index: 1;
 }
 
-/* Per-character rainbow — exact CSS from working version */
+/* Per-character rainbow gradient animation */
 .char {
     display: inline;
     background: linear-gradient(
@@ -145,13 +144,14 @@ body::after {
     }
 }
 
-/* Floating particles — exact CSS from working version */
+/* Floating particle animation — drift upward and fade */
 .particle {
     position: fixed;
     border-radius: 50%;
     pointer-events: none;
     opacity: 0;
     z-index: 0;
+    bottom: -10px;
     animation: floatUp linear infinite;
 }
 
@@ -267,6 +267,14 @@ section {
     max-width: 1000px;
     margin: 0 auto;
 }
+
+/* Section dividers — every section after .hero gets a top border */
+section + section,
+.dashboard-preview,
+footer {
+    border-top: 1px solid rgba(42, 161, 152, 0.15);
+}
+
 .section-label {
     font-size: 0.7rem;
     color: var(--teal);
@@ -286,22 +294,24 @@ h2 {
     letter-spacing: -0.02em;
 }
 
-/* Pitch */
-.pitch {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
+/* Shared intro paragraph style */
+.section-intro {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    max-width: 550px;
 }
+
+/* Pitch */
 .pitch-text {
     font-size: clamp(0.85rem, 1.3vw, 1rem);
     max-width: 650px;
     line-height: 1.9;
 }
+.pitch-text p + p {
+    margin-top: 1rem;
+}
 .pitch-text .highlight {
     color: var(--accent-green);
-}
-.pitch-text .strike {
-    color: var(--text-dim);
-    text-decoration: line-through;
-    text-decoration-color: var(--accent-pink);
 }
 
 /* Features */
@@ -340,20 +350,16 @@ h2 {
 }
 
 /* Screenshots */
-.screenshots {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
-}
 .screenshot-container {
     margin-top: 2rem;
 }
 .screenshot-tabs {
     display: flex;
-    gap: 0;
     overflow-x: auto;
 }
 .screenshot-tab {
     padding: 0.6rem 1.2rem;
-    font-family: var(--mono);
+    font-family: inherit;
     font-size: 0.75rem;
     color: var(--text-dim);
     background: rgba(30, 45, 61, 0.4);
@@ -376,6 +382,9 @@ h2 {
     border: 1px solid rgba(42, 161, 152, 0.2);
     overflow: hidden;
 }
+.screenshot-window--narrow {
+    max-width: 650px;
+}
 .screenshot-window img {
     display: block;
     width: 100%;
@@ -394,13 +403,13 @@ h2 {
     border-radius: 50%;
 }
 .window-dot.red {
-    background: #e06c75;
+    background: var(--accent-pink);
 }
 .window-dot.yellow {
-    background: #e5c07b;
+    background: var(--accent-yellow);
 }
 .window-dot.green {
-    background: #98c379;
+    background: var(--accent-green);
 }
 .window-title {
     font-size: 0.7rem;
@@ -413,6 +422,19 @@ h2 {
     font-size: 0.78rem;
     line-height: 1.6;
     overflow-x: auto;
+}
+.window-content--caption {
+    min-height: auto;
+    text-align: center;
+}
+.window-content--compact {
+    min-height: auto;
+    padding: 1.2rem 1.5rem;
+}
+.window-caption {
+    font-size: 0.7rem;
+    margin-top: 0.3rem;
+    color: var(--teal);
 }
 .window-content .prompt {
     color: var(--accent-green);
@@ -448,9 +470,6 @@ h2 {
 .window-content .dim {
     color: var(--text-dim);
 }
-/*.terminal-line {
-    white-space: pre;
-}*/
 .screenshot-panel {
     display: none;
 }
@@ -459,9 +478,6 @@ h2 {
 }
 
 /* How it works */
-.how-it-works {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
-}
 .steps {
     display: grid;
     gap: 2rem;
@@ -503,10 +519,7 @@ h2 {
     border: 1px solid rgba(42, 161, 152, 0.15);
 }
 
-/* Plugins */
-.plugins {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
-}
+/* Built-in features grid */
 .plugin-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -539,30 +552,14 @@ h2 {
     font-size: 0.75rem;
     color: var(--text-dim);
 }
-.plugin-coming {
-    border-style: dashed;
-    opacity: 0.6;
-}
-.plugin-coming .plugin-name::after {
-    content: " (coming soon)";
-    font-weight: 300;
-    color: var(--text-dim);
-    font-size: 0.7rem;
-}
 
 /* AI workflows */
-.ai-workflows {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
-}
-
-/* Dashboard preview */
-.dashboard-preview {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
+.ai-demo {
+    margin-top: 1.5rem;
 }
 
 /* Download */
 .download {
-    border-top: 1px solid rgba(42, 161, 152, 0.15);
     text-align: center;
 }
 .download-options {
@@ -617,7 +614,6 @@ h2 {
 footer {
     padding: 3rem 2rem;
     text-align: center;
-    border-top: 1px solid rgba(42, 161, 152, 0.1);
     max-width: 1000px;
     margin: 0 auto;
 }
