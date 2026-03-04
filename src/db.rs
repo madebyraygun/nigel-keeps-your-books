@@ -420,7 +420,11 @@ pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
         // on a wrong password. Match on the result instead of using ? to avoid
         // short-circuiting the retry loop.
         match get_connection(db_path) {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                #[cfg(feature = "totp")]
+                crate::totp::prompt_totp_if_needed(db_path)?;
+                return Ok(());
+            }
             Err(_) => {
                 set_db_password(None);
                 if attempt < 3 {
