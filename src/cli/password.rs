@@ -122,6 +122,60 @@ pub fn run_remove() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "totp")]
+pub fn run_totp_enable() -> Result<()> {
+    let db_path = get_data_dir().join("nigel.db");
+    if !is_encrypted(&db_path)? {
+        eprintln!("Database must be encrypted before enabling 2FA. Use `nigel password set` first.");
+        return Ok(());
+    }
+    crate::db::prompt_password_if_needed(&db_path)?;
+    let conn = crate::db::get_connection(&db_path)?;
+    if crate::totp::is_enabled(&conn) {
+        eprintln!("TOTP 2FA is already enabled. Use `nigel password totp-disable` to remove it first.");
+        return Ok(());
+    }
+    let company = crate::db::get_metadata(&conn, "company_name").unwrap_or_else(|| "Nigel".to_string());
+    let (base32, _uri) = crate::totp::generate_secret(&company, "database")?;
+    println!("\nTOTP Secret (add to your authenticator app):\n");
+    println!("  {base32}\n");
+    println!("Enter the 6-digit code from your authenticator to verify:");
+    let code = rpassword::prompt_password("Code: ")
+        .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+    if !crate::totp::verify_code(&base32, code.trim()) {
+        eprintln!("Invalid code. 2FA was not enabled.");
+        return Ok(());
+    }
+    crate::totp::enable(&conn, &db_path, &base32)?;
+    println!("Two-factor authentication enabled.");
+    Ok(())
+}
+
+#[cfg(feature = "totp")]
+pub fn run_totp_disable() -> Result<()> {
+    let db_path = get_data_dir().join("nigel.db");
+    if !is_encrypted(&db_path)? {
+        eprintln!("Database is not encrypted.");
+        return Ok(());
+    }
+    crate::db::prompt_password_if_needed(&db_path)?;
+    let conn = crate::db::get_connection(&db_path)?;
+    if !crate::totp::is_enabled(&conn) {
+        eprintln!("TOTP 2FA is not enabled.");
+        return Ok(());
+    }
+    let secret = crate::totp::get_secret(&db_path)?;
+    let code = rpassword::prompt_password("Enter authenticator code to disable 2FA: ")
+        .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
+    if !crate::totp::verify_code(&secret, code.trim()) {
+        eprintln!("Invalid code. 2FA was not disabled.");
+        return Ok(());
+    }
+    crate::totp::disable(&conn, &db_path)?;
+    println!("Two-factor authentication disabled.");
+    Ok(())
+}
+
 // Tests mutate the global DB_PASSWORD mutex and must run with --test-threads=1.
 // See also: db::tests, cli::backup::tests.
 #[cfg(test)]

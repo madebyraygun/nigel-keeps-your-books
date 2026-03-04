@@ -201,6 +201,10 @@ fn dispatch(command: Commands) -> error::Result<()> {
             PasswordCommand::Set => cli::password::run_set(),
             PasswordCommand::Change => cli::password::run_change(),
             PasswordCommand::Remove => cli::password::run_remove(),
+            #[cfg(feature = "totp")]
+            PasswordCommand::TotpEnable => cli::password::run_totp_enable(),
+            #[cfg(feature = "totp")]
+            PasswordCommand::TotpDisable => cli::password::run_totp_disable(),
         },
         Commands::Completions { shell } => {
             clap_complete::generate(

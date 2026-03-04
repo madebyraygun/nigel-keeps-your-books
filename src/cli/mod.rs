@@ -178,6 +178,12 @@ pub enum PasswordCommand {
     Change,
     /// Remove the password (decrypt the database).
     Remove,
+    /// Enable TOTP two-factor authentication (requires encrypted database).
+    #[cfg(feature = "totp")]
+    TotpEnable,
+    /// Disable TOTP two-factor authentication.
+    #[cfg(feature = "totp")]
+    TotpDisable,
 }
 
 #[derive(Subcommand)]
