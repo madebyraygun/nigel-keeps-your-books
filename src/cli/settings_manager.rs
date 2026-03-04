@@ -28,6 +28,8 @@ enum Screen {
 /// Menu items on the main settings screen.
 const MENU_BUSINESS_NAME: usize = 0;
 const MENU_PASSWORD: usize = 1;
+#[cfg(feature = "totp")]
+const MENU_TOTP: usize = 2;
 
 pub struct SettingsManager {
     greeting: String,
@@ -38,6 +40,8 @@ pub struct SettingsManager {
     status_message: Option<(String, bool)>,
     status_ttl: u8,
     encrypted: bool,
+    #[cfg(feature = "totp")]
+    totp_enabled: bool,
 }
 
 impl SettingsManager {
@@ -54,6 +58,14 @@ impl SettingsManager {
             status_message: None,
             status_ttl: 0,
             encrypted,
+            #[cfg(feature = "totp")]
+            totp_enabled: {
+                if encrypted {
+                    crate::totp::is_enabled(conn)
+                } else {
+                    false
+                }
+            },
         })
     }
 
@@ -166,6 +178,30 @@ impl SettingsManager {
             ),
         ]));
 
+        #[cfg(feature = "totp")]
+        if self.encrypted {
+            lines.push(Line::from(""));
+            let totp_selected = self.selection == MENU_TOTP;
+            let totp_marker = if totp_selected { ">" } else { " " };
+            let totp_style = if totp_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let totp_status = if self.totp_enabled {
+                "enabled"
+            } else {
+                "not set"
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {totp_marker} Two-Factor Auth  "), totp_style),
+                Span::styled(
+                    format!("({totp_status})"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
         // Status message
         if let Some((msg, success)) = &self.status_message {
             lines.push(Line::from(""));
@@ -201,13 +237,33 @@ impl SettingsManager {
                         // Refresh encrypted status when returning from password manager
                         let db_path = get_data_dir().join("nigel.db");
                         match db::is_encrypted(&db_path) {
-                            Ok(enc) => self.encrypted = enc,
+                            Ok(enc) => {
+                                self.encrypted = enc;
+                                #[cfg(feature = "totp")]
+                                {
+                                    if self.encrypted {
+                                        match crate::db::get_connection(&db_path) {
+                                            Ok(conn) => {
+                                                self.totp_enabled =
+                                                    crate::totp::is_enabled(&conn)
+                                            }
+                                            Err(_) => self.totp_enabled = false,
+                                        }
+                                    } else {
+                                        self.totp_enabled = false;
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 // Preserve previous state rather than defaulting to false
                                 self.set_status(
                                     format!("Could not verify encryption status: {e}"),
                                     false,
                                 );
+                                #[cfg(feature = "totp")]
+                                {
+                                    self.totp_enabled = false;
+                                }
                             }
                         }
                         self.screen = Screen::Main;
@@ -227,7 +283,15 @@ impl SettingsManager {
                 SettingsAction::Continue
             }
             KeyCode::Down => {
-                self.selection = (self.selection + 1).min(MENU_PASSWORD);
+                #[cfg(feature = "totp")]
+                let max = if self.encrypted {
+                    MENU_TOTP
+                } else {
+                    MENU_PASSWORD
+                };
+                #[cfg(not(feature = "totp"))]
+                let max = MENU_PASSWORD;
+                self.selection = (self.selection + 1).min(max);
                 SettingsAction::Continue
             }
             KeyCode::Enter => {
@@ -242,6 +306,14 @@ impl SettingsManager {
                             self.set_status(format!("Could not open password settings: {e}"), false)
                         }
                     },
+                    #[cfg(feature = "totp")]
+                    MENU_TOTP if self.encrypted => {
+                        match PasswordManager::new(&self.greeting) {
+                            Ok(mgr) => self.screen = Screen::Password(mgr),
+                            Err(e) => self
+                                .set_status(format!("Could not open 2FA settings: {e}"), false),
+                        }
+                    }
                     _ => {}
                 }
                 SettingsAction::Continue
