@@ -946,6 +946,8 @@ pub fn run() -> Result<()> {
     // First-run: show onboarding, then ensure data dir + DB exist
     let mut post_setup_action = None;
     let mut onboarding_company = None;
+    #[cfg(feature = "totp")]
+    let mut onboarding_totp_secret: Option<String> = None;
     if is_first_run {
         if let Some(result) = super::onboarding::run()? {
             let mut settings = load_settings();
@@ -961,6 +963,11 @@ pub fn run() -> Result<()> {
 
             if let Some(ref pw) = result.password {
                 crate::db::set_db_password(Some(pw.clone()));
+            }
+
+            #[cfg(feature = "totp")]
+            {
+                onboarding_totp_secret = result.totp_secret;
             }
         }
     }
@@ -985,6 +992,13 @@ pub fn run() -> Result<()> {
     // Save company_name from onboarding to DB metadata
     if let Some(company) = onboarding_company {
         crate::db::set_metadata(&conn, "company_name", &company)?;
+    }
+
+    // Store TOTP secret from onboarding in OS keychain
+    #[cfg(feature = "totp")]
+    if let Some(ref secret) = onboarding_totp_secret {
+        let db_path = data_dir.join("nigel.db");
+        crate::totp::enable(&conn, &db_path, secret)?;
     }
 
     // Migrate legacy company_name from settings.json → DB metadata
