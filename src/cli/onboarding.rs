@@ -42,6 +42,8 @@ const FIELD_BUTTON: usize = 3;
 enum Screen {
     NameInput,
     ConfirmPassword,
+    #[cfg(feature = "totp")]
+    TotpSetup,
     ActionPicker,
 }
 
@@ -56,6 +58,8 @@ pub struct OnboardingResult {
     pub user_name: String,
     pub company_name: String,
     pub password: Option<String>,
+    #[cfg(feature = "totp")]
+    pub totp_secret: Option<String>,
     pub action: PostSetupAction,
 }
 
@@ -77,6 +81,14 @@ struct Onboarding {
     start: Instant,
     reveal_order: Vec<(usize, usize)>,
     intro_done: bool,
+    #[cfg(feature = "totp")]
+    totp_secret: String,
+    #[cfg(feature = "totp")]
+    totp_code: String,
+    #[cfg(feature = "totp")]
+    totp_cursor: usize,
+    #[cfg(feature = "totp")]
+    totp_error: bool,
 }
 
 impl Onboarding {
@@ -100,6 +112,14 @@ impl Onboarding {
             start: Instant::now(),
             reveal_order: effects::logo_reveal_order(),
             intro_done: false,
+            #[cfg(feature = "totp")]
+            totp_secret: String::new(),
+            #[cfg(feature = "totp")]
+            totp_code: String::new(),
+            #[cfg(feature = "totp")]
+            totp_cursor: 0,
+            #[cfg(feature = "totp")]
+            totp_error: false,
         }
     }
 
@@ -143,6 +163,8 @@ impl Onboarding {
         match self.screen {
             Screen::NameInput => self.draw_name_input(frame, area),
             Screen::ConfirmPassword => self.draw_confirm_password(frame, area),
+            #[cfg(feature = "totp")]
+            Screen::TotpSetup => self.draw_totp_setup(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
         }
     }
@@ -579,6 +601,138 @@ impl Onboarding {
         }
         StepResult::Continue
     }
+
+    #[cfg(feature = "totp")]
+    fn handle_totp_key(&mut self, code: KeyCode) -> StepResult {
+        match code {
+            KeyCode::Enter => {
+                if crate::totp::verify_code(&self.totp_secret, self.totp_code.trim()) {
+                    self.totp_error = false;
+                    StepResult::NextScreen
+                } else {
+                    self.totp_error = true;
+                    self.totp_code.zeroize();
+                    self.totp_code = String::new();
+                    self.totp_cursor = 0;
+                    StepResult::Continue
+                }
+            }
+            KeyCode::Esc => {
+                // Skip 2FA setup
+                self.totp_secret.zeroize();
+                self.totp_secret = String::new();
+                StepResult::NextScreen
+            }
+            KeyCode::Char(c) => {
+                if c.is_ascii_digit() && self.totp_code.len() < 6 {
+                    self.totp_error = false;
+                    self.totp_code.push(c);
+                    self.totp_cursor += 1;
+                }
+                StepResult::Continue
+            }
+            KeyCode::Backspace => {
+                if self.totp_cursor > 0 {
+                    self.totp_code.pop();
+                    self.totp_cursor -= 1;
+                    self.totp_error = false;
+                }
+                StepResult::Continue
+            }
+            _ => StepResult::Continue,
+        }
+    }
+
+    #[cfg(feature = "totp")]
+    fn draw_totp_setup(&self, frame: &mut Frame, area: Rect) {
+        let logo_height = LOGO.len() as u16;
+        let error_height = if self.totp_error { 1 } else { 0 };
+        let [_top_pad, logo_area, _gap1, title_area, _gap2, secret_label_area, secret_area, _gap3, code_label_area, code_area, error_area, _gap4, hints_area, _bottom_pad, version_area] =
+            Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(logo_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(error_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+        effects::render_logo(self.phase, frame, logo_area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled("Set up Two-Factor Authentication", HEADER_STYLE))
+                .alignment(ratatui::layout::Alignment::Center),
+            title_area,
+        );
+
+        let form_width = 50u16.min(area.width.saturating_sub(4));
+        let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
+
+        let secret_label_rect = Rect::new(form_x, secret_label_area.y, form_width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Add this secret to your authenticator app:",
+                Style::default().fg(Color::DarkGray),
+            )),
+            secret_label_rect,
+        );
+
+        let secret_rect = Rect::new(form_x, secret_area.y, form_width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("  {}", self.totp_secret),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )),
+            secret_rect,
+        );
+
+        let code_label_rect = Rect::new(form_x, code_label_area.y, form_width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Enter the 6-digit code to verify:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            code_label_rect,
+        );
+
+        let code_rect = Rect::new(form_x, code_area.y, form_width, 1);
+        let cursor_display = format!("{}\u{2588}", self.totp_code);
+        let padded = format!("{:<width$}", cursor_display, width = form_width as usize);
+        frame.render_widget(
+            Paragraph::new(Span::styled(padded, SELECTED_STYLE)),
+            code_rect,
+        );
+
+        if self.totp_error {
+            let error_rect = Rect::new(form_x, error_area.y, form_width, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "Invalid code. Try again.",
+                    Style::default().fg(Color::Red),
+                )),
+                error_rect,
+            );
+        }
+
+        frame.render_widget(
+            Paragraph::new(" Enter=verify  Esc=skip 2FA")
+                .style(FOOTER_STYLE)
+                .alignment(ratatui::layout::Alignment::Center),
+            hints_area,
+        );
+
+        crate::tui::render_version(frame, version_area);
+    }
 }
 
 /// Convert a char-index cursor position to a byte offset.
@@ -609,6 +763,11 @@ impl Drop for Onboarding {
     fn drop(&mut self) {
         self.password.zeroize();
         self.confirm_password.zeroize();
+        #[cfg(feature = "totp")]
+        {
+            self.totp_secret.zeroize();
+            self.totp_code.zeroize();
+        }
     }
 }
 
@@ -644,6 +803,8 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                     let step = match onboarding.screen {
                         Screen::NameInput => onboarding.handle_name_key(key.code),
                         Screen::ConfirmPassword => onboarding.handle_confirm_key(key.code),
+                        #[cfg(feature = "totp")]
+                        Screen::TotpSetup => onboarding.handle_totp_key(key.code),
                         Screen::ActionPicker => onboarding.handle_action_key(key.code),
                     };
 
@@ -661,6 +822,31 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                 }
                             }
                             Screen::ConfirmPassword => {
+                                #[cfg(feature = "totp")]
+                                {
+                                    match crate::totp::generate_secret(
+                                        "Nigel",
+                                        &onboarding.company_name,
+                                    ) {
+                                        Ok((base32, _uri)) => {
+                                            onboarding.totp_secret = base32;
+                                            onboarding.totp_code.clear();
+                                            onboarding.totp_cursor = 0;
+                                            onboarding.totp_error = false;
+                                            onboarding.screen = Screen::TotpSetup;
+                                        }
+                                        Err(_) => {
+                                            onboarding.screen = Screen::ActionPicker;
+                                        }
+                                    }
+                                }
+                                #[cfg(not(feature = "totp"))]
+                                {
+                                    onboarding.screen = Screen::ActionPicker;
+                                }
+                            }
+                            #[cfg(feature = "totp")]
+                            Screen::TotpSetup => {
                                 onboarding.screen = Screen::ActionPicker;
                             }
                             Screen::ActionPicker => {}
@@ -676,6 +862,12 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                 user_name: onboarding.user_name.trim().to_string(),
                                 company_name: onboarding.company_name.trim().to_string(),
                                 password: if pw.is_empty() { None } else { Some(pw) },
+                                #[cfg(feature = "totp")]
+                                totp_secret: if onboarding.totp_secret.is_empty() {
+                                    None
+                                } else {
+                                    Some(onboarding.totp_secret.clone())
+                                },
                                 action,
                             }));
                         }
@@ -717,6 +909,14 @@ mod tests {
             start: Instant::now(),
             reveal_order: vec![],
             intro_done: true,
+            #[cfg(feature = "totp")]
+            totp_secret: String::new(),
+            #[cfg(feature = "totp")]
+            totp_code: String::new(),
+            #[cfg(feature = "totp")]
+            totp_cursor: 0,
+            #[cfg(feature = "totp")]
+            totp_error: false,
         }
     }
 
@@ -777,6 +977,12 @@ mod tests {
             user_name: ob.user_name.trim().to_string(),
             company_name: ob.company_name.trim().to_string(),
             password: if pw.is_empty() { None } else { Some(pw) },
+            #[cfg(feature = "totp")]
+            totp_secret: if ob.totp_secret.is_empty() {
+                None
+            } else {
+                Some(ob.totp_secret.clone())
+            },
             action,
         }
     }
@@ -918,5 +1124,44 @@ mod tests {
         ob.handle_confirm_key(KeyCode::Char('c'));
         let result = ob.handle_confirm_key(KeyCode::Enter);
         assert!(matches!(result, StepResult::NextScreen));
+    }
+
+    #[cfg(feature = "totp")]
+    #[test]
+    fn totp_setup_esc_skips() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::TotpSetup;
+        ob.totp_secret = "JBSWY3DPEHPK3PXP".into();
+        let result = ob.handle_totp_key(KeyCode::Esc);
+        assert!(matches!(result, StepResult::NextScreen));
+        assert!(ob.totp_secret.is_empty());
+    }
+
+    #[cfg(feature = "totp")]
+    #[test]
+    fn totp_setup_wrong_code_shows_error() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::TotpSetup;
+        ob.totp_secret = "JBSWY3DPEHPK3PXP".into();
+        for c in "000000".chars() {
+            ob.handle_totp_key(KeyCode::Char(c));
+        }
+        let result = ob.handle_totp_key(KeyCode::Enter);
+        assert!(matches!(result, StepResult::Continue));
+        assert!(ob.totp_error);
+        assert!(ob.totp_code.is_empty());
+    }
+
+    #[cfg(feature = "totp")]
+    #[test]
+    fn totp_setup_only_digits_accepted() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::TotpSetup;
+        ob.totp_secret = "JBSWY3DPEHPK3PXP".into();
+        ob.handle_totp_key(KeyCode::Char('a'));
+        ob.handle_totp_key(KeyCode::Char('1'));
+        ob.handle_totp_key(KeyCode::Char('!'));
+        ob.handle_totp_key(KeyCode::Char('2'));
+        assert_eq!(ob.totp_code, "12");
     }
 }
