@@ -18,16 +18,11 @@ enum Action {
     Set,
     Change,
     Remove,
+    #[cfg(feature = "totp")]
+    TotpEnable,
+    #[cfg(feature = "totp")]
+    TotpDisable,
 }
-
-const ACTIONS_ENCRYPTED: &[(&str, usize)] = &[
-    ("Change password", 0), // Action::Change
-    ("Remove password", 1), // Action::Remove
-];
-
-const ACTIONS_PLAIN: &[(&str, usize)] = &[
-    ("Set password", 2), // Action::Set
-];
 
 enum Phase {
     Menu,
@@ -35,6 +30,12 @@ enum Phase {
     InputNew,
     InputConfirm,
     Result(String, bool),
+    #[cfg(feature = "totp")]
+    TotpDisplay(String), // base32 secret displayed to user
+    #[cfg(feature = "totp")]
+    TotpVerify, // user enters code to verify
+    #[cfg(feature = "totp")]
+    TotpConfirmDisable, // user enters code to confirm disable
 }
 
 pub struct PasswordManager {
@@ -47,6 +48,12 @@ pub struct PasswordManager {
     cursor: usize,
     chosen_action: Option<Action>,
     greeting: String,
+    #[cfg(feature = "totp")]
+    totp_enabled: bool,
+    #[cfg(feature = "totp")]
+    totp_secret: String,
+    #[cfg(feature = "totp")]
+    totp_code: String,
 }
 
 pub enum PasswordAction {
@@ -68,15 +75,40 @@ impl PasswordManager {
             cursor: 0,
             chosen_action: None,
             greeting: greeting.to_string(),
+            #[cfg(feature = "totp")]
+            totp_enabled: {
+                let check_path = get_data_dir().join("nigel.db");
+                if encrypted {
+                    crate::db::get_connection(&check_path)
+                        .ok()
+                        .map(|conn| crate::totp::is_enabled(&conn))
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            },
+            #[cfg(feature = "totp")]
+            totp_secret: String::new(),
+            #[cfg(feature = "totp")]
+            totp_code: String::new(),
         })
     }
 
-    fn actions(&self) -> &[(&str, usize)] {
+    fn actions(&self) -> Vec<(&str, usize)> {
+        let mut items = Vec::new();
         if self.encrypted {
-            ACTIONS_ENCRYPTED
+            items.push(("Change password", 0));
+            items.push(("Remove password", 1));
+            #[cfg(feature = "totp")]
+            if self.totp_enabled {
+                items.push(("Disable 2FA", 4));
+            } else {
+                items.push(("Enable 2FA", 3));
+            }
         } else {
-            ACTIONS_PLAIN
+            items.push(("Set password", 2));
         }
+        items
     }
 
     fn active_input_mut(&mut self) -> &mut String {
@@ -110,6 +142,10 @@ impl PasswordManager {
                 }
             }
             Some(Action::Remove) => self.do_remove(&db_path),
+            #[cfg(feature = "totp")]
+            Some(Action::TotpEnable) | Some(Action::TotpDisable) => {
+                return; // TOTP actions are handled in handle_totp_key
+            }
             None => Err("No action selected.".to_string()),
         };
 
@@ -214,6 +250,22 @@ impl PasswordManager {
                     centered,
                 );
             }
+            #[cfg(feature = "totp")]
+            Phase::TotpDisplay(ref secret) => {
+                self.draw_totp_display(frame, centered, secret);
+            }
+            #[cfg(feature = "totp")]
+            Phase::TotpVerify => {
+                self.draw_totp_code_input(frame, centered, "Enter code to verify:");
+            }
+            #[cfg(feature = "totp")]
+            Phase::TotpConfirmDisable => {
+                self.draw_totp_code_input(
+                    frame,
+                    centered,
+                    "Enter authenticator code to disable 2FA:",
+                );
+            }
         }
 
         let hints = match &self.phase {
@@ -222,6 +274,10 @@ impl PasswordManager {
                 "Enter=confirm  Esc=cancel"
             }
             Phase::Result(_, _) => "Esc=back",
+            #[cfg(feature = "totp")]
+            Phase::TotpDisplay(_) => "Enter=continue  Esc=cancel",
+            #[cfg(feature = "totp")]
+            Phase::TotpVerify | Phase::TotpConfirmDisable => "Enter=confirm  Esc=cancel",
         };
         frame.render_widget(
             Paragraph::new(format!(" {hints}"))
@@ -271,6 +327,64 @@ impl PasswordManager {
         );
     }
 
+    #[cfg(feature = "totp")]
+    fn draw_totp_display(&self, frame: &mut Frame, area: Rect, secret: &str) {
+        let [label_area, _gap, secret_area, _gap2, hint_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Add this secret to your authenticator app:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            label_area,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("  {secret}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            secret_area,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Press Enter to continue",
+                Style::default().fg(Color::DarkGray),
+            )),
+            hint_area,
+        );
+    }
+
+    #[cfg(feature = "totp")]
+    fn draw_totp_code_input(&self, frame: &mut Frame, area: Rect, label: &str) {
+        let [label_area, input_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                label,
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            label_area,
+        );
+
+        let cursor_display = format!("{}\u{2588}", self.totp_code);
+        let width = input_area.width as usize;
+        let padded = format!("{:<width$}", cursor_display, width = width);
+        frame.render_widget(
+            Paragraph::new(Span::styled(padded, SELECTED_STYLE)),
+            input_area,
+        );
+    }
+
     pub fn handle_key(&mut self, code: KeyCode) -> PasswordAction {
         match &self.phase {
             Phase::Menu => self.handle_menu_key(code),
@@ -282,6 +396,10 @@ impl PasswordManager {
                     self.reset();
                 }
                 PasswordAction::Continue
+            }
+            #[cfg(feature = "totp")]
+            Phase::TotpDisplay(_) | Phase::TotpVerify | Phase::TotpConfirmDisable => {
+                self.handle_totp_key(code)
             }
         }
     }
@@ -299,11 +417,36 @@ impl PasswordManager {
                     Some((_, 0)) => Action::Change,
                     Some((_, 1)) => Action::Remove,
                     Some((_, 2)) => Action::Set,
+                    #[cfg(feature = "totp")]
+                    Some((_, 3)) => Action::TotpEnable,
+                    #[cfg(feature = "totp")]
+                    Some((_, 4)) => Action::TotpDisable,
                     _ => return PasswordAction::Continue,
                 };
                 let first_phase = match action {
                     Action::Set => Phase::InputNew,
                     Action::Change | Action::Remove => Phase::InputCurrent,
+                    #[cfg(feature = "totp")]
+                    Action::TotpEnable => {
+                        let company = {
+                            let db_path = get_data_dir().join("nigel.db");
+                            crate::db::get_connection(&db_path)
+                                .ok()
+                                .and_then(|conn| crate::db::get_metadata(&conn, "company_name"))
+                                .unwrap_or_else(|| "Nigel".to_string())
+                        };
+                        match crate::totp::generate_secret(&company, "database") {
+                            Ok((base32, _)) => {
+                                self.totp_secret = base32.clone();
+                                Phase::TotpDisplay(base32)
+                            }
+                            Err(e) => {
+                                Phase::Result(format!("Failed to generate secret: {e}"), false)
+                            }
+                        }
+                    }
+                    #[cfg(feature = "totp")]
+                    Action::TotpDisable => Phase::TotpConfirmDisable,
                 };
                 self.chosen_action = Some(action);
                 self.phase = first_phase;
@@ -351,6 +494,103 @@ impl PasswordManager {
         PasswordAction::Continue
     }
 
+    #[cfg(feature = "totp")]
+    fn handle_totp_key(&mut self, code: KeyCode) -> PasswordAction {
+        match code {
+            KeyCode::Esc => {
+                self.reset();
+            }
+            KeyCode::Enter => match &self.phase {
+                Phase::TotpDisplay(_) => {
+                    self.totp_code.clear();
+                    self.phase = Phase::TotpVerify;
+                }
+                Phase::TotpVerify => {
+                    if crate::totp::verify_code(&self.totp_secret, self.totp_code.trim()) {
+                        let db_path = get_data_dir().join("nigel.db");
+                        match crate::db::get_connection(&db_path) {
+                            Ok(conn) => {
+                                match crate::totp::enable(&conn, &db_path, &self.totp_secret) {
+                                    Ok(()) => {
+                                        self.totp_enabled = true;
+                                        self.phase = Phase::Result(
+                                            "Two-factor authentication enabled.".into(),
+                                            true,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        self.phase = Phase::Result(
+                                            format!("Failed to enable 2FA: {e}"),
+                                            false,
+                                        )
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.phase = Phase::Result(format!("DB error: {e}"), false)
+                            }
+                        }
+                    } else {
+                        self.phase =
+                            Phase::Result("Invalid code. 2FA was not enabled.".into(), false);
+                    }
+                    self.totp_code.clear();
+                }
+                Phase::TotpConfirmDisable => {
+                    let db_path = get_data_dir().join("nigel.db");
+                    let secret = match crate::totp::get_secret(&db_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            self.phase = Phase::Result(format!("Keychain error: {e}"), false);
+                            return PasswordAction::Continue;
+                        }
+                    };
+                    if crate::totp::verify_code(&secret, self.totp_code.trim()) {
+                        match crate::db::get_connection(&db_path) {
+                            Ok(conn) => match crate::totp::disable(&conn, &db_path) {
+                                Ok(()) => {
+                                    self.totp_enabled = false;
+                                    self.phase = Phase::Result(
+                                        "Two-factor authentication disabled.".into(),
+                                        true,
+                                    );
+                                }
+                                Err(e) => {
+                                    self.phase = Phase::Result(
+                                        format!("Failed to disable 2FA: {e}"),
+                                        false,
+                                    )
+                                }
+                            },
+                            Err(e) => {
+                                self.phase = Phase::Result(format!("DB error: {e}"), false)
+                            }
+                        }
+                    } else {
+                        self.phase =
+                            Phase::Result("Invalid code. 2FA was not disabled.".into(), false);
+                    }
+                    self.totp_code.clear();
+                }
+                _ => {}
+            },
+            KeyCode::Char(c) => {
+                if matches!(self.phase, Phase::TotpVerify | Phase::TotpConfirmDisable) {
+                    if c.is_ascii_digit() && self.totp_code.len() < 6 {
+                        self.totp_code.push(c);
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if matches!(self.phase, Phase::TotpVerify | Phase::TotpConfirmDisable) {
+                    self.totp_code.pop();
+                }
+            }
+            _ => {}
+        }
+        PasswordAction::Continue
+    }
+
     fn reset(&mut self) {
         self.current_pw.zeroize();
         self.new_pw.zeroize();
@@ -359,6 +599,11 @@ impl PasswordManager {
         self.selection = 0;
         self.chosen_action = None;
         self.phase = Phase::Menu;
+        #[cfg(feature = "totp")]
+        {
+            self.totp_secret.zeroize();
+            self.totp_code.zeroize();
+        }
     }
 }
 
@@ -367,5 +612,10 @@ impl Drop for PasswordManager {
         self.current_pw.zeroize();
         self.new_pw.zeroize();
         self.confirm_pw.zeroize();
+        #[cfg(feature = "totp")]
+        {
+            self.totp_secret.zeroize();
+            self.totp_code.zeroize();
+        }
     }
 }
