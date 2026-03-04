@@ -34,6 +34,14 @@ struct Splash {
     cursor: usize,
     error_msg: Option<String>,
     attempts: u8,
+    #[cfg(feature = "totp")]
+    totp_mode: bool,
+    #[cfg(feature = "totp")]
+    totp_input: String,
+    #[cfg(feature = "totp")]
+    totp_attempts: u8,
+    #[cfg(feature = "totp")]
+    totp_secret: Option<String>,
 }
 
 impl Splash {
@@ -52,6 +60,14 @@ impl Splash {
             cursor: 0,
             error_msg: None,
             attempts: 0,
+            #[cfg(feature = "totp")]
+            totp_mode: false,
+            #[cfg(feature = "totp")]
+            totp_input: String::new(),
+            #[cfg(feature = "totp")]
+            totp_attempts: 0,
+            #[cfg(feature = "totp")]
+            totp_secret: None,
         }
     }
 
@@ -118,6 +134,13 @@ impl Splash {
 
             if elapsed_ms >= REVEAL_MS {
                 tui::render_version(frame, version_area);
+                #[cfg(feature = "totp")]
+                if self.totp_mode {
+                    self.draw_totp_input(frame, pw_area);
+                } else {
+                    self.draw_password_input(frame, pw_area);
+                }
+                #[cfg(not(feature = "totp"))]
                 self.draw_password_input(frame, pw_area);
             }
         } else {
@@ -206,6 +229,30 @@ impl Splash {
             match crate::db::validate_password(db_path, &self.password) {
                 Ok(true) => {
                     crate::db::set_db_password(Some(self.password.clone()));
+                    #[cfg(feature = "totp")]
+                    {
+                        if let Some(ref db_path) = self.db_path {
+                            if let Ok(conn) = crate::db::get_connection(db_path) {
+                                if crate::totp::is_enabled(&conn) {
+                                    match crate::totp::get_secret(db_path) {
+                                        Ok(secret) => {
+                                            self.totp_mode = true;
+                                            self.totp_secret = Some(secret);
+                                            self.error_msg = None;
+                                            return Ok(false); // Don't close — need TOTP
+                                        }
+                                        Err(_) => {
+                                            self.error_msg = Some(
+                                                "Could not read TOTP secret from keychain.".into(),
+                                            );
+                                            crate::db::set_db_password(None);
+                                            return Ok(false);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     return Ok(true);
                 }
                 Ok(false) => {
@@ -225,11 +272,81 @@ impl Splash {
         }
         Ok(false)
     }
+
+    #[cfg(feature = "totp")]
+    fn try_totp(&mut self) -> Result<bool> {
+        if let Some(ref secret) = self.totp_secret {
+            if crate::totp::verify_code(secret, self.totp_input.trim()) {
+                return Ok(true);
+            }
+            self.totp_attempts += 1;
+            if self.totp_attempts >= MAX_PASSWORD_ATTEMPTS {
+                self.error_msg = Some("Failed TOTP verification after 3 attempts.".into());
+            } else {
+                self.error_msg = Some(format!(
+                    "Invalid code. Try again ({}/3).",
+                    self.totp_attempts
+                ));
+            }
+            self.totp_input.clear();
+        }
+        Ok(false)
+    }
+
+    #[cfg(feature = "totp")]
+    fn draw_totp_input(&self, frame: &mut Frame, area: Rect) {
+        let form_width = 40u16.min(area.width.saturating_sub(4));
+        let form_x = area.x + (area.width.saturating_sub(form_width)) / 2;
+        let centered = Rect::new(form_x, area.y, form_width, area.height);
+
+        let [label_area, input_area, _gap, error_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(centered);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "Enter authenticator code:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            label_area,
+        );
+
+        let cursor_display = format!("{}\u{2588}", self.totp_input);
+        let width = input_area.width as usize;
+        let padded = format!("{:<width$}", cursor_display, width = width);
+        frame.render_widget(
+            Paragraph::new(Span::styled(padded, tui::SELECTED_STYLE))
+                .alignment(Alignment::Left),
+            input_area,
+        );
+
+        if let Some(ref msg) = self.error_msg {
+            frame.render_widget(
+                Paragraph::new(Span::styled(msg.as_str(), Style::default().fg(Color::Red)))
+                    .alignment(Alignment::Center),
+                error_area,
+            );
+        }
+    }
 }
 
 impl Drop for Splash {
     fn drop(&mut self) {
         self.password.zeroize();
+        #[cfg(feature = "totp")]
+        {
+            self.totp_input.zeroize();
+            if let Some(ref mut s) = self.totp_secret {
+                s.zeroize();
+            }
+        }
     }
 }
 
@@ -291,6 +408,25 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                     }
                     match key.code {
                         KeyCode::Enter => {
+                            #[cfg(feature = "totp")]
+                            if splash.totp_mode {
+                                if splash.totp_input.is_empty() {
+                                    continue;
+                                }
+                                match splash.try_totp() {
+                                    Ok(true) => break Ok(()),
+                                    Ok(false) => {
+                                        if splash.totp_attempts >= MAX_PASSWORD_ATTEMPTS {
+                                            break Err(crate::error::NigelError::Other(
+                                                "Failed TOTP verification after 3 attempts."
+                                                    .into(),
+                                            ));
+                                        }
+                                        continue;
+                                    }
+                                    Err(e) => break Err(e),
+                                }
+                            }
                             if splash.password.is_empty() {
                                 continue;
                             }
@@ -307,10 +443,22 @@ pub fn run_with_password(db_path: &Path) -> Result<()> {
                             }
                         }
                         KeyCode::Char(c) => {
+                            #[cfg(feature = "totp")]
+                            if splash.totp_mode {
+                                if c.is_ascii_digit() && splash.totp_input.len() < 6 {
+                                    splash.totp_input.push(c);
+                                }
+                                continue;
+                            }
                             splash.password.push(c);
                             splash.cursor += 1;
                         }
                         KeyCode::Backspace => {
+                            #[cfg(feature = "totp")]
+                            if splash.totp_mode {
+                                splash.totp_input.pop();
+                                continue;
+                            }
                             if splash.cursor > 0 {
                                 splash.password.pop();
                                 splash.cursor -= 1;
@@ -469,5 +617,15 @@ mod tests {
         drop(splash);
         // Can't directly test zeroization of dropped value, but we verify
         // the Drop impl exists and compiles
+    }
+
+    #[cfg(feature = "totp")]
+    #[test]
+    fn totp_mode_fields_initialized() {
+        let splash = Splash::new_with_password(Path::new("/tmp/test.db"));
+        assert!(!splash.totp_mode);
+        assert!(splash.totp_input.is_empty());
+        assert_eq!(splash.totp_attempts, 0);
+        assert!(splash.totp_secret.is_none());
     }
 }
