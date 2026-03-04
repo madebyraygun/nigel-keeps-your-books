@@ -575,10 +575,11 @@ impl PasswordManager {
                 _ => {}
             },
             KeyCode::Char(c) => {
-                if matches!(self.phase, Phase::TotpVerify | Phase::TotpConfirmDisable) {
-                    if c.is_ascii_digit() && self.totp_code.len() < 6 {
-                        self.totp_code.push(c);
-                    }
+                if matches!(self.phase, Phase::TotpVerify | Phase::TotpConfirmDisable)
+                    && c.is_ascii_digit()
+                    && self.totp_code.len() < 6
+                {
+                    self.totp_code.push(c);
                 }
             }
             KeyCode::Backspace => {
