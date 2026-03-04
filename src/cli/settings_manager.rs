@@ -8,10 +8,11 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
+use std::path::PathBuf;
+
 use crate::cli::password_manager::{PasswordAction, PasswordManager};
 use crate::db;
 use crate::error::Result;
-use crate::settings::get_data_dir;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
 
 pub enum SettingsAction {
@@ -33,6 +34,7 @@ const MENU_TOTP: usize = 2;
 
 pub struct SettingsManager {
     greeting: String,
+    db_path: PathBuf,
     screen: Screen,
     selection: usize,
     company_name: String,
@@ -45,12 +47,12 @@ pub struct SettingsManager {
 }
 
 impl SettingsManager {
-    pub fn new(conn: &Connection, greeting: &str) -> Result<Self> {
+    pub fn new(conn: &Connection, greeting: &str, db_path: PathBuf) -> Result<Self> {
         let company_name = db::get_metadata(conn, "company_name").unwrap_or_default();
-        let db_path = get_data_dir().join("nigel.db");
         let encrypted = db::is_encrypted(&db_path)?;
         Ok(Self {
             greeting: greeting.to_string(),
+            db_path,
             screen: Screen::Main,
             selection: 0,
             company_name,
@@ -235,14 +237,13 @@ impl SettingsManager {
                 match mgr.handle_key(code) {
                     PasswordAction::Close => {
                         // Refresh encrypted status when returning from password manager
-                        let db_path = get_data_dir().join("nigel.db");
-                        match db::is_encrypted(&db_path) {
+                        match db::is_encrypted(&self.db_path) {
                             Ok(enc) => {
                                 self.encrypted = enc;
                                 #[cfg(feature = "totp")]
                                 {
                                     if self.encrypted {
-                                        match crate::db::get_connection(&db_path) {
+                                        match crate::db::get_connection(&self.db_path) {
                                             Ok(conn) => {
                                                 self.totp_enabled = crate::totp::is_enabled(&conn)
                                             }
@@ -356,48 +357,49 @@ impl SettingsManager {
 mod tests {
     use super::*;
 
-    fn test_db() -> (tempfile::TempDir, Connection) {
+    fn test_db() -> (tempfile::TempDir, PathBuf, Connection) {
         let dir = tempfile::tempdir().unwrap();
-        let conn = db::get_connection(&dir.path().join("test.db")).unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = db::get_connection(&db_path).unwrap();
         db::init_db(&conn).unwrap();
-        (dir, conn)
+        (dir, db_path, conn)
     }
 
     #[test]
     fn new_loads_company_name() {
-        let (_dir, conn) = test_db();
+        let (_dir, db_path, conn) = test_db();
         db::set_metadata(&conn, "company_name", "Acme LLC").unwrap();
-        let mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
         assert_eq!(mgr.company_name, "Acme LLC");
     }
 
     #[test]
     fn new_with_no_company_name() {
-        let (_dir, conn) = test_db();
-        let mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
         assert_eq!(mgr.company_name, "");
     }
 
     #[test]
     fn esc_closes() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
         let action = mgr.handle_key(KeyCode::Esc, &conn);
         assert!(matches!(action, SettingsAction::Close));
     }
 
     #[test]
     fn q_closes() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
         let action = mgr.handle_key(KeyCode::Char('q'), &conn);
         assert!(matches!(action, SettingsAction::Close));
     }
 
     #[test]
     fn navigate_menu() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
         assert_eq!(mgr.selection, MENU_BUSINESS_NAME);
         mgr.handle_key(KeyCode::Down, &conn);
         assert_eq!(mgr.selection, MENU_PASSWORD);
@@ -409,8 +411,8 @@ mod tests {
 
     #[test]
     fn edit_business_name_save() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         // Enter edit mode
         mgr.handle_key(KeyCode::Enter, &conn);
@@ -434,9 +436,9 @@ mod tests {
 
     #[test]
     fn edit_business_name_cancel() {
-        let (_dir, conn) = test_db();
+        let (_dir, db_path, conn) = test_db();
         db::set_metadata(&conn, "company_name", "Original").unwrap();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         // Enter edit mode
         mgr.handle_key(KeyCode::Enter, &conn);
@@ -456,8 +458,8 @@ mod tests {
 
     #[test]
     fn edit_business_name_backspace() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         mgr.handle_key(KeyCode::Enter, &conn);
         for c in "ABC".chars() {
@@ -469,8 +471,8 @@ mod tests {
 
     #[test]
     fn enter_password_screen() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         // Navigate to password
         mgr.handle_key(KeyCode::Down, &conn);
@@ -487,8 +489,8 @@ mod tests {
 
     #[test]
     fn edit_trims_whitespace() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         mgr.handle_key(KeyCode::Enter, &conn);
         for c in "  Acme LLC  ".chars() {
@@ -501,9 +503,9 @@ mod tests {
 
     #[test]
     fn edit_empty_name_saves() {
-        let (_dir, conn) = test_db();
+        let (_dir, db_path, conn) = test_db();
         db::set_metadata(&conn, "company_name", "Old Name").unwrap();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         // Enter edit, clear, save empty
         mgr.handle_key(KeyCode::Enter, &conn);
@@ -517,9 +519,9 @@ mod tests {
 
     #[test]
     fn edit_prepopulates_buffer() {
-        let (_dir, conn) = test_db();
+        let (_dir, db_path, conn) = test_db();
         db::set_metadata(&conn, "company_name", "Existing Corp").unwrap();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         mgr.handle_key(KeyCode::Enter, &conn);
         assert!(matches!(mgr.screen, Screen::EditingName));
@@ -528,8 +530,8 @@ mod tests {
 
     #[test]
     fn status_message_ttl() {
-        let (_dir, conn) = test_db();
-        let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        let (_dir, db_path, conn) = test_db();
+        let mut mgr = SettingsManager::new(&conn, "Hello", db_path.clone()).unwrap();
 
         // Save a name to trigger status message
         mgr.handle_key(KeyCode::Enter, &conn);

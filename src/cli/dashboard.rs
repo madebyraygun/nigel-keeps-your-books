@@ -677,7 +677,7 @@ impl Dashboard {
                 }
             }
             10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            11 => match SettingsManager::new(conn, &self.greeting) {
+            11 => match SettingsManager::new(conn, &self.greeting, get_data_dir().join("nigel.db")) {
                 Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
@@ -1059,6 +1059,19 @@ pub fn run() -> Result<()> {
             }
             super::onboarding::PostSetupAction::StartFresh => {
                 // Nothing extra — DB is already initialized above
+            }
+        }
+    }
+
+    // If data dir changed (e.g., demo), also enable TOTP on the new DB
+    #[cfg(feature = "totp")]
+    if let Some(ref secret) = onboarding_totp_secret {
+        let current_db_path = get_data_dir().join("nigel.db");
+        if current_db_path != db_path {
+            let conn = crate::db::get_connection(&current_db_path)?;
+            crate::totp::enable(&conn, &current_db_path, secret)?;
+            if let Some(ref json) = onboarding_recovery_json {
+                crate::totp::store_recovery_codes(&conn, json)?;
             }
         }
     }
