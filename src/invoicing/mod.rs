@@ -6,3 +6,4 @@ pub mod r2;
 pub mod render_html;
 pub mod send;
 pub mod stripe;
+pub mod sync;
