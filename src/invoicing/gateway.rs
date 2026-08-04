@@ -8,24 +8,20 @@ pub struct PaymentLink {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PaidSession {
     pub session_id: String,
     pub amount: f64,
 }
 
-#[allow(dead_code)]
 pub trait PaymentGateway {
     fn create_payment_link(&self, invoice: &Invoice, client: &Client) -> Result<PaymentLink>;
     fn paid_sessions(&self, payment_link_id: &str) -> Result<Vec<PaidSession>>;
 }
 
-#[allow(dead_code)]
 pub trait AssetPublisher {
     fn publish(&self, token: &str, html: &[u8], pdf: &[u8]) -> Result<String>;
 }
 
-#[allow(dead_code)]
 pub trait Mailer {
     fn send_invoice(&self, to: &str, subject: &str, html: &str, pdf: &[u8]) -> Result<()>;
 }

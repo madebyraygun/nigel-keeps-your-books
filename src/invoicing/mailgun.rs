@@ -17,7 +17,6 @@ fn ensure_success(status: reqwest::StatusCode, body: &str) -> Result<()> {
     Err(NigelError::Other(format!("mailgun {status}: {body}")))
 }
 
-#[allow(dead_code)]
 pub struct MailgunClient {
     pub api_key: String,
     pub domain: String,

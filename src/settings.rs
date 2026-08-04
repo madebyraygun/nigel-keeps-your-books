@@ -120,7 +120,6 @@ pub fn migrate_company_name() -> Option<String> {
 }
 
 /// Resolved invoicing credentials and endpoints.
-#[allow(dead_code)]
 pub struct InvoicingConfig {
     pub stripe_secret_key: Option<String>,
     pub mailgun_api_key: Option<String>,
@@ -137,7 +136,6 @@ fn env_or(name: &str, file_val: &Option<String>) -> Option<String> {
     std::env::var(name).ok().or_else(|| file_val.clone())
 }
 
-#[allow(dead_code)]
 pub fn invoicing_config_from(s: &Settings) -> InvoicingConfig {
     InvoicingConfig {
         stripe_secret_key: env_or("NIGEL_STRIPE_SECRET_KEY", &s.stripe_secret_key),
@@ -155,7 +153,6 @@ pub fn invoicing_config_from(s: &Settings) -> InvoicingConfig {
     }
 }
 
-#[allow(dead_code)]
 pub fn invoicing_config() -> InvoicingConfig {
     invoicing_config_from(&load_settings())
 }

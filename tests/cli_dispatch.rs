@@ -340,6 +340,28 @@ fn init_without_db_then_status() {
 }
 
 #[test]
+fn client_add_and_list_roundtrip() {
+    let env = TestEnv::new();
+
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["client", "add", "Acme Co", "--email", "a@b.test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Acme Co"));
+
+    env.cmd()
+        .args(["client", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Acme Co").and(predicate::str::contains("a@b.test")));
+}
+
+#[test]
 fn demo_without_init_fails() {
     let env = TestEnv::new();
 

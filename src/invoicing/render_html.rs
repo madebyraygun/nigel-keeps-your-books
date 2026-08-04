@@ -40,7 +40,6 @@ fn expand(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
-#[allow(dead_code)]
 pub fn render_invoice_html(
     invoice: &Invoice,
     client: &Client,

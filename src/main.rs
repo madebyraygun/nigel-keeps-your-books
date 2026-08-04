@@ -20,9 +20,13 @@ mod tui;
 use clap::{CommandFactory, Parser};
 
 use cli::{
-    AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
-    RulesCommands,
+    AccountsCommands, BrowseCommands, CategoriesCommands, Cli, ClientCommands, Commands,
+    InvoiceCommands, PasswordCommand, RulesCommands,
 };
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -130,6 +134,35 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 form_line.as_deref(),
             ),
             CategoriesCommands::Delete { id } => cli::categories::delete(id),
+        },
+        Commands::Client { command } => match command {
+            ClientCommands::Add {
+                name,
+                email,
+                address,
+            } => cli::client::add(&name, email.as_deref(), address.as_deref()),
+            ClientCommands::List => cli::client::list(),
+        },
+        Commands::Invoice { command } => match command {
+            InvoiceCommands::New {
+                client,
+                issue_date,
+                due_date,
+                currency,
+                items,
+            } => cli::invoice::new(client, &issue_date, due_date.as_deref(), &currency, &items),
+            InvoiceCommands::List => cli::invoice::list(),
+            InvoiceCommands::Show { number } => cli::invoice::show(number),
+            InvoiceCommands::Send { number } => cli::invoice::send(number, &today()),
+            InvoiceCommands::Sync => cli::invoice::sync(&today()),
+            InvoiceCommands::Pay {
+                number,
+                amount,
+                date,
+                method,
+            } => cli::invoice::pay(number, amount, &date, &method),
+            InvoiceCommands::Aging => cli::invoice::aging(&today()),
+            InvoiceCommands::Import { db } => cli::invoice::import(&db),
         },
         Commands::Import {
             file,

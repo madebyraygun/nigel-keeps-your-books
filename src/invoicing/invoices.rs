@@ -10,14 +10,12 @@ use crate::models::{Invoice, InvoiceLineItem, InvoiceStatus};
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
 const NEXT_NUMBER_DEFAULT: i64 = 1248;
 
-#[allow(dead_code)]
 pub struct NewLineItem {
     pub description: String,
     pub quantity: f64,
     pub unit_amount: f64,
 }
 
-#[allow(dead_code)]
 pub fn gen_token() -> String {
     rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -26,7 +24,6 @@ pub fn gen_token() -> String {
         .collect()
 }
 
-#[allow(dead_code)]
 pub fn next_number(conn: &Connection) -> Result<i64> {
     let n = get_metadata(conn, NEXT_NUMBER_KEY)
         .and_then(|v| v.parse::<i64>().ok())
@@ -34,7 +31,6 @@ pub fn next_number(conn: &Connection) -> Result<i64> {
     Ok(n)
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_invoice(
     conn: &Connection,
@@ -111,7 +107,6 @@ const INVOICE_COLS: &str = "id, number, client_id, issue_date, due_date, status,
     subtotal, tax, total, notes, terms, token, stripe_payment_link_id,
     stripe_payment_link_url, published_at";
 
-#[allow(dead_code)]
 pub fn get_invoice(conn: &Connection, id: i64) -> Result<Invoice> {
     Ok(conn.query_row(
         &format!("SELECT {INVOICE_COLS} FROM invoices WHERE id = ?1"),
@@ -120,7 +115,6 @@ pub fn get_invoice(conn: &Connection, id: i64) -> Result<Invoice> {
     )?)
 }
 
-#[allow(dead_code)]
 pub fn get_invoice_by_number(conn: &Connection, number: i64) -> Result<Invoice> {
     Ok(conn.query_row(
         &format!("SELECT {INVOICE_COLS} FROM invoices WHERE number = ?1"),
@@ -129,7 +123,6 @@ pub fn get_invoice_by_number(conn: &Connection, number: i64) -> Result<Invoice> 
     )?)
 }
 
-#[allow(dead_code)]
 pub fn paid_amount(conn: &Connection, invoice_id: i64) -> Result<f64> {
     let sum: Option<f64> = conn.query_row(
         "SELECT SUM(amount) FROM invoice_payments WHERE invoice_id = ?1",
@@ -139,7 +132,6 @@ pub fn paid_amount(conn: &Connection, invoice_id: i64) -> Result<f64> {
     Ok(sum.unwrap_or(0.0))
 }
 
-#[allow(dead_code)]
 pub fn record_payment(
     conn: &Connection,
     invoice_id: i64,
@@ -169,7 +161,6 @@ pub fn record_payment(
     Ok(true)
 }
 
-#[allow(dead_code)]
 pub fn refresh_status(conn: &Connection, invoice_id: i64, today: &str) -> Result<String> {
     let inv = get_invoice(conn, invoice_id)?;
     if inv.status == InvoiceStatus::Void.as_str() {
@@ -225,7 +216,6 @@ pub fn mark_published(conn: &Connection, id: i64, published_at: &str) -> Result<
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineItem>> {
     let mut stmt = conn.prepare(
         "SELECT id, invoice_id, description, quantity, unit_amount, line_total, position
@@ -247,13 +237,11 @@ pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineI
     Ok(rows)
 }
 
-#[allow(dead_code)]
 pub struct AgingBucket {
     pub label: &'static str,
     pub total: f64,
 }
 
-#[allow(dead_code)]
 pub fn ar_aging(conn: &Connection, today: &str) -> Result<Vec<AgingBucket>> {
     let today = NaiveDate::parse_from_str(today, "%Y-%m-%d")
         .map_err(|e| crate::error::NigelError::Other(format!("bad date {today}: {e}")))?;

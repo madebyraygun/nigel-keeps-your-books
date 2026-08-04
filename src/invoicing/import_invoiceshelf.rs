@@ -30,7 +30,6 @@ fn cents_to_dollars(cents: i64) -> f64 {
     cents as f64 / 100.0
 }
 
-#[allow(dead_code)]
 pub fn import(dest: &Connection, invoiceshelf_db: &Path) -> Result<ImportSummary> {
     let src = Connection::open(invoiceshelf_db)?;
     let mut summary = ImportSummary {

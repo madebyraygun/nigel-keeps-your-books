@@ -6,7 +6,6 @@ use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{get_invoice, line_items, mark_published, set_payment_link};
 use crate::invoicing::render_html::render_invoice_html;
 
-#[allow(dead_code)]
 pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     conn: &Connection,
     invoice_id: i64,

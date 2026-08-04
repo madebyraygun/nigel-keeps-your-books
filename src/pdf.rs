@@ -739,7 +739,6 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     pdf.into_bytes()
 }
 
-#[allow(dead_code)]
 pub fn render_invoice_pdf(
     invoice: &Invoice,
     client: &Client,

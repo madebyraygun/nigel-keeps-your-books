@@ -3,7 +3,6 @@ use rusqlite::Connection;
 use crate::error::Result;
 use crate::models::Client;
 
-#[allow(dead_code)]
 pub fn add_client(
     conn: &Connection,
     name: &str,
@@ -18,7 +17,6 @@ pub fn add_client(
     Ok(conn.last_insert_rowid())
 }
 
-#[allow(dead_code)]
 pub fn get_client(conn: &Connection, id: i64) -> Result<Client> {
     let c = conn.query_row(
         "SELECT id, name, email, billing_address, notes FROM clients WHERE id = ?1",
@@ -36,7 +34,6 @@ pub fn get_client(conn: &Connection, id: i64) -> Result<Client> {
     Ok(c)
 }
 
-#[allow(dead_code)]
 pub fn list_clients(conn: &Connection) -> Result<Vec<Client>> {
     let mut stmt =
         conn.prepare("SELECT id, name, email, billing_address, notes FROM clients ORDER BY name")?;

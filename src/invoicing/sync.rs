@@ -4,7 +4,6 @@ use crate::error::Result;
 use crate::invoicing::gateway::PaymentGateway;
 use crate::invoicing::invoices::{get_invoice, record_payment};
 
-#[allow(dead_code)]
 pub fn sync_invoice<G: PaymentGateway>(
     conn: &Connection,
     invoice_id: i64,
@@ -33,7 +32,6 @@ pub fn sync_invoice<G: PaymentGateway>(
     Ok(recorded)
 }
 
-#[allow(dead_code)]
 pub fn sync_all<G: PaymentGateway>(conn: &Connection, today: &str, gateway: &G) -> Result<u32> {
     let mut stmt = conn.prepare(
         "SELECT id FROM invoices

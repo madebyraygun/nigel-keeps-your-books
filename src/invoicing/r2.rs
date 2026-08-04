@@ -20,7 +20,6 @@ fn ensure_success(status: reqwest::StatusCode, body: &str) -> Result<()> {
     Err(NigelError::Other(format!("r2 {status}: {body}")))
 }
 
-#[allow(dead_code)]
 pub struct R2Publisher {
     pub account_id: String,
     pub access_key: String,
