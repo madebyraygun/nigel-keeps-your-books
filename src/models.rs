@@ -69,3 +69,82 @@ pub struct ParsedRow {
     pub description: String,
     pub amount: f64,
 }
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvoiceStatus {
+    Draft,
+    Sent,
+    Partial,
+    Paid,
+    Overdue,
+    Void,
+}
+
+impl InvoiceStatus {
+    #[allow(dead_code)]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Sent => "sent",
+            Self::Partial => "partial",
+            Self::Paid => "paid",
+            Self::Overdue => "overdue",
+            Self::Void => "void",
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Client {
+    pub id: i64,
+    pub name: String,
+    pub email: Option<String>,
+    pub billing_address: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct InvoiceLineItem {
+    pub id: Option<i64>,
+    pub invoice_id: Option<i64>,
+    pub description: String,
+    pub quantity: f64,
+    pub unit_amount: f64,
+    pub line_total: f64,
+    pub position: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Invoice {
+    pub id: i64,
+    pub number: i64,
+    pub client_id: i64,
+    pub issue_date: String,
+    pub due_date: Option<String>,
+    pub status: String,
+    pub currency: String,
+    pub subtotal: f64,
+    pub tax: f64,
+    pub total: f64,
+    pub notes: Option<String>,
+    pub terms: Option<String>,
+    pub token: String,
+    pub stripe_payment_link_id: Option<String>,
+    pub stripe_payment_link_url: Option<String>,
+    pub published_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct InvoicePayment {
+    pub id: Option<i64>,
+    pub invoice_id: i64,
+    pub amount: f64,
+    pub paid_date: String,
+    pub method: String,
+    pub stripe_checkout_session_id: Option<String>,
+}
