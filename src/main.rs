@@ -28,6 +28,25 @@ fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// Reconcile Stripe payments before a data-bearing command runs. Best-effort:
+/// with no Stripe key configured it does nothing, and any failure prints a
+/// notice instead of failing the command the user actually asked for.
+fn sync_invoice_payments() {
+    let Some(secret_key) = settings::invoicing_config().stripe_secret_key else {
+        return;
+    };
+    let gateway = invoicing::stripe::StripeClient { secret_key };
+    let db_path = settings::get_data_dir().join("nigel.db");
+    let result = db::get_connection(&db_path)
+        .and_then(|conn| invoicing::sync::sync_all(&conn, &today(), &gateway));
+
+    match result {
+        Ok(0) => {}
+        Ok(n) => eprintln!("notice: recorded {n} new invoice payment(s)"),
+        Err(e) => eprintln!("notice: invoice sync skipped: {e}"),
+    }
+}
+
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
     let hook = std::panic::take_hook();
@@ -86,6 +105,23 @@ fn dispatch(command: Commands) -> error::Result<()> {
         if db_path.exists() {
             crate::db::prompt_password_if_needed(&db_path)?;
         }
+    }
+
+    // Reconcile Stripe payments for commands that read or write the books.
+    // `invoice sync` is excluded because it does the same work itself.
+    if !matches!(
+        command,
+        Commands::Init { .. }
+            | Commands::Demo
+            | Commands::Load { .. }
+            | Commands::Update
+            | Commands::Completions { .. }
+            | Commands::Password { .. }
+            | Commands::Invoice {
+                command: InvoiceCommands::Sync
+            }
+    ) {
+        sync_invoice_payments();
     }
 
     match command {

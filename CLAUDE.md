@@ -8,8 +8,8 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, status, password, update, completions
-- **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `validate_password()` tests a password without side effects; `prompt_password_if_needed()` prompts via rpassword with 3 retries (used by CLI subcommands)
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, client, invoice, load, backup, restore, status, password, update, completions
+- **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name and next_invoice_number), clients, invoices, invoice_line_items, invoice_payments. Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `validate_password()` tests a password without side effects; `prompt_password_if_needed()` prompts via rpassword with 3 retries (used by CLI subcommands)
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; `GenericCsvConfig` supports user-defined column mappings stored as profiles in `csv_profiles` table; malformed CSV rows are counted and reported in import output
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
 - **Dashboard:** `cli/dashboard.rs` — single-struct state machine with `DashboardScreen` enum; Home screen shows YTD P&L, account balances, monthly income/expense bar chart, and a command chooser menu with single-key shortcuts (b=Browse, i=Import, r=Review, c=Reconcile, a=Accounts, t=caTegorize, u=rUles, z=Undo, v=View report, e=Export report, l=Load, p=Settings, s=Snake); all commands render as inline TUI screens; outer loop only re-initializes when Load changes the data directory. F5 refreshes dashboard data.
@@ -26,11 +26,13 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Goodbye:** `cli/goodbye.rs` — 1.2-second farewell screen shown when quitting the dashboard; displays Nigel ASCII logo with "Goodbye!" text, plays the reverse of the splash reveal animation (characters disappear), with particle background; dismissable by any keypress
 - **Updater:** `cli/update.rs` — `nigel update` command and launch-time version check; queries GitHub Releases API for latest version, compares via `semver`, downloads correct platform binary, and self-replaces via `self_replace` crate; `check_and_notify()` runs on launch with 24-hour cooldown (stored in `last_update_check` in settings.json); opt-out via `update_check: false` in settings; dashboard shows yellow notification bar; CLI prints to stderr
 - **Settings Manager:** `cli/settings_manager.rs` — inline TUI screen for managing app settings; shows editable business name (saved to DB metadata as `company_name`), password management, and auto-update check toggle; password sub-screen delegates to `PasswordManager`
+- **Invoicing:** `src/invoicing/` — accounts-receivable only, kept out of the transaction register. `invoices.rs`/`clients.rs` (data layer, `next_number` from the `next_invoice_number` metadata key starting at 1248, derived status via `refresh_status`, `ar_aging` buckets), `gateway.rs` (`PaymentGateway`/`AssetPublisher`/`Mailer` traits, implemented by `stripe.rs`, `r2.rs`, `mailgun.rs` and faked in tests so nothing hits the network), `render_html.rs` + `templates/invoice.html` (`{{KEY}}` expansion), `send.rs` (Stripe link → HTML/PDF render → R2 publish → Mailgun email → mark published; any failure leaves the invoice a draft), `sync.rs` (pull-based Stripe reconciliation, deduplicated by checkout session ID), `import_invoiceshelf.rs` (one-time InvoiceShelf migration, cents → dollars). CLI surfaces in `cli/client.rs` and `cli/invoice.rs`; usage doc in `docs/invoicing.md`
+- **Launch sync:** `main.rs` `sync_invoice_payments()` — runs before any command that reads or writes the books when `stripe_secret_key` is configured; prints a stderr notice on recorded payments or on failure and never blocks the command; skipped for init, demo, load, update, password, completions, and `invoice sync`
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, text wrapping, and incremental text search), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
-- **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases; v2 adds `csv_profiles` table for generic CSV column mappings
+- **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases; v2 adds `csv_profiles` table for generic CSV column mappings; v3 adds the invoicing tables (`clients`, `invoices`, `invoice_line_items`, `invoice_payments`)
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
-- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `update_check` (bool, default true), `last_update_check` (ISO 8601 timestamp); `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table. Database password is runtime-only (never persisted to disk).
+- **Settings:** `~/.config/nigel/settings.json` — stores `data_dir`, `user_name`, `update_check` (bool, default true), `last_update_check` (ISO 8601 timestamp), and the invoicing keys `stripe_secret_key`, `mailgun_api_key`, `mailgun_domain`, `from_email`, `r2_account_id`, `r2_access_key`, `r2_secret_key`, `r2_bucket`, `public_base_url`; `settings::invoicing_config()` resolves each invoicing value from its `NIGEL_*` env var first, then the file (`NIGEL_STRIPE_SECRET_KEY`, `NIGEL_R2_BUCKET`, …). `nigel load` switches between existing data directories without reinitializing. Per-database settings (e.g. `company_name`) are stored in the `metadata` table. Database password is runtime-only (never persisted to disk).
 - **Password Manager:** `cli/password_manager.rs` — TUI screen for managing database encryption; detects current encryption state and shows set/change/remove options; masked password input with confirmation; used as sub-screen within Settings Manager
 - **Onboarding:** `cli/onboarding.rs` — full-screen TUI shown on first launch (when settings.json doesn't exist); collects user name, business name, and optional password (masked input), then offers demo/fresh/load options
 - **Data directory:** `~/Documents/nigel/` by default, configurable via `nigel init --data-dir`; switch with `nigel load <path>`. Contains `backups/` (manual backups) and `snapshots/` (automatic pre-import snapshots)
@@ -87,6 +89,17 @@ nigel report all --year 2025 --output-dir ~/exports/  # Custom output directory
 nigel browse register                            # All transactions, starts at today
 nigel browse register --year 2025                 # Filter to a specific year
 nigel browse register --account "BofA Checking"   # Browse filtered by account
+nigel client add "Acme Co" --email ap@acme.test        # Add an invoicing client
+nigel client list                                 # List clients with their IDs
+nigel invoice new --client 1 --issue 2026-08-04 --item "Consulting:10:150"  # Draft (--item repeatable)
+nigel invoice list                                # Number, status, client, total, due date
+nigel invoice show 1248                           # Line items, paid amount, payment link
+nigel invoice send 1248                           # Stripe link + R2 publish + Mailgun email
+nigel invoice sync                                # Pull Stripe payments and record them
+nigel invoice pay 1248 --date 2026-08-20          # Record a manual payment (default: full balance)
+nigel invoice pay 1248 --date 2026-08-20 --amount 500 --method ach  # Partial/other method
+nigel invoice aging                               # A/R aging buckets
+nigel invoice import --from-invoiceshelf ~/is.sqlite  # One-time InvoiceShelf import
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 nigel status                                      # Show active DB and summary stats
 nigel load ~/other-books                          # Switch to a different data directory
@@ -131,6 +144,11 @@ Do not merge or mark work complete if docs are stale.
 - Generic CSV profiles are stored in `csv_profiles` table; `--format <name>` resolves built-in importers first, then csv_profiles; generic CSV is never auto-detected
 - `--dry-run` skips snapshot creation, imports table insertion, and transaction insertion; still runs full parse and duplicate detection
 - Auto-update check runs once per 24 hours on launch (both dashboard and CLI); respects `update_check: false` in settings.json; silently skips on network failure; `nigel update` command always checks and can be exempt from init/password checks
+- Invoice money is plain `f64` dollars; cents exist only at the Stripe boundary (`to_cents`/`amount_total`) and the InvoiceShelf import boundary. Paid-in-full comparisons carry half a cent of slack
+- Invoice status is derived, never set by hand: `refresh_status` recomputes draft/sent/partial/paid/overdue from `published_at`, the payment total, and the due date; `void` is terminal and blocks send and pay
+- Invoice payments are keyed by Stripe checkout session ID, so `invoice sync` is idempotent; Stripe reconciliation is pull-based (no webhook endpoint)
+- Published invoices are static R2 objects at `i/{token}/index.html` and `i/{token}/invoice.pdf`, served under `public_base_url` (default `https://billing.rygn.io/i`); the 16-character random token is the only access control
+- Invoicing external clients (`stripe.rs`, `r2.rs`, `mailgun.rs`) split request building/response parsing from transport so tests cover them without network access
 - Platform binary detection: macOS = `nigel-universal-apple-darwin`, Linux x86_64 = `nigel-x86_64-unknown-linux-gnu`, Windows x86_64 = `nigel-x86_64-pc-windows-msvc.exe`
 
 ## Project Structure
@@ -166,6 +184,8 @@ src/
       text.rs           # comfy_table text formatters (used for stdout + text file export)
       view.rs           # Ratatui interactive report views (scrollable, colored)
     browse.rs           # nigel browse (interactive browsers)
+    client.rs           # nigel client add/list
+    invoice.rs          # nigel invoice new/list/show/send/sync/pay/aging/import
     snake.rs            # Snake game easter egg (ratatui, accessible from dashboard)
     splash.rs           # Splash screen (1.5s animated logo + particles, shown on launch)
     goodbye.rs          # Goodbye screen (reverse logo animation + particles, shown on quit)
@@ -180,6 +200,19 @@ src/
   migrations.rs          # Schema migration runner (version tracking, sequential up() functions)
   models.rs             # Structs (Account, Transaction, Rule, ParsedRow, etc.)
   importer.rs           # ImporterKind enum, format detection, CSV/XLSX parsing
+  invoicing/            # Invoicing (A/R): clients, invoices, publish, email, payment sync
+    mod.rs              # Module declarations
+    clients.rs          # Client data layer
+    invoices.rs         # Invoice/line-item/payment data layer, numbering, status, aging
+    gateway.rs          # PaymentGateway / AssetPublisher / Mailer traits + shared types
+    stripe.rs           # Stripe payment links and paid checkout sessions
+    r2.rs               # Cloudflare R2 publisher (S3 API via rusty-s3)
+    mailgun.rs          # Mailgun sender (HTML body + PDF attachment)
+    render_html.rs      # Invoice HTML rendering ({{KEY}} template expansion)
+    templates/          # invoice.html
+    send.rs             # Send orchestration (link → render → publish → email → publish mark)
+    sync.rs             # Pull Stripe payments into invoice_payments
+    import_invoiceshelf.rs # One-time InvoiceShelf SQLite import
   categorizer.rs        # Rules engine (categorize_transactions)
   reviewer.rs           # Interactive review flow
   reports.rs            # Report data functions (pnl, expenses, tax, cashflow, balance, flagged, k1_prep)
@@ -193,6 +226,7 @@ src/
   error.rs              # Error types
 docs/
   importers.md          # Importer format specifications and authoring guide
+  invoicing.md          # Invoicing setup (secrets, R2/Cloudflare routing) and command reference
   walkthrough.md        # Guided tour using demo data
   skills.md             # Claude skills documentation
 ```

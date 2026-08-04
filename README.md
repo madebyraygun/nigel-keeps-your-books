@@ -24,6 +24,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
+- **Invoicing** — draft invoices for your clients, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. See [docs/invoicing.md](docs/invoicing.md)
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **SQLite storage** — single portable database, no server required
 - **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen; backups preserve encryption state
@@ -111,6 +112,14 @@ nigel browse register
 nigel browse register --year 2025                     # Filter to a specific year
 nigel browse register --account "BofA Checking"
 
+# Invoicing (see docs/invoicing.md for the Stripe/R2/Mailgun setup)
+nigel client add "Acme Co" --email ap@acme.test
+nigel invoice new --client 1 --issue 2026-08-04 --item "Consulting:10:150"
+nigel invoice send 1248                               # Publish, email, attach a payment link
+nigel invoice sync                                    # Record Stripe payments
+nigel invoice pay 1248 --date 2026-08-20              # Record a payment received directly
+nigel invoice aging                                   # A/R aging
+
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 
@@ -141,7 +150,7 @@ nigel completions bash                            # Also: zsh, fish, powershell
 
 ## Configuration
 
-Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch.
+Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch. Invoicing credentials (Stripe, Mailgun, Cloudflare R2) also live in `settings.json` or in matching `NIGEL_*` environment variables — see [docs/invoicing.md](docs/invoicing.md).
 
 ## Feature Flags
 
