@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rusqlite::Connection;
@@ -227,6 +228,77 @@ pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineI
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+#[allow(dead_code)]
+pub struct AgingBucket {
+    pub label: &'static str,
+    pub total: f64,
+}
+
+#[allow(dead_code)]
+pub fn ar_aging(conn: &Connection, today: &str) -> Result<Vec<AgingBucket>> {
+    let today = NaiveDate::parse_from_str(today, "%Y-%m-%d")
+        .map_err(|e| crate::error::NigelError::Other(format!("bad date {today}: {e}")))?;
+
+    let mut buckets = [
+        AgingBucket {
+            label: "current",
+            total: 0.0,
+        },
+        AgingBucket {
+            label: "1-30",
+            total: 0.0,
+        },
+        AgingBucket {
+            label: "31-60",
+            total: 0.0,
+        },
+        AgingBucket {
+            label: "61-90",
+            total: 0.0,
+        },
+        AgingBucket {
+            label: "90+",
+            total: 0.0,
+        },
+    ];
+
+    let mut stmt = conn.prepare(
+        "SELECT id, total, COALESCE(due_date, issue_date) FROM invoices
+         WHERE status IN ('sent','partial','overdue')",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    for (id, total, due) in rows {
+        let owing = total - paid_amount(conn, id)?;
+        if owing <= 0.0 {
+            continue;
+        }
+        let due = NaiveDate::parse_from_str(&due, "%Y-%m-%d").unwrap_or(today);
+        let days = (today - due).num_days();
+        let idx = if days <= 0 {
+            0
+        } else if days <= 30 {
+            1
+        } else if days <= 60 {
+            2
+        } else if days <= 90 {
+            3
+        } else {
+            4
+        };
+        buckets[idx].total += owing;
+    }
+    Ok(buckets.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -510,5 +582,51 @@ mod tests {
         assert_eq!(rows[1].position, 1);
         assert_eq!(rows[1].line_total, 150.0);
         assert_eq!(rows[1].invoice_id, Some(id));
+    }
+
+    #[test]
+    fn aging_buckets_split_by_days_past_due() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", Some("a@b.test"), None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "W".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        // due 5 days ago -> "1-30"
+        let a = create_invoice(
+            &conn,
+            cid,
+            "2026-07-01",
+            Some("2026-07-30"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        // due 45 days ago -> "31-60"
+        let b = create_invoice(
+            &conn,
+            cid,
+            "2026-06-01",
+            Some("2026-06-20"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE invoices SET status='sent', published_at='x' WHERE id IN (?1,?2)",
+            [a, b],
+        )
+        .unwrap();
+
+        let buckets = ar_aging(&conn, "2026-08-04").unwrap();
+        let get = |label: &str| buckets.iter().find(|x| x.label == label).unwrap().total;
+        assert_eq!(get("1-30"), 100.0);
+        assert_eq!(get("31-60"), 100.0);
+        assert_eq!(get("90+"), 0.0);
     }
 }
