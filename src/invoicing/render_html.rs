@@ -6,6 +6,38 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Expands `{{KEY}}` placeholders in a single left-to-right pass, so substituted
+/// values are never re-scanned for further placeholders. Unknown placeholders are
+/// emitted verbatim.
+fn expand(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+
+    while let Some(open) = rest.find("{{") {
+        let after_open = &rest[open + 2..];
+        match after_open.find("}}").and_then(|close| {
+            vars.iter()
+                .find(|(k, _)| *k == &after_open[..close])
+                .map(|(_, v)| (close, *v))
+        }) {
+            Some((close, value)) => {
+                out.push_str(&rest[..open]);
+                out.push_str(value);
+                rest = &after_open[close + 2..];
+            }
+            None => {
+                out.push_str(&rest[..open + 2]);
+                rest = after_open;
+            }
+        }
+    }
+
+    out.push_str(rest);
+    out
 }
 
 #[allow(dead_code)]
@@ -38,15 +70,19 @@ pub fn render_invoice_html(
         .map(|d| format!("<br>Due: {}", esc(d)))
         .unwrap_or_default();
 
-    TEMPLATE
-        .replace("{{NUMBER}}", &invoice.number.to_string())
-        .replace("{{ISSUE}}", &esc(&invoice.issue_date))
-        .replace("{{DUE}}", &due)
-        .replace("{{CURRENCY}}", &esc(&invoice.currency))
-        .replace("{{TOTAL}}", &format!("{:.2}", invoice.total))
-        .replace("{{CLIENT}}", &esc(&client.name))
-        .replace("{{ROWS}}", &rows)
-        .replace("{{PAY}}", &pay)
+    expand(
+        TEMPLATE,
+        &[
+            ("NUMBER", &invoice.number.to_string()),
+            ("CLIENT", &esc(&client.name)),
+            ("ISSUE", &esc(&invoice.issue_date)),
+            ("DUE", &due),
+            ("ROWS", &rows),
+            ("CURRENCY", &esc(&invoice.currency)),
+            ("TOTAL", &format!("{:.2}", invoice.total)),
+            ("PAY", &pay),
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -102,6 +138,29 @@ mod tests {
         assert!(html.contains("https://pay.stripe.test/x"));
         assert!(html.contains("Direct deposit"));
         assert!(html.contains("Acme &lt;Co&gt;")); // escaped
+    }
+
+    #[test]
+    fn client_name_containing_a_placeholder_stays_literal_text() {
+        let (inv, mut client, items) = sample();
+        client.name = "Acme {{ROWS}} {{PAY}} Co".into();
+        let html = render_invoice_html(&inv, &client, &items, Some("https://pay.stripe.test/x"));
+        assert!(html.contains("Acme {{ROWS}} {{PAY}} Co"));
+        assert_eq!(html.matches("Design").count(), 1);
+        assert_eq!(html.matches("Pay online").count(), 1);
+    }
+
+    #[test]
+    fn pay_url_cannot_break_out_of_the_href_attribute() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(
+            &inv,
+            &client,
+            &items,
+            Some("https://pay.stripe.test/x\"onmouseover=\"alert(1)"),
+        );
+        assert!(html.contains("&quot;onmouseover"));
+        assert!(!html.contains("\"onmouseover"));
     }
 
     #[test]
