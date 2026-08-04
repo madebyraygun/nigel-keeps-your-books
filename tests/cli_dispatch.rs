@@ -5,6 +5,20 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// Every `NIGEL_*` key `settings::invoicing_config()` reads. Env vars win over the
+/// settings file, and the temp HOME cannot mask them, so they are cleared per command.
+const INVOICING_ENV_VARS: [&str; 9] = [
+    "NIGEL_STRIPE_SECRET_KEY",
+    "NIGEL_MAILGUN_API_KEY",
+    "NIGEL_MAILGUN_DOMAIN",
+    "NIGEL_FROM_EMAIL",
+    "NIGEL_R2_ACCOUNT_ID",
+    "NIGEL_R2_ACCESS_KEY",
+    "NIGEL_R2_SECRET_KEY",
+    "NIGEL_R2_BUCKET",
+    "NIGEL_PUBLIC_BASE_URL",
+];
+
 /// Create an isolated environment: a temp HOME so that `~/.config/nigel/settings.json`
 /// and `~/Documents/nigel/` all live inside the temp dir. Returns the TempDir (must be
 /// kept alive for the duration of the test) and a helper to build `nigel` commands that
@@ -25,10 +39,15 @@ impl TestEnv {
         self.home.path().join("nigel-data")
     }
 
-    /// Build a `nigel` Command with HOME pointed at our temp dir.
+    /// Build a `nigel` Command with HOME pointed at our temp dir and every
+    /// invoicing credential cleared from the inherited environment, so no test
+    /// can reach Stripe, R2, or Mailgun on a machine where those are exported.
     fn cmd(&self) -> Command {
         let mut cmd: Command = cargo_bin_cmd!("nigel");
         cmd.env("HOME", self.home.path());
+        for var in INVOICING_ENV_VARS {
+            cmd.env_remove(var);
+        }
         cmd
     }
 

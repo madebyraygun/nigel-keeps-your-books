@@ -108,7 +108,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
     }
 
     // Reconcile Stripe payments for commands that read or write the books.
-    // `invoice sync` is excluded because it does the same work itself.
+    // `restore` is excluded because it overwrites the database a sync would
+    // write to, and `invoice sync` because it does the same work itself.
     if !matches!(
         command,
         Commands::Init { .. }
@@ -117,6 +118,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Update
             | Commands::Completions { .. }
             | Commands::Password { .. }
+            | Commands::Restore { .. }
             | Commands::Invoice {
                 command: InvoiceCommands::Sync
             }

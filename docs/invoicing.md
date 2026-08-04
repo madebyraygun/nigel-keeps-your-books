@@ -143,7 +143,8 @@ Stripe secret key is configured. It is best-effort: it prints
 `notice: recorded 2 new invoice payment(s)` when it finds something and
 `notice: invoice sync skipped: <reason>` when Stripe or the network is unavailable,
 and either way the command you typed runs normally. `init`, `demo`, `load`,
-`update`, `password`, `completions`, and `invoice sync` itself skip the hook.
+`update`, `password`, `restore`, `completions`, and `invoice sync` itself skip the
+hook.
 
 ## Trying it end to end in test mode
 
