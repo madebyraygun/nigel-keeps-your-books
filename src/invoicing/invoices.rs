@@ -45,13 +45,15 @@ pub fn create_invoice(
     notes: Option<&str>,
     terms: Option<&str>,
 ) -> Result<i64> {
-    let number = next_number(conn)?;
+    let tx = conn.unchecked_transaction()?;
+
+    let number = next_number(&tx)?;
     let subtotal: f64 = items.iter().map(|i| i.quantity * i.unit_amount).sum();
     let tax = 0.0;
     let total = subtotal + tax;
     let token = gen_token();
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO invoices
             (number, client_id, issue_date, due_date, status, currency, subtotal, tax, total, notes, terms, token)
          VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -59,11 +61,11 @@ pub fn create_invoice(
             number, client_id, issue_date, due_date, currency, subtotal, tax, total, notes, terms, token
         ],
     )?;
-    let invoice_id = conn.last_insert_rowid();
+    let invoice_id = tx.last_insert_rowid();
 
     for (idx, item) in items.iter().enumerate() {
         let line_total = item.quantity * item.unit_amount;
-        conn.execute(
+        tx.execute(
             "INSERT INTO invoice_line_items
                 (invoice_id, description, quantity, unit_amount, line_total, position)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -78,7 +80,8 @@ pub fn create_invoice(
         )?;
     }
 
-    set_metadata(conn, NEXT_NUMBER_KEY, &(number + 1).to_string())?;
+    set_metadata(&tx, NEXT_NUMBER_KEY, &(number + 1).to_string())?;
+    tx.commit()?;
     Ok(invoice_id)
 }
 
@@ -183,5 +186,33 @@ mod tests {
         let id2 =
             create_invoice(&conn, cid, "2026-08-05", None, "USD", &items, None, None).unwrap();
         assert_eq!(get_invoice(&conn, id2).unwrap().number, 1249);
+    }
+
+    #[test]
+    fn failed_create_rolls_back_and_leaves_numbering_usable() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Design".into(),
+            quantity: 1.0,
+            unit_amount: 10.0,
+        }];
+
+        conn.execute_batch(
+            "CREATE TRIGGER fail_line_items BEFORE INSERT ON invoice_line_items
+             BEGIN SELECT RAISE(ABORT, 'line item insert failed'); END;",
+        )
+        .unwrap();
+        assert!(create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).is_err());
+
+        let invoices: i64 = conn
+            .query_row("SELECT COUNT(*) FROM invoices", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(invoices, 0);
+        assert_eq!(next_number(&conn).unwrap(), 1248);
+
+        conn.execute_batch("DROP TRIGGER fail_line_items;").unwrap();
+        let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
+        assert_eq!(get_invoice(&conn, id).unwrap().number, 1248);
     }
 }
