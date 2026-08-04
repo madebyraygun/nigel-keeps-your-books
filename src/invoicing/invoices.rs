@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::db::{get_metadata, set_metadata};
 use crate::error::Result;
-use crate::models::Invoice;
+use crate::models::{Invoice, InvoiceLineItem, InvoiceStatus};
 
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
 const NEXT_NUMBER_DEFAULT: i64 = 1248;
@@ -128,6 +128,105 @@ pub fn get_invoice_by_number(conn: &Connection, number: i64) -> Result<Invoice> 
     )?)
 }
 
+#[allow(dead_code)]
+pub fn paid_amount(conn: &Connection, invoice_id: i64) -> Result<f64> {
+    let sum: Option<f64> = conn.query_row(
+        "SELECT SUM(amount) FROM invoice_payments WHERE invoice_id = ?1",
+        [invoice_id],
+        |r| r.get(0),
+    )?;
+    Ok(sum.unwrap_or(0.0))
+}
+
+#[allow(dead_code)]
+pub fn record_payment(
+    conn: &Connection,
+    invoice_id: i64,
+    amount: f64,
+    paid_date: &str,
+    method: &str,
+    stripe_session: Option<&str>,
+) -> Result<bool> {
+    if let Some(sid) = stripe_session {
+        let seen: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM invoice_payments WHERE stripe_checkout_session_id = ?1)",
+            [sid],
+            |r| r.get(0),
+        )?;
+        if seen {
+            return Ok(false);
+        }
+    }
+    conn.execute(
+        "INSERT INTO invoice_payments (invoice_id, amount, paid_date, method, stripe_checkout_session_id)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![invoice_id, amount, paid_date, method, stripe_session],
+    )?;
+    // The payment date, not the wall clock, is the reference day so the derived
+    // status is deterministic regardless of when the payment is entered.
+    refresh_status(conn, invoice_id, paid_date)?;
+    Ok(true)
+}
+
+#[allow(dead_code)]
+pub fn refresh_status(conn: &Connection, invoice_id: i64, today: &str) -> Result<String> {
+    let inv = get_invoice(conn, invoice_id)?;
+    if inv.status == InvoiceStatus::Void.as_str() {
+        return Ok(inv.status);
+    }
+    let paid = paid_amount(conn, invoice_id)?;
+    let published = inv.published_at.is_some();
+    let owing = inv.total - paid;
+
+    let status = if paid + f64::EPSILON >= inv.total && inv.total > 0.0 {
+        InvoiceStatus::Paid
+    } else if !published {
+        InvoiceStatus::Draft
+    } else if is_overdue(inv.due_date.as_deref(), today) && owing > 0.0 {
+        InvoiceStatus::Overdue
+    } else if paid > 0.0 {
+        InvoiceStatus::Partial
+    } else {
+        InvoiceStatus::Sent
+    };
+
+    conn.execute(
+        "UPDATE invoices SET status = ?1 WHERE id = ?2",
+        rusqlite::params![status.as_str(), invoice_id],
+    )?;
+    Ok(status.as_str().to_string())
+}
+
+fn is_overdue(due_date: Option<&str>, today: &str) -> bool {
+    // ISO YYYY-MM-DD dates compare correctly as strings.
+    match due_date {
+        Some(d) => today > d,
+        None => false,
+    }
+}
+
+#[allow(dead_code)]
+pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, invoice_id, description, quantity, unit_amount, line_total, position
+         FROM invoice_line_items WHERE invoice_id = ?1 ORDER BY position",
+    )?;
+    let rows = stmt
+        .query_map([invoice_id], |r| {
+            Ok(InvoiceLineItem {
+                id: r.get(0)?,
+                invoice_id: r.get(1)?,
+                description: r.get(2)?,
+                quantity: r.get(3)?,
+                unit_amount: r.get(4)?,
+                line_total: r.get(5)?,
+                position: r.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +313,135 @@ mod tests {
         conn.execute_batch("DROP TRIGGER fail_line_items;").unwrap();
         let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
         assert_eq!(get_invoice(&conn, id).unwrap().number, 1248);
+    }
+
+    #[test]
+    fn recording_full_payment_marks_paid() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", Some("a@b.test"), None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 200.0,
+        }];
+        let id = create_invoice(
+            &conn,
+            cid,
+            "2026-08-04",
+            Some("2026-09-03"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(record_payment(&conn, id, 200.0, "2026-08-10", "direct_deposit", None).unwrap());
+        assert_eq!(paid_amount(&conn, id).unwrap(), 200.0);
+        assert_eq!(refresh_status(&conn, id, "2026-08-11").unwrap(), "paid");
+    }
+
+    #[test]
+    fn partial_then_overdue_is_derived() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", Some("a@b.test"), None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 200.0,
+        }];
+        let id = create_invoice(
+            &conn,
+            cid,
+            "2026-08-04",
+            Some("2026-08-20"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE invoices SET status='sent', published_at='2026-08-04' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+
+        record_payment(&conn, id, 50.0, "2026-08-10", "ach", None).unwrap();
+        assert_eq!(refresh_status(&conn, id, "2026-08-15").unwrap(), "partial");
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "overdue");
+    }
+
+    #[test]
+    fn stripe_session_is_idempotent() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", Some("a@b.test"), None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
+
+        assert!(record_payment(&conn, id, 100.0, "2026-08-10", "stripe", Some("cs_1")).unwrap());
+        assert!(!record_payment(&conn, id, 100.0, "2026-08-10", "stripe", Some("cs_1")).unwrap());
+        assert_eq!(paid_amount(&conn, id).unwrap(), 100.0);
+    }
+
+    #[test]
+    fn void_is_never_downgraded() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        let id = create_invoice(
+            &conn,
+            cid,
+            "2026-08-04",
+            Some("2026-08-20"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute("UPDATE invoices SET status='void' WHERE id=?1", [id])
+            .unwrap();
+
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
+        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    #[test]
+    fn line_items_come_back_in_position_order() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![
+            NewLineItem {
+                description: "Design".into(),
+                quantity: 2.0,
+                unit_amount: 100.0,
+            },
+            NewLineItem {
+                description: "Dev".into(),
+                quantity: 3.0,
+                unit_amount: 50.0,
+            },
+        ];
+        let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
+
+        let rows = line_items(&conn, id).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].description, "Design");
+        assert_eq!(rows[0].position, 0);
+        assert_eq!(rows[0].line_total, 200.0);
+        assert_eq!(rows[1].description, "Dev");
+        assert_eq!(rows[1].position, 1);
+        assert_eq!(rows[1].line_total, 150.0);
+        assert_eq!(rows[1].invoice_id, Some(id));
     }
 }
