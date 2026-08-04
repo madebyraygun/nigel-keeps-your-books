@@ -4,6 +4,7 @@ use printpdf::*;
 
 use crate::error::{NigelError, Result};
 use crate::fmt::money;
+use crate::models::{Client, Invoice, InvoiceLineItem};
 use crate::reports::*;
 
 // US Letter dimensions (mm)
@@ -736,6 +737,185 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     }
 
     pdf.into_bytes()
+}
+
+#[allow(dead_code)]
+pub fn render_invoice_pdf(
+    invoice: &Invoice,
+    client: &Client,
+    items: &[InvoiceLineItem],
+) -> Result<Vec<u8>> {
+    let title = format!("Invoice #{}", invoice.number);
+    let mut pdf = PdfWriter::new(&title)?;
+
+    pdf.text(&title, MARGIN_LEFT, TITLE_SIZE, true);
+    pdf.y += 7.0;
+    pdf.text(
+        &format!("Billed to: {}", client.name),
+        MARGIN_LEFT,
+        SUBTITLE_SIZE,
+        false,
+    );
+    pdf.y += 5.0;
+    pdf.text(
+        &format!("Issued: {}", invoice.issue_date),
+        MARGIN_LEFT,
+        SUBTITLE_SIZE,
+        false,
+    );
+    pdf.y += 5.0;
+    if let Some(due) = &invoice.due_date {
+        pdf.text(&format!("Due: {due}"), MARGIN_LEFT, SUBTITLE_SIZE, false);
+        pdf.y += 5.0;
+    }
+    pdf.hline(MARGIN_LEFT, PAGE_W - MARGIN_RIGHT);
+    pdf.y += 5.0;
+
+    let cols = &[
+        Col {
+            width: 97.8,
+            align: Align::Left,
+        },
+        Col {
+            width: 20.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 30.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 30.0,
+            align: Align::Right,
+        },
+    ];
+    pdf.table_header(cols, &["Description", "Qty", "Rate", "Amount"]);
+
+    for item in items {
+        let qty = item.quantity.to_string();
+        let rate = money(item.unit_amount);
+        let amount = money(item.line_total);
+        pdf.table_row_wrapped(
+            cols,
+            &[&item.description, &qty, &rate, &amount],
+            false,
+            FONT_SIZE,
+        );
+    }
+
+    pdf.separator();
+    if invoice.tax != 0.0 {
+        let subtotal = money(invoice.subtotal);
+        pdf.table_row(cols, &["Subtotal", "", "", &subtotal], false);
+        let tax = money(invoice.tax);
+        pdf.table_row(cols, &["Tax", "", "", &tax], false);
+    }
+    let total = money(invoice.total);
+    pdf.table_row(
+        cols,
+        &[&format!("Total ({})", invoice.currency), "", "", &total],
+        true,
+    );
+
+    if let Some(notes) = &invoice.notes {
+        pdf.blank_row();
+        pdf.section_label("Notes");
+        pdf.table_row_wrapped(&cols[..1], &[notes], false, FONT_SIZE);
+    }
+    if let Some(terms) = &invoice.terms {
+        pdf.blank_row();
+        pdf.section_label("Terms");
+        pdf.table_row_wrapped(&cols[..1], &[terms], false, FONT_SIZE);
+    }
+
+    pdf.into_bytes()
+}
+
+#[cfg(all(test, feature = "pdf"))]
+mod invoice_pdf_tests {
+    use super::*;
+    use crate::models::{Client, Invoice, InvoiceLineItem};
+
+    #[test]
+    fn produces_nonempty_pdf() {
+        let inv = Invoice {
+            id: 1,
+            number: 1248,
+            client_id: 1,
+            issue_date: "2026-08-04".into(),
+            due_date: None,
+            status: "draft".into(),
+            currency: "USD".into(),
+            subtotal: 100.0,
+            tax: 0.0,
+            total: 100.0,
+            notes: None,
+            terms: None,
+            token: "t".into(),
+            stripe_payment_link_id: None,
+            stripe_payment_link_url: None,
+            published_at: None,
+        };
+        let client = Client {
+            id: 1,
+            name: "Acme".into(),
+            email: None,
+            billing_address: None,
+            notes: None,
+        };
+        let items = vec![InvoiceLineItem {
+            id: None,
+            invoice_id: Some(1),
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+            line_total: 100.0,
+            position: 0,
+        }];
+        let bytes = render_invoice_pdf(&inv, &client, &items).unwrap();
+        assert!(bytes.len() > 100);
+        assert_eq!(&bytes[0..4], b"%PDF");
+    }
+
+    #[test]
+    fn renders_optional_fields() {
+        let inv = Invoice {
+            id: 2,
+            number: 1249,
+            client_id: 1,
+            issue_date: "2026-08-04".into(),
+            due_date: Some("2026-09-03".into()),
+            status: "sent".into(),
+            currency: "USD".into(),
+            subtotal: 100.0,
+            tax: 8.25,
+            total: 108.25,
+            notes: Some("Thanks for your business.".into()),
+            terms: Some("Net 30".into()),
+            token: "t".into(),
+            stripe_payment_link_id: None,
+            stripe_payment_link_url: None,
+            published_at: None,
+        };
+        let client = Client {
+            id: 1,
+            name: "Acme".into(),
+            email: None,
+            billing_address: None,
+            notes: None,
+        };
+        let items = vec![InvoiceLineItem {
+            id: None,
+            invoice_id: Some(2),
+            description: "Consulting engagement covering discovery, build, and handoff".into(),
+            quantity: 2.0,
+            unit_amount: 50.0,
+            line_total: 100.0,
+            position: 0,
+        }];
+        let bytes = render_invoice_pdf(&inv, &client, &items).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+    }
 }
 
 #[cfg(test)]
