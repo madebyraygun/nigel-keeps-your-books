@@ -178,7 +178,9 @@ pub fn refresh_status(conn: &Connection, invoice_id: i64, today: &str) -> Result
     let published = inv.published_at.is_some();
     let owing = inv.total - paid;
 
-    let status = if paid + f64::EPSILON >= inv.total && inv.total > 0.0 {
+    // Half a cent of slack: payments that should sum to the total can land a hair under
+    // it in binary floating point, and no real balance is ever settled to finer than 1c.
+    let status = if paid >= inv.total - 0.005 && inv.total > 0.0 {
         InvoiceStatus::Paid
     } else if !published {
         InvoiceStatus::Draft
@@ -386,6 +388,71 @@ mod tests {
         assert!(record_payment(&conn, id, 100.0, "2026-08-10", "stripe", Some("cs_1")).unwrap());
         assert!(!record_payment(&conn, id, 100.0, "2026-08-10", "stripe", Some("cs_1")).unwrap());
         assert_eq!(paid_amount(&conn, id).unwrap(), 100.0);
+    }
+
+    #[test]
+    fn installments_summing_a_hair_short_still_mark_paid() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.20,
+        }];
+        let id = create_invoice(
+            &conn,
+            cid,
+            "2026-08-04",
+            Some("2026-08-20"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE invoices SET status='sent', published_at='2026-08-04' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+
+        // 33.40 * 3 lands on 100.19999999999999 in binary floating point, a hair under
+        // the 100.20 total. The invoice is settled in full and must read as paid.
+        for _ in 0..3 {
+            record_payment(&conn, id, 33.40, "2026-08-10", "ach", None).unwrap();
+        }
+        assert!(paid_amount(&conn, id).unwrap() < 100.20);
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "paid");
+    }
+
+    #[test]
+    fn a_cent_short_is_not_paid() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.00,
+        }];
+        let id = create_invoice(
+            &conn,
+            cid,
+            "2026-08-04",
+            Some("2026-08-20"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE invoices SET status='sent', published_at='2026-08-04' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+
+        record_payment(&conn, id, 99.99, "2026-08-10", "ach", None).unwrap();
+        assert_eq!(refresh_status(&conn, id, "2026-08-15").unwrap(), "partial");
     }
 
     #[test]
