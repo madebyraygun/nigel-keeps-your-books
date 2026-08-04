@@ -1,5 +1,6 @@
 pub mod clients;
 pub mod gateway;
+pub mod import_invoiceshelf;
 pub mod invoices;
 pub mod mailgun;
 pub mod r2;
