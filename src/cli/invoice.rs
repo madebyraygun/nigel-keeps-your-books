@@ -55,14 +55,37 @@ fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
     })
 }
 
-fn ensure_sendable(invoice: &Invoice) -> Result<()> {
+fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
     if invoice.status == InvoiceStatus::Void.as_str() {
         return Err(NigelError::Other(format!(
-            "Invoice #{} is void and cannot be sent.",
+            "Invoice #{} is void and cannot be {action}.",
             invoice.number
         )));
     }
     Ok(())
+}
+
+/// Resolve the amount to record: the explicit `--amount`, or the whole
+/// outstanding balance. Rejects amounts that would write a junk payment row.
+fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
+    match requested {
+        Some(amount) if amount <= 0.0 => Err(NigelError::Other(format!(
+            "--amount must be greater than zero, got {amount:.2}."
+        ))),
+        Some(amount) => Ok(amount),
+        None => {
+            let outstanding = invoice.total - paid;
+            // Same half-cent slack `refresh_status` settles with: anything under
+            // it is already paid in full, not a balance worth recording.
+            if outstanding < 0.005 {
+                return Err(NigelError::Other(format!(
+                    "Invoice #{} has no outstanding balance (total {:.2}, paid {:.2}). Pass --amount to record a payment anyway.",
+                    invoice.number, invoice.total, paid
+                )));
+            }
+            Ok(outstanding)
+        }
+    }
 }
 
 fn require(value: Option<String>, what: &str) -> Result<String> {
@@ -181,7 +204,7 @@ pub fn show(number: i64) -> Result<()> {
 pub fn send(number: i64, today: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
-    ensure_sendable(&invoice)?;
+    ensure_not_void(&invoice, "sent")?;
     let (stripe, r2, mail) = build_clients(invoicing_config())?;
     let url = send_invoice(&conn, invoice.id, today, &stripe, &r2, &mail)?;
     println!("Sent invoice #{number}: {url}");
@@ -199,8 +222,9 @@ pub fn sync(today: &str) -> Result<()> {
 pub fn pay(number: i64, amount: Option<f64>, date: &str, method: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
+    ensure_not_void(&invoice, "paid")?;
     let paid = paid_amount(&conn, invoice.id)?;
-    let amount = amount.unwrap_or(invoice.total - paid);
+    let amount = payment_amount(&invoice, paid, amount)?;
     record_payment(&conn, invoice.id, amount, date, method, None)?;
     let invoice = get_invoice(&conn, invoice.id)?;
     println!(
@@ -316,21 +340,71 @@ mod tests {
     }
 
     #[test]
-    fn void_invoices_are_refused_before_any_network_call() {
+    fn void_invoices_are_refused_before_any_network_call_or_payment() {
         let (_d, conn) = test_conn();
         let id = seed_invoice(&conn);
         conn.execute("UPDATE invoices SET status='void' WHERE id=?1", [id])
             .unwrap();
-
         let invoice = find_invoice(&conn, 1248).unwrap();
-        let err = ensure_sendable(&invoice).unwrap_err().to_string();
-        assert!(err.contains("void"), "got: {err}");
+
+        let send_err = ensure_not_void(&invoice, "sent").unwrap_err().to_string();
+        assert!(
+            send_err.contains("void and cannot be sent"),
+            "got: {send_err}"
+        );
+        let pay_err = ensure_not_void(&invoice, "paid").unwrap_err().to_string();
+        assert!(
+            pay_err.contains("void and cannot be paid"),
+            "got: {pay_err}"
+        );
     }
 
     #[test]
-    fn draft_invoices_are_sendable() {
+    fn draft_invoices_are_sendable_and_payable() {
         let (_d, conn) = test_conn();
         seed_invoice(&conn);
-        assert!(ensure_sendable(&find_invoice(&conn, 1248).unwrap()).is_ok());
+        let invoice = find_invoice(&conn, 1248).unwrap();
+        assert!(ensure_not_void(&invoice, "sent").is_ok());
+        assert!(ensure_not_void(&invoice, "paid").is_ok());
+    }
+
+    #[test]
+    fn default_payment_is_the_outstanding_balance() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn);
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        assert_eq!(payment_amount(&invoice, 0.0, None).unwrap(), 100.0);
+        assert_eq!(payment_amount(&invoice, 40.0, None).unwrap(), 60.0);
+    }
+
+    #[test]
+    fn settled_invoices_have_nothing_left_to_pay() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn);
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        for paid in [100.0, 100.001, 150.0] {
+            let err = payment_amount(&invoice, paid, None)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("no outstanding balance"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn explicit_amount_must_be_positive() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn);
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        for amount in [0.0, -25.0] {
+            let err = payment_amount(&invoice, 0.0, Some(amount))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("greater than zero"), "got: {err}");
+        }
+        // An overpayment is a real thing a bank does; only zero and negative are junk.
+        assert_eq!(payment_amount(&invoice, 0.0, Some(250.0)).unwrap(), 250.0);
     }
 }
