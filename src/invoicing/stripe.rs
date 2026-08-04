@@ -54,6 +54,27 @@ pub fn parse_paid_sessions(json: &str) -> Result<Vec<PaidSession>> {
         .collect())
 }
 
+fn ensure_success(status: reqwest::StatusCode, body: &str) -> Result<()> {
+    if status.is_success() {
+        return Ok(());
+    }
+    Err(NigelError::Other(format!("stripe {status}: {body}")))
+}
+
+fn required_str(value: &serde_json::Value, field: &str) -> Result<String> {
+    value[field]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| NigelError::Other(format!("stripe response missing {field}")))
+}
+
+fn payment_link_from_value(value: &serde_json::Value) -> Result<PaymentLink> {
+    Ok(PaymentLink {
+        id: required_str(value, "id")?,
+        url: required_str(value, "url")?,
+    })
+}
+
 pub struct StripeClient {
     pub secret_key: String,
 }
@@ -68,9 +89,7 @@ impl StripeClient {
             .map_err(|e| NigelError::Other(format!("stripe request: {e}")))?;
         let status = resp.status();
         let body = resp.text().map_err(|e| NigelError::Other(e.to_string()))?;
-        if !status.is_success() {
-            return Err(NigelError::Other(format!("stripe {status}: {body}")));
-        }
+        ensure_success(status, &body)?;
         serde_json::from_str(&body).map_err(|e| NigelError::Other(e.to_string()))
     }
 }
@@ -78,17 +97,12 @@ impl StripeClient {
 impl PaymentGateway for StripeClient {
     fn create_payment_link(&self, invoice: &Invoice, _client: &Client) -> Result<PaymentLink> {
         let price = self.post_form("https://api.stripe.com/v1/prices", &price_params(invoice))?;
-        let price_id = price["id"]
-            .as_str()
-            .ok_or_else(|| NigelError::Other("no price id".into()))?;
+        let price_id = required_str(&price, "id")?;
         let link = self.post_form(
             "https://api.stripe.com/v1/payment_links",
-            &payment_link_params(price_id, invoice),
+            &payment_link_params(&price_id, invoice),
         )?;
-        Ok(PaymentLink {
-            id: link["id"].as_str().unwrap_or_default().to_string(),
-            url: link["url"].as_str().unwrap_or_default().to_string(),
-        })
+        payment_link_from_value(&link)
     }
 
     fn paid_sessions(&self, payment_link_id: &str) -> Result<Vec<PaidSession>> {
@@ -100,7 +114,9 @@ impl PaymentGateway for StripeClient {
             .bearer_auth(&self.secret_key)
             .send()
             .map_err(|e| NigelError::Other(format!("stripe request: {e}")))?;
+        let status = resp.status();
         let body = resp.text().map_err(|e| NigelError::Other(e.to_string()))?;
+        ensure_success(status, &body)?;
         parse_paid_sessions(&body)
     }
 }
@@ -145,6 +161,41 @@ mod tests {
         assert!(p.contains(&("line_items[0][price]".into(), "price_123".into())));
         assert!(p.contains(&("line_items[0][quantity]".into(), "1".into())));
         assert!(p.contains(&("metadata[invoice_id]".into(), "1248".into())));
+    }
+
+    #[test]
+    fn ensure_success_rejects_non_2xx_and_keeps_stripe_message() {
+        let err = ensure_success(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"error":{"message":"Invalid API Key provided"}}"#,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("401"), "status missing from {msg:?}");
+        assert!(
+            msg.contains("Invalid API Key provided"),
+            "stripe message missing from {msg:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_success_accepts_2xx() {
+        assert!(ensure_success(reqwest::StatusCode::OK, "{}").is_ok());
+    }
+
+    #[test]
+    fn payment_link_from_value_requires_id_and_url() {
+        let ok = serde_json::json!({"id": "plink_1", "url": "https://buy.stripe.com/x"});
+        let link = payment_link_from_value(&ok).unwrap();
+        assert_eq!(link.id, "plink_1");
+        assert_eq!(link.url, "https://buy.stripe.com/x");
+
+        assert!(payment_link_from_value(&serde_json::json!({"id": "plink_1"})).is_err());
+        assert!(
+            payment_link_from_value(&serde_json::json!({"url": "https://buy.stripe.com/x"}))
+                .is_err()
+        );
+        assert!(payment_link_from_value(&serde_json::json!({})).is_err());
     }
 
     #[test]
