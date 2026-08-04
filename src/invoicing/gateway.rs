@@ -2,7 +2,6 @@ use crate::error::Result;
 use crate::models::{Client, Invoice};
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PaymentLink {
     pub id: String,
     pub url: String,

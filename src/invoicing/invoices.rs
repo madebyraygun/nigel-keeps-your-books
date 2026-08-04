@@ -208,6 +208,23 @@ fn is_overdue(due_date: Option<&str>, today: &str) -> bool {
     }
 }
 
+pub fn set_payment_link(conn: &Connection, id: i64, link_id: &str, url: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE invoices SET stripe_payment_link_id = ?1, stripe_payment_link_url = ?2 WHERE id = ?3",
+        rusqlite::params![link_id, url, id],
+    )?;
+    Ok(())
+}
+
+pub fn mark_published(conn: &Connection, id: i64, published_at: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE invoices SET published_at = ?1 WHERE id = ?2",
+        rusqlite::params![published_at, id],
+    )?;
+    refresh_status(conn, id, published_at)?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineItem>> {
     let mut stmt = conn.prepare(
