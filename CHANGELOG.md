@@ -3,8 +3,7 @@
 ## [1.0.1] - 2026-08-05
 
 ### Fixed
-- **K-1 worksheet income was invisible** — the worksheet reported Gross Receipts $0.00 (and a corresponding phantom business loss) because income categories in the stock chart of accounts carried no `form_line` mapping. Income categories without a `form_line` now count toward gross receipts automatically, flagged with an `(auto)` note
-- **K-1 worksheet dropped Cost of Goods Sold** — COGS now maps to Form 1120-S line 2, and the worksheet shows Cost of Goods Sold and Gross Profit lines
+- **Missing K-1 worksheet income** — income categories in the stock chart of accounts carried no `form_line` mapping, which prevented them from showing up on the K1 report. Income categories without a `form_line` now count toward gross receipts automatically, flagged with an `(auto)` note
 - **K-1 meals limit applied inconsistently** — the headline Total Deductions now uses the 50%-limited meals figure, matching the Other Deductions sub-table
 - **Clippy `collapsible_match` failures blocking CI** — four match-arm `if`s collapsed into match guards
 
