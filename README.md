@@ -21,7 +21,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Undo imports** — `nigel undo` rolls back the last import, removing its transactions after confirmation
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
-- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
+- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files. In the dashboard's report viewer, `e` exports the period you are looking at as a PDF and `t` exports it as text
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements

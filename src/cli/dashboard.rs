@@ -2,7 +2,7 @@ use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rand::seq::SliceRandom;
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Bar, BarChart, BarGroup, Paragraph},
@@ -322,6 +322,21 @@ impl Dashboard {
         }
         if let DashboardScreen::ReportView(ref mut view) = self.screen {
             view.draw(frame);
+            if let Some(msg) = &self.status_message {
+                let area = frame.area();
+                if area.height > 0 {
+                    let status_area = Rect {
+                        x: area.x,
+                        y: area.y + area.height - 1,
+                        width: area.width,
+                        height: 1,
+                    };
+                    frame.render_widget(
+                        Paragraph::new(format!(" {msg}")).style(Style::default().fg(Color::Yellow)),
+                        status_area,
+                    );
+                }
+            }
             return;
         }
         if let DashboardScreen::ReportPicker { selection, mode } = self.screen {
@@ -796,7 +811,8 @@ impl Dashboard {
             _ => return DashboardScreen::Home,
         };
         match result {
-            Ok(view) => {
+            Ok(mut view) => {
+                view.set_export_hints(true);
                 self.status_message = None;
                 DashboardScreen::ReportView(view)
             }
@@ -842,6 +858,25 @@ fn format_k(val: f64) -> String {
         }
     } else {
         format!("${}", val as u64)
+    }
+}
+
+/// An export requested from inside the report viewer.
+#[derive(Debug, Clone, Copy)]
+enum ExportAction {
+    #[cfg(feature = "pdf")]
+    Pdf,
+    Text,
+}
+
+/// Map a key press to the export it triggers, or `None` if the key is not an
+/// export key and should be handled normally.
+fn viewer_export_action(code: KeyCode) -> Option<ExportAction> {
+    match code {
+        #[cfg(feature = "pdf")]
+        KeyCode::Char('e') => Some(ExportAction::Pdf),
+        KeyCode::Char('t') => Some(ExportAction::Text),
+        _ => None,
     }
 }
 
@@ -1083,6 +1118,12 @@ pub fn run() -> Result<()> {
 
                     let mut return_home = false;
                     let mut pending_reload: Option<(usize, Option<i32>, Option<String>)> = None;
+                    let mut pending_viewer_export: Option<(
+                        ExportAction,
+                        usize,
+                        Option<i32>,
+                        Option<String>,
+                    )> = None;
                     let should_quit = match &mut dashboard.screen {
                         DashboardScreen::Home => {
                             if key.code == KeyCode::F(5) {
@@ -1200,20 +1241,26 @@ pub fn run() -> Result<()> {
                             false
                         }
                         DashboardScreen::ReportView(ref mut view) => {
-                            let action = view.handle_key(key.code);
-                            match action {
-                                ReportViewAction::Close => {
-                                    dashboard.current_report_idx = None;
-                                    return_home = true;
+                            match (viewer_export_action(key.code), dashboard.current_report_idx) {
+                                (Some(action), Some(idx)) => {
+                                    // Stash the export; handled below after borrow ends
+                                    let (year, month) = view.date_params();
+                                    pending_viewer_export = Some((action, idx, year, month));
                                 }
-                                ReportViewAction::Continue => {}
-                                ReportViewAction::Reload => {
-                                    // Stash reload info; handled below after borrow ends
-                                    if let Some(idx) = dashboard.current_report_idx {
-                                        let (year, month) = view.date_params();
-                                        pending_reload = Some((idx, year, month));
+                                _ => match view.handle_key(key.code) {
+                                    ReportViewAction::Close => {
+                                        dashboard.current_report_idx = None;
+                                        return_home = true;
                                     }
-                                }
+                                    ReportViewAction::Continue => {}
+                                    ReportViewAction::Reload => {
+                                        // Stash reload info; handled below after borrow ends
+                                        if let Some(idx) = dashboard.current_report_idx {
+                                            let (year, month) = view.date_params();
+                                            pending_reload = Some((idx, year, month));
+                                        }
+                                    }
+                                },
                             }
                             false
                         }
@@ -1292,6 +1339,21 @@ pub fn run() -> Result<()> {
                             dashboard.enter_report_view_with_date(idx, &conn, year, month);
                     }
 
+                    if let Some((action, idx, year, month)) = pending_viewer_export {
+                        let result = match action {
+                            #[cfg(feature = "pdf")]
+                            ExportAction::Pdf => do_export(idx, year, month),
+                            ExportAction::Text => do_text_export(idx, year, month),
+                        };
+                        dashboard.status_message = Some(match result {
+                            Ok(msg) => msg,
+                            Err(e) => format!("Export failed: {e}"),
+                        });
+                        // PDF export writes a confirmation line to stdout, which lands
+                        // on top of the report. Repaint the whole screen to erase it.
+                        let _ = terminal.clear();
+                    }
+
                     if return_home {
                         dashboard.screen = DashboardScreen::Home;
                         let _ = dashboard.load_data(&conn);
@@ -1357,5 +1419,28 @@ pub fn run() -> Result<()> {
             }
             Ok(false) => continue, // reload (data directory changed)
         }
+    }
+}
+
+#[cfg(test)]
+mod viewer_export_tests {
+    use super::*;
+    use crossterm::event::KeyCode;
+
+    #[test]
+    fn export_keys_map_to_actions() {
+        #[cfg(feature = "pdf")]
+        assert!(matches!(
+            viewer_export_action(KeyCode::Char('e')),
+            Some(ExportAction::Pdf)
+        ));
+        #[cfg(not(feature = "pdf"))]
+        assert!(viewer_export_action(KeyCode::Char('e')).is_none());
+        assert!(matches!(
+            viewer_export_action(KeyCode::Char('t')),
+            Some(ExportAction::Text)
+        ));
+        assert!(viewer_export_action(KeyCode::Char('m')).is_none());
+        assert!(viewer_export_action(KeyCode::Esc).is_none());
     }
 }
