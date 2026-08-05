@@ -64,6 +64,12 @@ struct Col {
     align: Align,
 }
 
+/// Single full-width column for note lines that span the printable area.
+const NOTE_COLS: &[Col] = &[Col {
+    width: PAGE_W - MARGIN_LEFT - MARGIN_RIGHT,
+    align: Align::Left,
+}];
+
 struct PdfWriter {
     doc: PdfDocumentReference,
     font: IndirectFontRef,
@@ -619,6 +625,10 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     pdf.table_header(summary_cols, &["Item", "Amount"]);
     let gr = money(report.gross_receipts);
     pdf.table_row(summary_cols, &["Gross Receipts", &gr], false);
+    let cogs = money(report.cogs);
+    pdf.table_row(summary_cols, &["Cost of Goods Sold", &cogs], false);
+    let gp = money(report.gross_profit);
+    pdf.table_row(summary_cols, &["Gross Profit", &gp], false);
     let oi = money(report.other_income);
     pdf.table_row(summary_cols, &["Other Income", &oi], false);
     let td = money(report.total_deductions);
@@ -631,6 +641,14 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
     };
     let obi = money(report.ordinary_business_income);
     pdf.table_row(summary_cols, &[label, &obi], true);
+
+    if !report.auto_mapped.is_empty() {
+        let note = format!(
+            "(auto) income mapped to gross receipts: {}",
+            report.auto_mapped.join(", ")
+        );
+        pdf.table_row_wrapped(NOTE_COLS, &[&note], false, FONT_SIZE);
+    }
     pdf.blank_row();
 
     // Deductions by Line
@@ -733,6 +751,33 @@ pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Resu
         );
         pdf.text(&warning, MARGIN_LEFT, FONT_SIZE, true);
         pdf.y += ROW_H;
+    }
+
+    // Needs mapping
+    if !report.unmapped.is_empty() {
+        pdf.blank_row();
+        let um_cols = &[
+            Col {
+                width: 130.0,
+                align: Align::Left,
+            },
+            Col {
+                width: 47.8,
+                align: Align::Right,
+            },
+        ];
+        pdf.section_label("Needs mapping");
+        pdf.table_row_wrapped(
+            NOTE_COLS,
+            &["These categories have activity but no form_line; they are excluded from the totals above."],
+            false,
+            FONT_SIZE,
+        );
+        pdf.table_header(um_cols, &["Category", "Amount"]);
+        for item in &report.unmapped {
+            let amt = money(item.total);
+            pdf.table_row(um_cols, &[&item.category_name, &amt], false);
+        }
     }
 
     pdf.into_bytes()
