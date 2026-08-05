@@ -96,6 +96,11 @@ never drives K-1 logic.
 - `report tax` (Schedule C) behavior is unchanged.
 - No renaming/consolidation of `tax_line`/`form_line` columns.
 
+## Release
+
+This fix ships as **v1.0.1**: bump `version` in `Cargo.toml` (and `Cargo.lock`)
+as part of the branch.
+
 ## Coordination
 
 The open invoicing PR (#172) also adds a migration `version: 3`. This fix lands
