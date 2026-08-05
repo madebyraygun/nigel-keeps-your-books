@@ -709,6 +709,16 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         money_cell(data.gross_receipts),
     ]));
     rows.push(Row::new([
+        text_cell("  Cost of Goods Sold"),
+        Cell::from(""),
+        money_cell(data.cogs),
+    ]));
+    rows.push(Row::new([
+        text_cell("  Gross Profit"),
+        Cell::from(""),
+        money_cell(data.gross_profit),
+    ]));
+    rows.push(Row::new([
         text_cell("  Other Income"),
         Cell::from(""),
         money_cell(data.other_income),
@@ -729,6 +739,17 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
         Cell::from(""),
         money_cell(data.ordinary_business_income),
     ]));
+
+    if !data.auto_mapped.is_empty() {
+        rows.push(Row::new([
+            text_cell(format!(
+                "  (auto) income mapped to gross receipts: {}",
+                data.auto_mapped.join(", ")
+            )),
+            Cell::from(""),
+            Cell::from(""),
+        ]));
+    }
 
     // Deductions by Line
     if !data.deduction_lines.is_empty() {
@@ -824,6 +845,29 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
                 )),
                 Cell::from(""),
                 Cell::from(""),
+            ]));
+        }
+    }
+
+    // Needs mapping
+    if !data.unmapped.is_empty() {
+        rows.push(blank_row(3));
+        rows.push(section_row("NEEDS MAPPING", 3));
+        rows.push(Row::new([
+            text_cell("  No form_line \u{2014} excluded from the totals above"),
+            Cell::from(""),
+            Cell::from(""),
+        ]));
+        rows.push(Row::new([
+            Cell::from(Span::styled("Category", HEADER_ROW_STYLE)),
+            Cell::from(""),
+            Cell::from(Span::styled("Amount", HEADER_ROW_STYLE)),
+        ]));
+        for item in &data.unmapped {
+            rows.push(Row::new([
+                text_cell(&item.category_name),
+                Cell::from(""),
+                money_cell(item.total),
             ]));
         }
     }

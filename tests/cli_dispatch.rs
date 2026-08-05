@@ -32,6 +32,70 @@ impl TestEnv {
         cmd
     }
 
+    fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.data_dir().join("nigel.db")).expect("failed to open DB")
+    }
+
+    /// Rewind the database to the state of a pre-v3 install: schema version 2 and
+    /// no `form_line` on the categories that migration v3 backfills.
+    fn downgrade_to_v2(&self) {
+        self.db()
+            .execute_batch(
+                "UPDATE metadata SET value = '2' WHERE key = 'schema_version';
+                 UPDATE categories SET form_line = NULL
+                     WHERE name IN ('Client Services', 'Hosting & Maintenance', 'Reimbursements',
+                                    'Other Income', 'Cost of Goods Sold', 'Transfer');",
+            )
+            .expect("failed to downgrade test database");
+    }
+
+    fn schema_version(&self) -> u32 {
+        self.db()
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("schema_version missing")
+            .parse()
+            .expect("schema_version not a number")
+    }
+
+    /// Encrypt the database in place, the way `nigel password set` does.
+    fn encrypt(&self, password: &str) {
+        let db = self.data_dir().join("nigel.db");
+        let tmp = self.data_dir().join("nigel.db.encrypting");
+        let conn = self.db();
+        conn.execute(
+            "ATTACH DATABASE ?1 AS encrypted KEY ?2",
+            rusqlite::params![tmp.to_string_lossy(), password],
+        )
+        .expect("failed to attach encrypted database");
+        conn.execute_batch("SELECT sqlcipher_export('encrypted'); DETACH DATABASE encrypted;")
+            .expect("failed to export to encrypted database");
+        drop(conn);
+        let _ = std::fs::remove_file(self.data_dir().join("nigel.db-wal"));
+        let _ = std::fs::remove_file(self.data_dir().join("nigel.db-shm"));
+        std::fs::rename(&tmp, &db).expect("failed to swap in encrypted database");
+
+        assert!(
+            self.db()
+                .execute_batch("SELECT count(*) FROM sqlite_master;")
+                .is_err(),
+            "fixture did not actually encrypt the database"
+        );
+    }
+
+    fn form_line(&self, category: &str) -> Option<String> {
+        self.db()
+            .query_row(
+                "SELECT form_line FROM categories WHERE name = ?1",
+                [category],
+                |row| row.get(0),
+            )
+            .expect("category missing")
+    }
+
     /// Run `nigel init --data-dir <data_dir>` then `nigel demo`.
     fn init_and_demo(&self) {
         self.cmd()
@@ -476,4 +540,85 @@ fn test_import_generic_csv_with_saved_profile() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1 imported"));
+}
+
+#[test]
+fn status_migrates_outdated_database() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.downgrade_to_v2();
+
+    assert_eq!(env.schema_version(), 2);
+    assert_eq!(env.form_line("Client Services"), None);
+
+    env.cmd().arg("status").assert().success();
+
+    assert!(
+        env.schema_version() > 2,
+        "`nigel status` should have run pending migrations"
+    );
+    assert_eq!(
+        env.form_line("Client Services"),
+        Some("1120S-1a".to_string())
+    );
+    assert_eq!(
+        env.form_line("Cost of Goods Sold"),
+        Some("1120S-2".to_string())
+    );
+}
+
+#[test]
+fn report_k1_migrates_outdated_database() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.downgrade_to_v2();
+
+    let year = chrono::Local::now().format("%Y").to_string();
+    let output_path = env.home.path().join("k1.txt");
+    env.cmd()
+        .args([
+            "report",
+            "k1",
+            "--year",
+            &year,
+            "--mode",
+            "export",
+            "--format",
+            "text",
+            "--output",
+            &output_path.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        env.schema_version() > 2,
+        "`nigel report k1` should have run pending migrations"
+    );
+
+    // Without the v3 backfill, income categories have no form_line and fall back to
+    // gross receipts, which the worksheet flags as auto-mapped.
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    assert!(
+        !content.contains("(auto) income mapped to gross receipts"),
+        "K-1 income should be explicitly mapped after migration:\n{content}"
+    );
+}
+
+#[test]
+fn completions_skips_the_password_and_migration_preflight() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    // The database is now unreadable without the password (asserted inside `encrypt`), so
+    // any pre-flight that opened it would fail. `completions` neither prompts for the
+    // password nor migrates, so it still works.
+    env.cmd()
+        .args(["completions", "bash"])
+        .write_stdin("")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_nigel"));
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.1] - 2026-08-05
+
+### Fixed
+- **Missing K-1 worksheet income** — income categories in the stock chart of accounts carried no `form_line` mapping, which prevented them from showing up on the K1 report. Income categories without a `form_line` now count toward gross receipts automatically, flagged with an `(auto)` note
+- **K-1 meals limit applied inconsistently** — the headline Total Deductions now uses the 50%-limited meals figure, matching the Other Deductions sub-table
+- **Clippy `collapsible_match` failures blocking CI** — four match-arm `if`s collapsed into match guards
+
+### Added
+- **Needs-mapping section on the K-1 worksheet** — expense categories with activity but no recognized `form_line` are listed with their totals instead of being silently excluded; a reserved `excluded` value marks categories deliberately outside the return (e.g. transfers)
+- **`form_line` vocabulary** — `1120S-1a` (gross receipts), `1120S-2` (cost of goods sold), `1120S-5` (other income), alongside the existing `1120S-N`, `K-N`, and new `excluded` values; a schema migration backfills the stock chart-of-accounts categories
+
+### Changed
+- **Schema migrations run before any data-bearing command** — existing databases pick up migrations during normal use instead of only on `init`/`demo`/`restore`. The first command after upgrading prints a one-line migration notice; encrypted databases prompt for the password as usual
+
 ## [1.0.0] - 2026-03-02
 
 ### Added

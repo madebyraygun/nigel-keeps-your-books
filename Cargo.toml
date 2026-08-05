@@ -1,6 +1,6 @@
 [package]
 name = "nigel"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Cash-basis bookkeeping CLI for small consultancies"
 
@@ -42,3 +42,4 @@ tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
 chrono = "0.4"
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl", "backup"] }
