@@ -119,7 +119,7 @@ const DEFAULT_CATEGORIES: &[CategoryDef] = &[
         None,
         "income",
         Some("Gross receipts"),
-        None,
+        Some("1120S-1a"),
         "Project fees, retainer payments",
     ),
     (
@@ -127,7 +127,7 @@ const DEFAULT_CATEGORIES: &[CategoryDef] = &[
         None,
         "income",
         Some("Gross receipts"),
-        None,
+        Some("1120S-1a"),
         "Recurring client hosting/maintenance fees",
     ),
     (
@@ -135,7 +135,7 @@ const DEFAULT_CATEGORIES: &[CategoryDef] = &[
         None,
         "income",
         Some("Gross receipts"),
-        None,
+        Some("1120S-1a"),
         "Client reimbursements for expenses",
     ),
     (
@@ -151,10 +151,18 @@ const DEFAULT_CATEGORIES: &[CategoryDef] = &[
         None,
         "income",
         Some("Other income"),
-        None,
+        Some("1120S-5"),
         "Anything else",
     ),
     // Expenses
+    (
+        "Cost of Goods Sold",
+        None,
+        "expense",
+        Some("Schedule C Part III / 1120-S Line 2"),
+        Some("1120S-2"),
+        "Materials, subcontractor costs directly tied to delivering client work",
+    ),
     (
         "Advertising & Marketing",
         None,
@@ -336,7 +344,7 @@ const DEFAULT_CATEGORIES: &[CategoryDef] = &[
         None,
         "expense",
         Some("Not deductible"),
-        None,
+        Some("excluded"),
         "Transfers between own accounts",
     ),
     (

@@ -79,32 +79,46 @@ fn main() {
 }
 
 fn dispatch(command: Commands) -> error::Result<()> {
-    // Check that nigel has been initialized (skip for init/demo which create new DBs, load which switches directories, and update which needs no DB)
-    if !matches!(
+    // Commands that need an already-initialized database (skip for init/demo which create
+    // new DBs, load which switches directories, and update which needs no DB)
+    let needs_existing_db = !matches!(
         command,
         Commands::Init { .. } | Commands::Demo | Commands::Load { .. } | Commands::Update
-    ) {
-        let data_dir = crate::settings::get_data_dir();
-        let db_path = data_dir.join("nigel.db");
-        if !db_path.exists() {
-            return Err(error::NigelError::NotInitialized);
-        }
-    }
+    );
 
-    // Prompt for password if database is encrypted (skip for init/demo which may create new DBs)
-    if !matches!(
+    // Commands that need the encryption password up front. `password` does its own
+    // prompting as part of set/change/remove, and `completions` never touches the DB.
+    let needs_password = !matches!(
         command,
         Commands::Init { .. }
             | Commands::Demo
             | Commands::Password { .. }
             | Commands::Completions { .. }
             | Commands::Update
-    ) {
-        let data_dir = crate::settings::get_data_dir();
-        let db_path = data_dir.join("nigel.db");
-        if db_path.exists() {
-            crate::db::prompt_password_if_needed(&db_path)?;
-        }
+    );
+
+    let db_path = crate::settings::get_data_dir().join("nigel.db");
+
+    if needs_existing_db && !db_path.exists() {
+        return Err(error::NigelError::NotInitialized);
+    }
+
+    if needs_password && db_path.exists() {
+        crate::db::prompt_password_if_needed(&db_path)?;
+    }
+
+    // `restore` overwrites the database file and then migrates the restored copy itself,
+    // so migrating the outgoing one first is wasted work that could abort the very
+    // recovery meant to repair it.
+    let replaces_db = matches!(command, Commands::Restore { .. });
+
+    // Bring the schema up to date before any command reads or writes data. The
+    // intersection of the two guards above is exactly the set of commands that open the
+    // existing database with a usable password; init/demo/restore migrate via their own
+    // init_db() call, and the dashboard migrates in its own pre-flight.
+    if needs_existing_db && needs_password && !replaces_db {
+        let conn = crate::db::get_connection(&db_path)?;
+        crate::db::init_db(&conn)?;
     }
 
     // Reconcile Stripe payments for commands that read or write the books.

@@ -484,6 +484,8 @@ pub struct K1Validation {
 #[allow(dead_code)]
 pub struct K1PrepReport {
     pub gross_receipts: f64,
+    pub cogs: f64,
+    pub gross_profit: f64,
     pub other_income: f64,
     pub total_deductions: f64,
     pub ordinary_business_income: f64,
@@ -491,28 +493,48 @@ pub struct K1PrepReport {
     pub schedule_k_items: Vec<K1LineItem>,
     pub other_deductions: Vec<K1OtherDeduction>,
     pub other_deductions_total: f64,
+    pub auto_mapped: Vec<String>,
+    pub unmapped: Vec<K1LineItem>,
     pub validation: K1Validation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum K1Mapping {
+    Excluded,
+    Explicit(String),
+    AutoGrossReceipts,
+    Unmapped,
+}
+
+pub fn resolve_k1_mapping(form_line: Option<&str>, category_type: &str) -> K1Mapping {
+    match form_line {
+        Some("excluded") => K1Mapping::Excluded,
+        Some(fl) => K1Mapping::Explicit(fl.to_string()),
+        None if category_type == "income" => K1Mapping::AutoGrossReceipts,
+        None => K1Mapping::Unmapped,
+    }
 }
 
 pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport> {
     let (clause, params) = date_filter(year, None, None, None)?;
 
-    // Query all categorized transactions grouped by form_line
+    // Query all categorized transactions grouped by category
     let sql = format!(
-        "SELECT c.form_line, c.name, SUM(t.amount) as total \
+        "SELECT c.form_line, c.name, c.category_type, SUM(t.amount) as total \
          FROM transactions t JOIN categories c ON t.category_id = c.id \
-         WHERE {clause} AND c.form_line IS NOT NULL \
-         GROUP BY c.form_line, c.name ORDER BY c.form_line"
+         WHERE {clause} \
+         GROUP BY c.form_line, c.name, c.category_type ORDER BY c.form_line"
     );
     let mut stmt = conn.prepare(&sql)?;
     let param_values = to_sql_params(&params);
-    let rows: Vec<(String, String, f64)> = stmt
+    let rows: Vec<(Option<String>, String, String, f64)> = stmt
         .query_map(param_values.as_slice(), |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut gross_receipts = 0.0f64;
+    let mut cogs = 0.0f64;
     let mut other_income = 0.0f64;
     let mut total_deductions = 0.0f64;
     let mut deduction_lines = Vec::new();
@@ -521,51 +543,80 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
     let mut other_deductions_total = 0.0f64;
     let mut officer_comp = 0.0f64;
     let mut distributions = 0.0f64;
+    let mut auto_mapped = Vec::new();
+    let mut unmapped = Vec::new();
 
-    for (form_line, name, total) in &rows {
-        match form_line.as_str() {
-            "Gross receipts" => gross_receipts += total,
+    for (form_line, name, category_type, total) in &rows {
+        let mapping = resolve_k1_mapping(form_line.as_deref(), category_type);
+        let line = match mapping {
+            K1Mapping::Excluded => continue,
+            K1Mapping::AutoGrossReceipts => {
+                gross_receipts += total;
+                auto_mapped.push(name.clone());
+                continue;
+            }
+            K1Mapping::Unmapped => {
+                unmapped.push(K1LineItem {
+                    form_line: "—".to_string(),
+                    category_name: name.clone(),
+                    total: total.abs(),
+                });
+                continue;
+            }
+            K1Mapping::Explicit(fl) => fl,
+        };
+        match line.as_str() {
+            "1120S-1a" => gross_receipts += total,
+            "1120S-2" => cogs += total.abs(),
+            "1120S-5" => other_income += total,
             fl if fl.starts_with("K-") => {
                 if fl == "K-16d" {
                     distributions += total.abs();
                 }
                 schedule_k_items.push(K1LineItem {
-                    form_line: form_line.clone(),
+                    form_line: line.clone(),
                     category_name: name.clone(),
                     total: *total,
                 });
             }
             fl if fl.starts_with("1120S-") => {
                 let abs_total = total.abs();
-                total_deductions += abs_total;
 
                 if fl == "1120S-7" || fl == "1120S-8" {
                     officer_comp += abs_total;
                 }
 
                 deduction_lines.push(K1LineItem {
-                    form_line: form_line.clone(),
+                    form_line: line.clone(),
                     category_name: name.clone(),
                     total: abs_total,
                 });
 
-                if fl == "1120S-19" {
+                let deductible = if fl == "1120S-19" {
                     let is_meals = name.to_lowercase().contains("meal");
-                    let deductible = if is_meals { abs_total * 0.5 } else { abs_total };
-                    other_deductions_total += deductible;
+                    let d = if is_meals { abs_total * 0.5 } else { abs_total };
+                    other_deductions_total += d;
                     other_deductions.push(K1OtherDeduction {
                         category_name: name.clone(),
                         total: abs_total,
-                        deductible,
+                        deductible: d,
                     });
-                }
+                    d
+                } else {
+                    abs_total
+                };
+                total_deductions += deductible;
             }
-            "Other income" => other_income += total,
-            _ => {}
+            _ => unmapped.push(K1LineItem {
+                form_line: line.clone(),
+                category_name: name.clone(),
+                total: total.abs(),
+            }),
         }
     }
 
-    let ordinary_business_income = gross_receipts + other_income - total_deductions;
+    let gross_profit = gross_receipts - cogs;
+    let ordinary_business_income = gross_profit + other_income - total_deductions;
 
     // Validation: count uncategorized transactions
     let uncategorized_sql = format!(
@@ -583,6 +634,8 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
 
     Ok(K1PrepReport {
         gross_receipts,
+        cogs,
+        gross_profit,
         other_income,
         total_deductions,
         ordinary_business_income,
@@ -590,6 +643,8 @@ pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport>
         schedule_k_items,
         other_deductions,
         other_deductions_total,
+        auto_mapped,
+        unmapped,
         validation: K1Validation {
             uncategorized_count,
             officer_comp,
@@ -761,8 +816,6 @@ mod tests {
         let (_dir, conn) = test_db();
         seed_transactions(&conn);
         let report = get_k1_prep(&conn, Some(2025)).unwrap();
-        // Client Services has form_line "Gross receipts" (but stored as NULL — check actual seed)
-        // Software & Subscriptions has form_line "1120S-19"
         assert!(report.gross_receipts >= 0.0);
         assert!(report.total_deductions >= 0.0);
         // Software & Subscriptions → 1120S-19 → should appear in deduction_lines
@@ -848,7 +901,7 @@ mod tests {
         let acct = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO categories (name, category_type, form_line) \
-             VALUES ('Test Other Income', 'income', 'Other income')",
+             VALUES ('Test Other Income', 'income', '1120S-5')",
             [],
         )
         .unwrap();
@@ -880,10 +933,9 @@ mod tests {
         )
         .unwrap();
         let acct = conn.last_insert_rowid();
-        // Create a category with form_line = "Gross receipts" (K-1 query uses form_line)
         conn.execute(
             "INSERT INTO categories (name, category_type, form_line) \
-             VALUES ('Test Gross Receipts', 'income', 'Gross receipts')",
+             VALUES ('Test Gross Receipts', 'income', '1120S-1a')",
             [],
         )
         .unwrap();
@@ -904,6 +956,118 @@ mod tests {
         let report = get_k1_prep(&conn, Some(2025)).unwrap();
         // SUM = 100 + (-300) = -200 — net negative surfaces as-is
         assert_eq!(report.gross_receipts, -200.0);
+    }
+
+    #[test]
+    fn test_resolve_k1_mapping() {
+        use K1Mapping::*;
+        assert_eq!(resolve_k1_mapping(Some("excluded"), "expense"), Excluded);
+        assert_eq!(resolve_k1_mapping(Some("excluded"), "income"), Excluded);
+        assert_eq!(
+            resolve_k1_mapping(Some("1120S-19"), "expense"),
+            Explicit("1120S-19".into())
+        );
+        assert_eq!(
+            resolve_k1_mapping(Some("K-16d"), "expense"),
+            Explicit("K-16d".into())
+        );
+        assert_eq!(resolve_k1_mapping(None, "income"), AutoGrossReceipts);
+        assert_eq!(resolve_k1_mapping(None, "expense"), Unmapped);
+    }
+
+    fn k1_fixture(conn: &Connection) -> i64 {
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('K1T', 'checking')",
+            [],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    fn k1_cat(conn: &Connection, name: &str, ctype: &str, form_line: Option<&str>) -> i64 {
+        conn.execute(
+            "INSERT INTO categories (name, category_type, form_line) VALUES (?1, ?2, ?3)",
+            rusqlite::params![name, ctype, form_line],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    fn k1_txn(conn: &Connection, acct: i64, date: &str, amount: f64, cat: i64) {
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, ?2, 'x', ?3, ?4)",
+            rusqlite::params![acct, date, amount, cat],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_k1_custom_chart_income_falls_back_and_unmapped_surfaces() {
+        let (_dir, conn) = test_db();
+        let acct = k1_fixture(&conn);
+        let inc = k1_cat(&conn, "Widget Sales", "income", None);
+        let exp = k1_cat(&conn, "Mystery Spend", "expense", None);
+        let odd = k1_cat(&conn, "Odd Mapping", "expense", Some("Schedule Z"));
+        let skip = k1_cat(&conn, "Personal", "expense", Some("excluded"));
+        k1_txn(&conn, acct, "2025-02-01", 5000.0, inc);
+        k1_txn(&conn, acct, "2025-02-02", -400.0, exp);
+        k1_txn(&conn, acct, "2025-02-03", -75.0, odd);
+        k1_txn(&conn, acct, "2025-02-04", -999.0, skip);
+
+        let r = get_k1_prep(&conn, Some(2025)).unwrap();
+        assert_eq!(r.gross_receipts, 5000.0);
+        assert_eq!(r.auto_mapped, vec!["Widget Sales".to_string()]);
+        let unmapped_names: Vec<&str> = r
+            .unmapped
+            .iter()
+            .map(|u| u.category_name.as_str())
+            .collect();
+        assert!(unmapped_names.contains(&"Mystery Spend"));
+        assert!(unmapped_names.contains(&"Odd Mapping"));
+        assert!(!unmapped_names.contains(&"Personal"));
+        // unmapped and excluded activity stays out of the math
+        assert_eq!(r.total_deductions, 0.0);
+        assert_eq!(r.ordinary_business_income, 5000.0);
+    }
+
+    #[test]
+    fn test_k1_cogs_and_gross_profit() {
+        let (_dir, conn) = test_db();
+        let acct = k1_fixture(&conn);
+        let inc = k1_cat(&conn, "Sales", "income", Some("1120S-1a"));
+        let cogs = k1_cat(&conn, "Materials", "expense", Some("1120S-2"));
+        let rent = k1_cat(&conn, "Shop Rent", "expense", Some("1120S-11"));
+        k1_txn(&conn, acct, "2025-03-01", 10000.0, inc);
+        k1_txn(&conn, acct, "2025-03-02", -2500.0, cogs);
+        k1_txn(&conn, acct, "2025-03-03", -1000.0, rent);
+
+        let r = get_k1_prep(&conn, Some(2025)).unwrap();
+        assert_eq!(r.gross_receipts, 10000.0);
+        assert_eq!(r.cogs, 2500.0);
+        assert_eq!(r.gross_profit, 7500.0);
+        assert_eq!(r.total_deductions, 1000.0);
+        assert_eq!(r.ordinary_business_income, 6500.0);
+        // COGS is an income-summary line, not a deduction line
+        assert!(r.deduction_lines.iter().all(|d| d.form_line != "1120S-2"));
+    }
+
+    #[test]
+    fn test_k1_headline_deductions_use_deductible_meals() {
+        let (_dir, conn) = test_db();
+        let acct = k1_fixture(&conn);
+        let inc = k1_cat(&conn, "Sales", "income", Some("1120S-1a"));
+        let meals = k1_cat(&conn, "Team Meals", "expense", Some("1120S-19"));
+        let sw = k1_cat(&conn, "Tools", "expense", Some("1120S-19"));
+        k1_txn(&conn, acct, "2025-04-01", 1000.0, inc);
+        k1_txn(&conn, acct, "2025-04-02", -100.0, meals);
+        k1_txn(&conn, acct, "2025-04-03", -40.0, sw);
+
+        let r = get_k1_prep(&conn, Some(2025)).unwrap();
+        // headline = 50 (meals at 50%) + 40 = other_deductions_total
+        assert_eq!(r.total_deductions, 90.0);
+        assert_eq!(r.other_deductions_total, 90.0);
+        assert_eq!(r.ordinary_business_income, 910.0);
     }
 
     #[test]

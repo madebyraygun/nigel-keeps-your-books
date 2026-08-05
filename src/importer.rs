@@ -670,6 +670,7 @@ fn parse_gusto_payroll(file_path: &Path) -> Result<Vec<ParsedRow>> {
             let check_date = match &row[3] {
                 Data::Float(f) => excel_serial_to_date(*f),
                 Data::Int(i) => excel_serial_to_date(*i as f64),
+                Data::DateTime(dt) => excel_serial_to_date(dt.as_f64()),
                 Data::String(s) => s.clone(),
                 _ => continue,
             };
@@ -700,6 +701,7 @@ fn parse_gusto_payroll(file_path: &Path) -> Result<Vec<ParsedRow>> {
             let check_date = match &row[3] {
                 Data::Float(f) => excel_serial_to_date(*f),
                 Data::Int(i) => excel_serial_to_date(*i as f64),
+                Data::DateTime(dt) => excel_serial_to_date(dt.as_f64()),
                 Data::String(s) => s.clone(),
                 _ => continue,
             };

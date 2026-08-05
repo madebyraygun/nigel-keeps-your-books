@@ -35,10 +35,32 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 3,
+        description: "backfill 1120-S form_line for stock chart-of-accounts categories",
+        up: |conn| {
+            conn.execute_batch(
+                "UPDATE categories SET form_line = '1120S-1a'
+                     WHERE form_line IS NULL AND tax_line = 'Gross receipts'
+                       AND name IN ('Client Services', 'Hosting & Maintenance', 'Reimbursements');
+                 UPDATE categories SET form_line = '1120S-5'
+                     WHERE form_line IS NULL AND tax_line = 'Other income'
+                       AND name = 'Other Income';
+                 UPDATE categories SET form_line = '1120S-2'
+                     WHERE form_line IS NULL
+                       AND tax_line = 'Schedule C Part III / 1120-S Line 2'
+                       AND name = 'Cost of Goods Sold';
+                 UPDATE categories SET form_line = 'excluded'
+                     WHERE form_line IS NULL AND tax_line = 'Not deductible'
+                       AND name = 'Transfer';",
+            )?;
+            Ok(())
+        },
+    },
+    Migration {
+        version: 4,
         description: "add invoicing tables (clients, invoices, line items, payments)",
         up: |conn| {
             conn.execute_batch(
-                "CREATE TABLE clients (
+                "CREATE TABLE IF NOT EXISTS clients (
                     id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
                     email TEXT,
@@ -46,7 +68,7 @@ const MIGRATIONS: &[Migration] = &[
                     notes TEXT,
                     created_at TEXT DEFAULT (datetime('now'))
                 );
-                CREATE TABLE invoices (
+                CREATE TABLE IF NOT EXISTS invoices (
                     id INTEGER PRIMARY KEY,
                     number INTEGER NOT NULL UNIQUE,
                     client_id INTEGER NOT NULL,
@@ -66,7 +88,7 @@ const MIGRATIONS: &[Migration] = &[
                     created_at TEXT DEFAULT (datetime('now')),
                     FOREIGN KEY (client_id) REFERENCES clients(id)
                 );
-                CREATE TABLE invoice_line_items (
+                CREATE TABLE IF NOT EXISTS invoice_line_items (
                     id INTEGER PRIMARY KEY,
                     invoice_id INTEGER NOT NULL,
                     description TEXT NOT NULL,
@@ -76,7 +98,7 @@ const MIGRATIONS: &[Migration] = &[
                     position INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (invoice_id) REFERENCES invoices(id)
                 );
-                CREATE TABLE invoice_payments (
+                CREATE TABLE IF NOT EXISTS invoice_payments (
                     id INTEGER PRIMARY KEY,
                     invoice_id INTEGER NOT NULL,
                     amount REAL NOT NULL,
@@ -251,5 +273,59 @@ mod invoicing_migration_tests {
                 .unwrap();
             assert_eq!(n, 1, "missing table {table}");
         }
+    }
+}
+
+#[cfg(test)]
+mod k1_backfill_tests {
+    use crate::db::{get_connection, init_db};
+
+    #[test]
+    fn backfills_stock_categories_only_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = get_connection(&dir.path().join("t.db")).unwrap();
+        init_db(&conn).unwrap();
+
+        // Simulate a pre-migration database: blank the seeded mappings,
+        // add a custom category sharing a stock tax_line, and a category
+        // with an existing explicit mapping.
+        conn.execute("UPDATE categories SET form_line = NULL", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO categories (name, category_type, tax_line, form_line) \
+             VALUES ('My Consulting', 'income', 'Gross receipts', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE categories SET form_line = 'K-16d' WHERE name = 'Owner Draw / Distribution'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE metadata SET value = '2' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+
+        super::run_migrations(&conn).unwrap();
+
+        let fl = |name: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT form_line FROM categories WHERE name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(fl("Client Services").as_deref(), Some("1120S-1a"));
+        assert_eq!(fl("Hosting & Maintenance").as_deref(), Some("1120S-1a"));
+        assert_eq!(fl("Reimbursements").as_deref(), Some("1120S-1a"));
+        assert_eq!(fl("Other Income").as_deref(), Some("1120S-5"));
+        assert_eq!(fl("Cost of Goods Sold").as_deref(), Some("1120S-2"));
+        assert_eq!(fl("Transfer").as_deref(), Some("excluded"));
+        assert_eq!(fl("Uncategorized"), None); // deliberately left unmapped
+        assert_eq!(fl("My Consulting"), None); // custom name untouched
+        assert_eq!(fl("Owner Draw / Distribution").as_deref(), Some("K-16d")); // not overwritten
     }
 }

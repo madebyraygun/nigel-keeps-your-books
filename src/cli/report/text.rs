@@ -318,6 +318,14 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
         Cell::new(money(data.gross_receipts)),
     ]);
     summary.add_row(vec![
+        Cell::new("Cost of Goods Sold"),
+        Cell::new(money(data.cogs)),
+    ]);
+    summary.add_row(vec![
+        Cell::new("Gross Profit"),
+        Cell::new(money(data.gross_profit)),
+    ]);
+    summary.add_row(vec![
         Cell::new("Other Income"),
         Cell::new(money(data.other_income)),
     ]);
@@ -337,6 +345,13 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
     out.push_str(&format!(
         "K-1 Preparation Worksheet (Form 1120-S)\n\nIncome Summary\n{summary}"
     ));
+
+    if !data.auto_mapped.is_empty() {
+        out.push_str(&format!(
+            "\n(auto) income mapped to gross receipts: {}",
+            data.auto_mapped.join(", ")
+        ));
+    }
 
     // 2. Deductions by Line
     if !data.deduction_lines.is_empty() {
@@ -415,12 +430,62 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
         }
     }
 
+    // 6. Unmapped categories
+    if !data.unmapped.is_empty() {
+        let mut um = Table::new();
+        um.set_header(vec!["Category", "Amount"]);
+        for item in &data.unmapped {
+            um.add_row(vec![
+                Cell::new(&item.category_name),
+                Cell::new(money(item.total)),
+            ]);
+        }
+        out.push_str(&format!(
+            "\n\nNeeds mapping\nThese categories have activity but no form_line; they are excluded from the totals above.\n{um}"
+        ));
+    }
+
     out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::with_header;
+    use super::{format_k1, with_header};
+
+    #[test]
+    fn format_k1_shows_cogs_gross_profit_and_needs_mapping() {
+        let data = crate::reports::K1PrepReport {
+            gross_receipts: 1000.0,
+            cogs: 200.0,
+            gross_profit: 800.0,
+            other_income: 0.0,
+            total_deductions: 100.0,
+            ordinary_business_income: 700.0,
+            deduction_lines: vec![],
+            schedule_k_items: vec![],
+            other_deductions: vec![],
+            other_deductions_total: 0.0,
+            auto_mapped: vec!["Widget Sales".into()],
+            unmapped: vec![crate::reports::K1LineItem {
+                form_line: "\u{2014}".into(),
+                category_name: "Mystery Spend".into(),
+                total: 42.0,
+            }],
+            validation: crate::reports::K1Validation {
+                uncategorized_count: 0,
+                officer_comp: 0.0,
+                distributions: 0.0,
+                comp_dist_ratio: None,
+            },
+        };
+        let out = format_k1(&data);
+        assert!(out.contains("Cost of Goods Sold"));
+        assert!(out.contains("Gross Profit"));
+        assert!(out.contains("Needs mapping"));
+        assert!(out.contains("Mystery Spend"));
+        assert!(out.contains("(auto)"));
+        assert!(out.contains("Widget Sales"));
+    }
 
     #[test]
     fn with_header_prepends_when_set() {
