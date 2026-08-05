@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::db::set_metadata;
 use crate::error::{NigelError, Result};
@@ -31,7 +31,7 @@ fn cents_to_dollars(cents: i64) -> f64 {
 }
 
 pub fn import(dest: &Connection, invoiceshelf_db: &Path) -> Result<ImportSummary> {
-    let src = Connection::open(invoiceshelf_db)?;
+    let src = Connection::open_with_flags(invoiceshelf_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut summary = ImportSummary {
         clients: 0,
         invoices: 0,
@@ -90,7 +90,8 @@ pub fn import(dest: &Connection, invoiceshelf_db: &Path) -> Result<ImportSummary
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let mut istmt = src.prepare(
-            "SELECT name, quantity, price, total FROM invoice_items WHERE invoice_id = ?1",
+            "SELECT name, quantity, price, total FROM invoice_items
+             WHERE invoice_id = ?1 ORDER BY id",
         )?;
 
         for (src_id, number_str, cust, issue, due, total_cents, paid_status, currency) in rows {

@@ -69,8 +69,10 @@ fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
 /// outstanding balance. Rejects amounts that would write a junk payment row.
 fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
     match requested {
-        Some(amount) if amount <= 0.0 => Err(NigelError::Other(format!(
-            "--amount must be greater than zero, got {amount:.2}."
+        // Negated positive test, not `amount <= 0.0`: NaN compares false against
+        // every bound, and a NaN payment row poisons every later SUM.
+        Some(amount) if !(amount.is_finite() && amount > 0.0) => Err(NigelError::Other(format!(
+            "--amount must be a finite number greater than zero, got {amount:.2}."
         ))),
         Some(amount) => Ok(amount),
         None => {
@@ -406,5 +408,19 @@ mod tests {
         }
         // An overpayment is a real thing a bank does; only zero and negative are junk.
         assert_eq!(payment_amount(&invoice, 0.0, Some(250.0)).unwrap(), 250.0);
+    }
+
+    #[test]
+    fn explicit_amount_must_be_finite() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn);
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = payment_amount(&invoice, 0.0, Some(amount))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("finite number"), "got: {err}");
+        }
     }
 }
