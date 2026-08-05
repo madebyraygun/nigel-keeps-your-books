@@ -79,6 +79,9 @@ const REPORT_TYPES: &[&str] = &[
 /// index understood by `do_export`/`do_text_export`.
 const EXPORT_ALL_IDX: usize = REPORT_TYPES.len() - 1;
 
+/// Picker and export index of the transaction register.
+const REGISTER_IDX: usize = 4;
+
 enum DashboardScreen {
     Home,
     Browse(RegisterBrowser),
@@ -699,7 +702,10 @@ impl Dashboard {
         false
     }
 
+    /// Open the register browser on the full, unfiltered register. The browser
+    /// is not a `ReportView`, so no report index is current while it is up.
     fn enter_browse(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
+        self.current_report_idx = None;
         match reports::get_register(conn, None, None, None, None, None) {
             Ok(data) => {
                 let categories = match get_categories(conn) {
@@ -718,6 +724,7 @@ impl Dashboard {
                     categories,
                 );
                 browser.scroll_to_today();
+                browser.set_export_hints(true);
                 DashboardScreen::Browse(browser)
             }
             Err(e) => {
@@ -761,10 +768,11 @@ impl Dashboard {
         year: Option<i32>,
         month: Option<String>,
     ) -> DashboardScreen {
-        // Register (idx 4) delegates to the interactive browser
-        if idx == 4 {
+        // The register delegates to the interactive browser
+        if idx == REGISTER_IDX {
             return self.enter_browse(conn);
         }
+        self.current_report_idx = None;
         let year = year.or_else(|| Some(chrono::Local::now().year()));
         let result = match idx {
             0 => super::report::view::build_pnl(month.clone(), year, None, None),
@@ -780,6 +788,7 @@ impl Dashboard {
             Ok(mut view) => {
                 view.set_export_hints(true);
                 self.status_message = None;
+                self.current_report_idx = Some(idx);
                 DashboardScreen::ReportView(view)
             }
             Err(e) => {
@@ -846,6 +855,29 @@ fn viewer_export_action(code: KeyCode) -> Option<ExportAction> {
     }
 }
 
+/// Map a key press to the export it triggers inside the register browser, or
+/// `None` if the key should be handled by the browser instead. The browser
+/// binds `e` to inline category editing, so PDF export answers to `x` here.
+fn browser_export_action(code: KeyCode) -> Option<ExportAction> {
+    match code {
+        #[cfg(feature = "pdf")]
+        KeyCode::Char('x') => Some(ExportAction::Pdf),
+        KeyCode::Char('t') => Some(ExportAction::Text),
+        _ => None,
+    }
+}
+
+/// The year an export should cover. The register is browsable and exportable
+/// over an open date range; every other report needs a year and falls back to
+/// the current one.
+fn effective_year(idx: usize, year: Option<i32>) -> Option<i32> {
+    if idx == REGISTER_IDX {
+        year
+    } else {
+        year.or_else(|| Some(chrono::Local::now().year()))
+    }
+}
+
 fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
     #[cfg(not(feature = "pdf"))]
     {
@@ -856,7 +888,7 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
     }
     #[cfg(feature = "pdf")]
     {
-        let year = year.or_else(|| Some(chrono::Local::now().year()));
+        let year = effective_year(idx, year);
         let path = match idx {
             0 => super::export::pnl(month.clone(), year, None, None, None)?,
             1 => super::export::expenses(month.clone(), year, None)?,
@@ -874,7 +906,7 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
 }
 
 fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
-    let year = year.or_else(|| Some(chrono::Local::now().year()));
+    let year = effective_year(idx, year);
     let names = [
         "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep",
     ];
@@ -1109,21 +1141,36 @@ pub fn run() -> Result<()> {
                             false
                         }
                         DashboardScreen::Browse(browser) => {
-                            match browser.handle_key_event(key.code) {
-                                BrowseAction::Close => {
-                                    return_home = true;
+                            let export = if browser.export_hints_enabled()
+                                && !browser.is_capturing_input()
+                            {
+                                browser_export_action(key.code)
+                            } else {
+                                None
+                            };
+                            match export {
+                                // The dashboard's browser shows the whole register,
+                                // so the export takes an open date range too.
+                                Some(action) => {
+                                    pending_viewer_export =
+                                        Some((action, REGISTER_IDX, None, None));
                                 }
-                                BrowseAction::Continue => {}
-                                BrowseAction::CommitEdit => {
-                                    if let Err(e) = browser.commit_edit(&conn) {
-                                        browser.set_status(format!("Edit failed: {e}"));
+                                None => match browser.handle_key_event(key.code) {
+                                    BrowseAction::Close => {
+                                        return_home = true;
                                     }
-                                }
-                                BrowseAction::ToggleFlag => {
-                                    if let Err(e) = browser.toggle_flag(&conn) {
-                                        browser.set_status(format!("Flag toggle failed: {e}"));
+                                    BrowseAction::Continue => {}
+                                    BrowseAction::CommitEdit => {
+                                        if let Err(e) = browser.commit_edit(&conn) {
+                                            browser.set_status(format!("Edit failed: {e}"));
+                                        }
                                     }
-                                }
+                                    BrowseAction::ToggleFlag => {
+                                        if let Err(e) = browser.toggle_flag(&conn) {
+                                            browser.set_status(format!("Flag toggle failed: {e}"));
+                                        }
+                                    }
+                                },
                             }
                             false
                         }
@@ -1215,7 +1262,6 @@ pub fn run() -> Result<()> {
                                 }
                                 _ => match view.handle_key(key.code) {
                                     ReportViewAction::Close => {
-                                        dashboard.current_report_idx = None;
                                         return_home = true;
                                     }
                                     ReportViewAction::Continue => {}
@@ -1286,10 +1332,16 @@ pub fn run() -> Result<()> {
                             ExportAction::Pdf => do_export(idx, year, month),
                             ExportAction::Text => do_text_export(idx, year, month),
                         };
-                        dashboard.status_message = Some(match result {
+                        let msg = match result {
                             Ok(msg) => msg,
                             Err(e) => format!("Export failed: {e}"),
-                        });
+                        };
+                        // The browser draws its own status line; every other screen
+                        // reports through the dashboard's.
+                        match dashboard.screen {
+                            DashboardScreen::Browse(ref mut browser) => browser.set_status(msg),
+                            _ => dashboard.status_message = Some(msg),
+                        }
                         // PDF export writes a confirmation line to stdout, which lands
                         // on top of the report. Repaint the whole screen to erase it.
                         let _ = terminal.clear();
@@ -1297,11 +1349,11 @@ pub fn run() -> Result<()> {
 
                     if return_home {
                         dashboard.screen = DashboardScreen::Home;
+                        dashboard.current_report_idx = None;
                         let _ = dashboard.load_data(&conn);
                     }
 
                     if let Some(idx) = dashboard.pending_report_view.take() {
-                        dashboard.current_report_idx = Some(idx);
                         dashboard.screen = dashboard.enter_report_view(idx, &conn);
                     }
 
@@ -1373,8 +1425,57 @@ mod viewer_export_tests {
     }
 
     #[test]
+    fn browser_export_keys_avoid_browser_bindings() {
+        #[cfg(feature = "pdf")]
+        assert!(matches!(
+            browser_export_action(KeyCode::Char('x')),
+            Some(ExportAction::Pdf)
+        ));
+        #[cfg(not(feature = "pdf"))]
+        assert!(browser_export_action(KeyCode::Char('x')).is_none());
+        assert!(matches!(
+            browser_export_action(KeyCode::Char('t')),
+            Some(ExportAction::Text)
+        ));
+        // Keys the browser owns must reach it untouched.
+        for code in [
+            KeyCode::Char('e'),
+            KeyCode::Char('f'),
+            KeyCode::Char('g'),
+            KeyCode::Char('d'),
+            KeyCode::Char('i'),
+            KeyCode::Char('n'),
+            KeyCode::Char('N'),
+            KeyCode::Char('/'),
+            KeyCode::Char('q'),
+            KeyCode::Enter,
+            KeyCode::Esc,
+        ] {
+            assert!(
+                browser_export_action(code).is_none(),
+                "{code:?} must stay with the browser"
+            );
+        }
+    }
+
+    #[test]
+    fn register_exports_keep_an_open_date_range() {
+        assert_eq!(effective_year(REGISTER_IDX, None), None);
+        assert_eq!(effective_year(REGISTER_IDX, Some(2020)), Some(2020));
+    }
+
+    #[test]
+    fn other_reports_default_to_the_current_year() {
+        let this_year = chrono::Local::now().year();
+        assert_eq!(effective_year(0, None), Some(this_year));
+        assert_eq!(effective_year(EXPORT_ALL_IDX, None), Some(this_year));
+        assert_eq!(effective_year(0, Some(2020)), Some(2020));
+    }
+
+    #[test]
     fn picker_last_entry_is_export_all() {
         assert_eq!(REPORT_TYPES.last(), Some(&"Export All Reports"));
+        assert_eq!(REPORT_TYPES[REGISTER_IDX], "Transaction Register");
         // The export helpers' index contract: idx 8 == all reports.
         assert_eq!(EXPORT_ALL_IDX, 8);
     }

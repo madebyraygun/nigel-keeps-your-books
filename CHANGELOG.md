@@ -5,6 +5,7 @@
 ### Changed
 - **Report exports moved into the report viewer** — `e` (PDF) and `t` (text) export exactly the period on screen, so any year or month you can navigate to can be exported, not just the current year
 - **Single "View Reports" picker** — the standalone export report/format screens are gone; the picker's last entry, "Export All Reports", exports every report at once (Enter for PDF, `t` for text)
+- **Register exports from the dashboard's browser** — picking "Transaction Register" opens the interactive browser, where `x` (PDF) and `t` (text) export every transaction on screen; the register exports over an open date range instead of being clipped to the current year. `nigel browse register` is unchanged and binds neither key
 
 ## [1.0.1] - 2026-08-05
 
