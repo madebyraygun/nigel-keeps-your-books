@@ -61,6 +61,31 @@ impl TestEnv {
             .expect("schema_version not a number")
     }
 
+    /// Encrypt the database in place, the way `nigel password set` does.
+    fn encrypt(&self, password: &str) {
+        let db = self.data_dir().join("nigel.db");
+        let tmp = self.data_dir().join("nigel.db.encrypting");
+        let conn = self.db();
+        conn.execute(
+            "ATTACH DATABASE ?1 AS encrypted KEY ?2",
+            rusqlite::params![tmp.to_string_lossy(), password],
+        )
+        .expect("failed to attach encrypted database");
+        conn.execute_batch("SELECT sqlcipher_export('encrypted'); DETACH DATABASE encrypted;")
+            .expect("failed to export to encrypted database");
+        drop(conn);
+        let _ = std::fs::remove_file(self.data_dir().join("nigel.db-wal"));
+        let _ = std::fs::remove_file(self.data_dir().join("nigel.db-shm"));
+        std::fs::rename(&tmp, &db).expect("failed to swap in encrypted database");
+
+        assert!(
+            self.db()
+                .execute_batch("SELECT count(*) FROM sqlite_master;")
+                .is_err(),
+            "fixture did not actually encrypt the database"
+        );
+    }
+
     fn form_line(&self, category: &str) -> Option<String> {
         self.db()
             .query_row(
@@ -581,16 +606,19 @@ fn report_k1_migrates_outdated_database() {
 }
 
 #[test]
-fn completions_does_not_require_a_database() {
+fn completions_skips_the_password_and_migration_preflight() {
     let env = TestEnv::new();
-    env.cmd()
-        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
-        .assert()
-        .success();
+    env.init_and_demo();
+    env.encrypt("hunter2");
 
+    // The database is now unreadable without the password (asserted inside `encrypt`), so
+    // any pre-flight that opened it would fail. `completions` neither prompts for the
+    // password nor migrates, so it still works.
     env.cmd()
         .args(["completions", "bash"])
+        .write_stdin("")
+        .timeout(std::time::Duration::from_secs(60))
         .assert()
         .success()
-        .stdout(predicate::str::contains("nigel"));
+        .stdout(predicate::str::contains("_nigel"));
 }

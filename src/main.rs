@@ -83,11 +83,16 @@ fn dispatch(command: Commands) -> error::Result<()> {
         crate::db::prompt_password_if_needed(&db_path)?;
     }
 
+    // `restore` overwrites the database file and then migrates the restored copy itself,
+    // so migrating the outgoing one first is wasted work that could abort the very
+    // recovery meant to repair it.
+    let replaces_db = matches!(command, Commands::Restore { .. });
+
     // Bring the schema up to date before any command reads or writes data. The
     // intersection of the two guards above is exactly the set of commands that open the
     // existing database with a usable password; init/demo/restore migrate via their own
     // init_db() call, and the dashboard migrates in its own pre-flight.
-    if needs_existing_db && needs_password {
+    if needs_existing_db && needs_password && !replaces_db {
         let conn = crate::db::get_connection(&db_path)?;
         crate::db::init_db(&conn)?;
     }
