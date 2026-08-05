@@ -12,7 +12,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 
 ## Features
 
-- **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, manage accounts and categories, view rules, view/export reports, and switch data files.
+- **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, manage accounts and categories, view rules, view and export reports, and switch data files.
 - **Bank imports** — CSV/XLSX parsers with format auto-detection; `--dry-run` to preview without writing
 - **Generic CSV** — import any CSV with `--date-col`, `--desc-col`, `--amount-col`; save reusable profiles with `--save-profile`
 - **Payroll import** — XLSX payroll importer with auto-categorization
@@ -21,7 +21,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Undo imports** — `nigel undo` rolls back the last import, removing its transactions after confirmation
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
-- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files. In the dashboard's report viewer, `e` exports the period you are looking at as a PDF and `t` exports it as text
+- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files. In the dashboard, `v` opens the View Reports picker; picking a report opens the viewer, where `e` exports the period you are looking at as a PDF and `t` exports it as text. The picker's last entry, "Export All Reports", exports every report at once (Enter for PDF, `t` for text)
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements

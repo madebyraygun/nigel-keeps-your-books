@@ -54,8 +54,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[t] Edit chart of accounts", 't'),
     ("[u] View or edit categorization rules", 'u'),
     ("[z] Undo last import", 'z'),
-    ("[v] View a report", 'v'),
-    ("[e] Export a report", 'e'),
+    ("[v] View Reports", 'v'),
     ("[l] Load a different data file", 'l'),
     ("[p] Settings", 'p'),
     ("[s] Snake", 's'),
@@ -73,30 +72,12 @@ const REPORT_TYPES: &[&str] = &[
     "Flagged Transactions",
     "Cash Position",
     "K-1 Prep (1120-S)",
+    "Export All Reports",
 ];
 
-const EXPORT_TYPES: &[&str] = &[
-    "Profit & Loss",
-    "Expense Breakdown",
-    "Tax Summary",
-    "Cash Flow",
-    "Transaction Register",
-    "Flagged Transactions",
-    "Cash Position",
-    "K-1 Prep (1120-S)",
-    "All Reports",
-];
-
-#[derive(Clone, Copy)]
-enum ReportPickerMode {
-    View,
-    Export,
-}
-
-#[cfg(feature = "pdf")]
-const EXPORT_FORMATS: &[&str] = &["PDF", "Text"];
-#[cfg(not(feature = "pdf"))]
-const EXPORT_FORMATS: &[&str] = &["Text"];
+/// Index of the picker's export-all entry, which is also the "all reports"
+/// index understood by `do_export`/`do_text_export`.
+const EXPORT_ALL_IDX: usize = REPORT_TYPES.len() - 1;
 
 enum DashboardScreen {
     Home,
@@ -108,14 +89,7 @@ enum DashboardScreen {
     Rules(RulesManager),
     Reconcile(ReconcileScreen),
     Load(LoadScreen),
-    ReportPicker {
-        selection: usize,
-        mode: ReportPickerMode,
-    },
-    ExportFormatPicker {
-        report_idx: usize,
-        selection: usize,
-    },
+    ReportPicker { selection: usize },
     ReportView(Box<dyn ReportView>),
     Undo(UndoScreen),
     Settings(SettingsManager),
@@ -339,16 +313,15 @@ impl Dashboard {
             }
             return;
         }
-        if let DashboardScreen::ReportPicker { selection, mode } = self.screen {
-            let (title, items) = match mode {
-                ReportPickerMode::View => ("Select a report to view", REPORT_TYPES as &[&str]),
-                ReportPickerMode::Export => ("Select a report to export", EXPORT_TYPES as &[&str]),
+        if let DashboardScreen::ReportPicker { selection } = self.screen {
+            let footer = if selection != EXPORT_ALL_IDX {
+                " Up/Down=navigate  Enter=select  Esc/q=back"
+            } else if cfg!(feature = "pdf") {
+                " Up/Down=navigate  Enter=export all as PDF  t=export all as text  Esc/q=back"
+            } else {
+                " Up/Down=navigate  Enter/t=export all as text  Esc/q=back"
             };
-            self.draw_picker(frame, title, items, selection);
-            return;
-        }
-        if let DashboardScreen::ExportFormatPicker { selection, .. } = self.screen {
-            self.draw_picker(frame, "Select export format", EXPORT_FORMATS, selection);
+            self.draw_picker(frame, "View Reports", REPORT_TYPES, selection, footer);
             return;
         }
         if let DashboardScreen::Undo(ref undo) = self.screen {
@@ -607,7 +580,14 @@ impl Dashboard {
         }
     }
 
-    fn draw_picker(&self, frame: &mut Frame, title: &str, items: &[&str], selection: usize) {
+    fn draw_picker(
+        &self,
+        frame: &mut Frame,
+        title: &str,
+        items: &[&str],
+        selection: usize,
+        footer: &str,
+    ) {
         let area = frame.area();
         let border_style = Style::default().fg(Color::DarkGray);
 
@@ -646,10 +626,7 @@ impl Dashboard {
         }
         frame.render_widget(Paragraph::new(lines), content_area);
 
-        frame.render_widget(
-            Paragraph::new(" Up/Down=navigate  Enter=select  Esc/q=back").style(FOOTER_STYLE),
-            hints_area,
-        );
+        frame.render_widget(Paragraph::new(footer).style(FOOTER_STYLE), hints_area);
     }
 
     fn menu_item_line(&self, i: usize, flagged_count: usize) -> Line<'static> {
@@ -690,24 +667,13 @@ impl Dashboard {
                 Ok(screen) => self.screen = DashboardScreen::Undo(screen),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            8 => {
-                self.screen = DashboardScreen::ReportPicker {
-                    selection: 0,
-                    mode: ReportPickerMode::View,
-                }
-            }
-            9 => {
-                self.screen = DashboardScreen::ReportPicker {
-                    selection: 0,
-                    mode: ReportPickerMode::Export,
-                }
-            }
-            10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            11 => match SettingsManager::new(conn, &self.greeting) {
+            8 => self.screen = DashboardScreen::ReportPicker { selection: 0 },
+            9 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            10 => match SettingsManager::new(conn, &self.greeting) {
                 Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            12 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            11 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -1264,51 +1230,26 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
-                        DashboardScreen::ReportPicker { selection, mode } => {
-                            let max_idx = match mode {
-                                ReportPickerMode::View => REPORT_TYPES.len() - 1,
-                                ReportPickerMode::Export => EXPORT_TYPES.len() - 1,
-                            };
+                        DashboardScreen::ReportPicker { selection } => {
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),
-                                KeyCode::Down => *selection = (*selection + 1).min(max_idx),
+                                KeyCode::Down => *selection = (*selection + 1).min(EXPORT_ALL_IDX),
                                 KeyCode::Esc | KeyCode::Char('q') => return_home = true,
-                                KeyCode::Enter => match mode {
-                                    ReportPickerMode::View => {
-                                        dashboard.pending_report_view = Some(*selection);
+                                KeyCode::Enter if *selection == EXPORT_ALL_IDX => {
+                                    #[cfg(feature = "pdf")]
+                                    {
+                                        dashboard.pending_export = Some(EXPORT_ALL_IDX);
                                     }
-                                    ReportPickerMode::Export => {
-                                        dashboard.screen = DashboardScreen::ExportFormatPicker {
-                                            report_idx: *selection,
-                                            selection: 0,
-                                        };
+                                    #[cfg(not(feature = "pdf"))]
+                                    {
+                                        dashboard.pending_text_export = Some(EXPORT_ALL_IDX);
                                     }
-                                },
-                                _ => {}
-                            }
-                            false
-                        }
-                        DashboardScreen::ExportFormatPicker {
-                            report_idx,
-                            selection,
-                        } => {
-                            let max_idx = EXPORT_FORMATS.len() - 1;
-                            match key.code {
-                                KeyCode::Up => *selection = selection.saturating_sub(1),
-                                KeyCode::Down => *selection = (*selection + 1).min(max_idx),
-                                KeyCode::Esc | KeyCode::Char('q') => {
-                                    dashboard.screen = DashboardScreen::ReportPicker {
-                                        selection: *report_idx,
-                                        mode: ReportPickerMode::Export,
-                                    };
                                 }
                                 KeyCode::Enter => {
-                                    let format = EXPORT_FORMATS[*selection];
-                                    if format == "Text" {
-                                        dashboard.pending_text_export = Some(*report_idx);
-                                    } else {
-                                        dashboard.pending_export = Some(*report_idx);
-                                    }
+                                    dashboard.pending_report_view = Some(*selection);
+                                }
+                                KeyCode::Char('t') if *selection == EXPORT_ALL_IDX => {
+                                    dashboard.pending_text_export = Some(EXPORT_ALL_IDX);
                                 }
                                 _ => {}
                             }
@@ -1365,34 +1306,21 @@ pub fn run() -> Result<()> {
                     }
 
                     if let Some(idx) = dashboard.pending_export.take() {
-                        let (year, month) =
-                            if let DashboardScreen::ReportView(ref view) = dashboard.screen {
-                                view.date_params()
-                            } else {
-                                (None, None)
-                            };
-                        match do_export(idx, year, month) {
-                            Ok(msg) => dashboard.status_message = Some(msg),
-                            Err(e) => {
-                                dashboard.status_message = Some(format!("Export failed: {e}"))
-                            }
-                        }
+                        dashboard.status_message = Some(match do_export(idx, None, None) {
+                            Ok(msg) => msg,
+                            Err(e) => format!("Export failed: {e}"),
+                        });
                         dashboard.screen = DashboardScreen::Home;
+                        // PDF export writes a confirmation line to stdout, which lands
+                        // on top of the TUI. Repaint the whole screen to erase it.
+                        let _ = terminal.clear();
                     }
 
                     if let Some(idx) = dashboard.pending_text_export.take() {
-                        let (year, month) =
-                            if let DashboardScreen::ReportView(ref view) = dashboard.screen {
-                                view.date_params()
-                            } else {
-                                (None, None)
-                            };
-                        match do_text_export(idx, year, month) {
-                            Ok(msg) => dashboard.status_message = Some(msg),
-                            Err(e) => {
-                                dashboard.status_message = Some(format!("Export failed: {e}"))
-                            }
-                        }
+                        dashboard.status_message = Some(match do_text_export(idx, None, None) {
+                            Ok(msg) => msg,
+                            Err(e) => format!("Export failed: {e}"),
+                        });
                         dashboard.screen = DashboardScreen::Home;
                     }
 
@@ -1442,5 +1370,12 @@ mod viewer_export_tests {
         ));
         assert!(viewer_export_action(KeyCode::Char('m')).is_none());
         assert!(viewer_export_action(KeyCode::Esc).is_none());
+    }
+
+    #[test]
+    fn picker_last_entry_is_export_all() {
+        assert_eq!(REPORT_TYPES.last(), Some(&"Export All Reports"));
+        // The export helpers' index contract: idx 8 == all reports.
+        assert_eq!(EXPORT_ALL_IDX, 8);
     }
 }

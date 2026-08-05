@@ -35,7 +35,7 @@ Running `nigel` with no arguments launches the interactive dashboard — your ma
 
 ![Dashboard](screenshots/dashboard.png)
 
-The dashboard shows YTD financials, account balances, a monthly cash flow chart, and a menu to browse, review, import, reconcile, manage accounts and rules, view or export reports, and switch data files.
+The dashboard shows YTD financials, account balances, a monthly cash flow chart, and a menu to browse, review, import, reconcile, manage accounts and rules, view and export reports, and switch data files.
 
 ## 2. Explore what's there
 
