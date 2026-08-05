@@ -1,9 +1,11 @@
 ---
 id: TASK-24
 title: Fix clippy collapsible_match failures blocking CI
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-08-05 19:27'
+updated_date: '2026-08-05 19:33'
 labels:
   - ci
   - bug
