@@ -123,8 +123,8 @@ pub fn migrate_company_name() -> Option<String> {
 pub struct InvoicingConfig {
     pub stripe_secret_key: Option<String>,
     pub mailgun_api_key: Option<String>,
-    pub mailgun_domain: String,
-    pub from_email: String,
+    pub mailgun_domain: Option<String>,
+    pub from_email: Option<String>,
     pub r2_account_id: Option<String>,
     pub r2_access_key: Option<String>,
     pub r2_secret_key: Option<String>,
@@ -140,10 +140,8 @@ pub fn invoicing_config_from(s: &Settings) -> InvoicingConfig {
     InvoicingConfig {
         stripe_secret_key: env_or("NIGEL_STRIPE_SECRET_KEY", &s.stripe_secret_key),
         mailgun_api_key: env_or("NIGEL_MAILGUN_API_KEY", &s.mailgun_api_key),
-        mailgun_domain: env_or("NIGEL_MAILGUN_DOMAIN", &s.mailgun_domain)
-            .unwrap_or_else(|| "rygn.io".into()),
-        from_email: env_or("NIGEL_FROM_EMAIL", &s.from_email)
-            .unwrap_or_else(|| "billing@rygn.io".into()),
+        mailgun_domain: env_or("NIGEL_MAILGUN_DOMAIN", &s.mailgun_domain),
+        from_email: env_or("NIGEL_FROM_EMAIL", &s.from_email),
         r2_account_id: env_or("NIGEL_R2_ACCOUNT_ID", &s.r2_account_id),
         r2_access_key: env_or("NIGEL_R2_ACCESS_KEY", &s.r2_access_key),
         r2_secret_key: env_or("NIGEL_R2_SECRET_KEY", &s.r2_secret_key),
@@ -318,6 +316,8 @@ mod tests {
 
         let cfg3 = invoicing_config_from(&Settings::default());
         assert_eq!(cfg3.public_base_url, None);
+        assert_eq!(cfg3.mailgun_domain, None);
+        assert_eq!(cfg3.from_email, None);
     }
 
     #[test]

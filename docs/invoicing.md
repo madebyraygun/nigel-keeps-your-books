@@ -22,8 +22,8 @@ Secrets and endpoints resolve from the environment first, then from
 |---|---|---|---|
 | `stripe_secret_key` | `NIGEL_STRIPE_SECRET_KEY` | `send`, `sync` | — |
 | `mailgun_api_key` | `NIGEL_MAILGUN_API_KEY` | `send` | — |
-| `mailgun_domain` | `NIGEL_MAILGUN_DOMAIN` | `send` | `rygn.io` |
-| `from_email` | `NIGEL_FROM_EMAIL` | `send` | `billing@rygn.io` |
+| `mailgun_domain` | `NIGEL_MAILGUN_DOMAIN` | `send` | — |
+| `from_email` | `NIGEL_FROM_EMAIL` | `send` | — |
 | `r2_account_id` | `NIGEL_R2_ACCOUNT_ID` | `send` | — |
 | `r2_access_key` | `NIGEL_R2_ACCESS_KEY` | `send` | — |
 | `r2_secret_key` | `NIGEL_R2_SECRET_KEY` | `send` | — |
@@ -42,8 +42,8 @@ permissions on Unix. Use Stripe test keys (`sk_test_…`) while trying things ou
   "data_dir": "/home/you/Documents/nigel",
   "stripe_secret_key": "sk_test_...",
   "mailgun_api_key": "...",
-  "mailgun_domain": "rygn.io",
-  "from_email": "billing@rygn.io",
+  "mailgun_domain": "mg.example.com",
+  "from_email": "billing@example.com",
   "r2_account_id": "...",
   "r2_access_key": "...",
   "r2_secret_key": "...",
@@ -109,7 +109,8 @@ send is safe to retry. The command prints the public URL on success:
 `Sent invoice #1248: https://billing.rygn.io/i/aBc123.../`.
 
 The published page shows the line items, the total, a Pay button linking to
-Stripe, and bank-transfer instructions.
+Stripe, and bank-transfer instructions. The direct-deposit line tells the client
+to get in touch at `from_email`, the same address the invoice is sent from.
 
 ## Recording payments
 

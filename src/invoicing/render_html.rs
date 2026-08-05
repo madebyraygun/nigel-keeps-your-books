@@ -45,6 +45,7 @@ pub fn render_invoice_html(
     client: &Client,
     items: &[InvoiceLineItem],
     pay_url: Option<&str>,
+    contact_email: &str,
 ) -> String {
     let rows: String = items
         .iter()
@@ -80,6 +81,7 @@ pub fn render_invoice_html(
             ("CURRENCY", &esc(&invoice.currency)),
             ("TOTAL", &format!("{:.2}", invoice.total)),
             ("PAY", &pay),
+            ("CONTACT", &esc(contact_email)),
         ],
     )
 }
@@ -130,7 +132,13 @@ mod tests {
     #[test]
     fn renders_number_total_items_and_pay_button() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, Some("https://pay.stripe.test/x"));
+        let html = render_invoice_html(
+            &inv,
+            &client,
+            &items,
+            Some("https://pay.stripe.test/x"),
+            "billing@example.test",
+        );
         assert!(html.contains("1248"));
         assert!(html.contains("Design"));
         assert!(html.contains("250.00"));
@@ -140,10 +148,32 @@ mod tests {
     }
 
     #[test]
+    fn direct_deposit_line_uses_the_supplied_contact_email() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(&inv, &client, &items, None, "ap@acme.test");
+        assert!(html.contains("Contact ap@acme.test for account details"));
+        assert!(!html.contains("rygn.io"));
+    }
+
+    #[test]
+    fn contact_email_is_escaped() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(&inv, &client, &items, None, "<script>alert(1)</script>");
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
+    }
+
+    #[test]
     fn client_name_containing_a_placeholder_stays_literal_text() {
         let (inv, mut client, items) = sample();
         client.name = "Acme {{ROWS}} {{PAY}} Co".into();
-        let html = render_invoice_html(&inv, &client, &items, Some("https://pay.stripe.test/x"));
+        let html = render_invoice_html(
+            &inv,
+            &client,
+            &items,
+            Some("https://pay.stripe.test/x"),
+            "billing@example.test",
+        );
         assert!(html.contains("Acme {{ROWS}} {{PAY}} Co"));
         assert_eq!(html.matches("Design").count(), 1);
         assert_eq!(html.matches("Pay online").count(), 1);
@@ -157,6 +187,7 @@ mod tests {
             &client,
             &items,
             Some("https://pay.stripe.test/x\"onmouseover=\"alert(1)"),
+            "billing@example.test",
         );
         assert!(html.contains("&quot;onmouseover"));
         assert!(!html.contains("\"onmouseover"));
@@ -165,7 +196,7 @@ mod tests {
     #[test]
     fn omits_pay_button_when_no_url() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, None);
+        let html = render_invoice_html(&inv, &client, &items, None, "billing@example.test");
         assert!(!html.contains("Pay online"));
         assert!(html.contains("Direct deposit"));
     }

@@ -115,8 +115,8 @@ fn build_clients(cfg: InvoicingConfig) -> Result<(StripeClient, R2Publisher, Mai
     };
     let mail = MailgunClient {
         api_key: require(cfg.mailgun_api_key, "mailgun_api_key")?,
-        domain: cfg.mailgun_domain,
-        from: cfg.from_email,
+        domain: require(cfg.mailgun_domain, "mailgun_domain")?,
+        from: require(cfg.from_email, "from_email")?,
     };
     Ok((stripe, r2, mail))
 }
@@ -208,7 +208,16 @@ pub fn send(number: i64, today: &str) -> Result<()> {
     let invoice = find_invoice(&conn, number)?;
     ensure_not_void(&invoice, "sent")?;
     let (stripe, r2, mail) = build_clients(invoicing_config())?;
-    let url = send_invoice(&conn, invoice.id, today, &stripe, &r2, &mail)?;
+    let contact_email = mail.from.clone();
+    let url = send_invoice(
+        &conn,
+        invoice.id,
+        today,
+        &contact_email,
+        &stripe,
+        &r2,
+        &mail,
+    )?;
     println!("Sent invoice #{number}: {url}");
     Ok(())
 }
@@ -308,8 +317,8 @@ mod tests {
         InvoicingConfig {
             stripe_secret_key: None,
             mailgun_api_key: None,
-            mailgun_domain: "rygn.io".into(),
-            from_email: "billing@rygn.io".into(),
+            mailgun_domain: None,
+            from_email: None,
             r2_account_id: None,
             r2_access_key: None,
             r2_secret_key: None,
@@ -339,6 +348,38 @@ mod tests {
         };
         let err = build_clients(cfg).map(|_| ()).unwrap_err().to_string();
         assert!(err.contains("public_base_url"), "got: {err}");
+    }
+
+    fn config_up_to_mailgun() -> InvoicingConfig {
+        InvoicingConfig {
+            stripe_secret_key: Some("sk_test".into()),
+            r2_account_id: Some("acct".into()),
+            r2_access_key: Some("ak".into()),
+            r2_secret_key: Some("sk".into()),
+            r2_bucket: Some("billing".into()),
+            public_base_url: Some("https://billing.example.test/i".into()),
+            mailgun_api_key: Some("key".into()),
+            ..test_config()
+        }
+    }
+
+    #[test]
+    fn missing_mailgun_domain_names_the_setting() {
+        let err = build_clients(config_up_to_mailgun())
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("mailgun_domain"), "got: {err}");
+    }
+
+    #[test]
+    fn missing_from_email_names_the_setting() {
+        let cfg = InvoicingConfig {
+            mailgun_domain: Some("mail.example.test".into()),
+            ..config_up_to_mailgun()
+        };
+        let err = build_clients(cfg).map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("from_email"), "got: {err}");
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     conn: &Connection,
     invoice_id: i64,
     today: &str,
+    contact_email: &str,
     gateway: &G,
     publisher: &P,
     mailer: &M,
@@ -30,7 +31,7 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     let pay_url = invoice.stripe_payment_link_url.clone();
 
     let items = line_items(conn, invoice_id)?;
-    let html = render_invoice_html(&invoice, &client, &items, pay_url.as_deref());
+    let html = render_invoice_html(&invoice, &client, &items, pay_url.as_deref(), contact_email);
     let pdf = render_pdf(&invoice, &client, &items)?;
 
     let public_url = publisher.publish(&invoice.token, html.as_bytes(), &pdf)?;
@@ -107,6 +108,15 @@ mod tests {
             Ok(format!("https://billing.rygn.io/i/{token}/"))
         }
     }
+    struct CapturePub {
+        html: RefCell<String>,
+    }
+    impl AssetPublisher for CapturePub {
+        fn publish(&self, token: &str, h: &[u8], _p: &[u8]) -> Result<String> {
+            *self.html.borrow_mut() = String::from_utf8(h.to_vec()).unwrap();
+            Ok(format!("https://billing.example.test/i/{token}/"))
+        }
+    }
     struct FailPub;
     impl AssetPublisher for FailPub {
         fn publish(&self, _t: &str, _h: &[u8], _p: &[u8]) -> Result<String> {
@@ -143,7 +153,16 @@ mod tests {
         let mail = FakeMail {
             sent: RefCell::new(0),
         };
-        let url = send_invoice(&conn, id, "2026-08-04", &gw, &FakePub, &mail).unwrap();
+        let url = send_invoice(
+            &conn,
+            id,
+            "2026-08-04",
+            "billing@example.test",
+            &gw,
+            &FakePub,
+            &mail,
+        )
+        .unwrap();
         assert!(url.starts_with("https://billing.rygn.io/i/"));
         let inv = get_invoice(&conn, id).unwrap();
         assert_eq!(inv.status, "sent");
@@ -161,10 +180,44 @@ mod tests {
         let mail = FakeMail {
             sent: RefCell::new(0),
         };
-        let err = send_invoice(&conn, id, "2026-08-04", &gw, &FailPub, &mail);
+        let err = send_invoice(
+            &conn,
+            id,
+            "2026-08-04",
+            "billing@example.test",
+            &gw,
+            &FailPub,
+            &mail,
+        );
         assert!(err.is_err());
         assert_eq!(get_invoice(&conn, id).unwrap().status, "draft");
         assert_eq!(*mail.sent.borrow(), 0);
+    }
+
+    #[test]
+    fn published_html_carries_the_supplied_contact_email() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail {
+            sent: RefCell::new(0),
+        };
+        let publisher = CapturePub {
+            html: RefCell::new(String::new()),
+        };
+        send_invoice(
+            &conn,
+            id,
+            "2026-08-04",
+            "ap@acme.test",
+            &gw,
+            &publisher,
+            &mail,
+        )
+        .unwrap();
+        assert!(publisher.html.borrow().contains("Contact ap@acme.test"));
     }
 
     #[test]
@@ -177,8 +230,26 @@ mod tests {
         let mail = FakeMail {
             sent: RefCell::new(0),
         };
-        send_invoice(&conn, id, "2026-08-04", &gw, &FakePub, &mail).unwrap();
-        send_invoice(&conn, id, "2026-08-05", &gw, &FakePub, &mail).unwrap();
+        send_invoice(
+            &conn,
+            id,
+            "2026-08-04",
+            "billing@example.test",
+            &gw,
+            &FakePub,
+            &mail,
+        )
+        .unwrap();
+        send_invoice(
+            &conn,
+            id,
+            "2026-08-05",
+            "billing@example.test",
+            &gw,
+            &FakePub,
+            &mail,
+        )
+        .unwrap();
         assert_eq!(*gw.create_calls.borrow(), 1); // created once, reused second time
     }
 }
