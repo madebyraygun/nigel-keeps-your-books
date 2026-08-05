@@ -301,10 +301,8 @@ impl ReconcileScreen {
                             self.month.push(c);
                         }
                     }
-                    FIELD_BALANCE => {
-                        if c.is_ascii_digit() || c == '.' || c == '-' || c == ',' {
-                            self.balance.push(c);
-                        }
+                    FIELD_BALANCE if c.is_ascii_digit() || c == '.' || c == '-' || c == ',' => {
+                        self.balance.push(c);
                     }
                     _ => {}
                 }

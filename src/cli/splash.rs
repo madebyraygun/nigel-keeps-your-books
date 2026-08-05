@@ -250,10 +250,8 @@ pub fn run() -> Result<()> {
         if event::poll(TICK_INTERVAL)? {
             match event::read() {
                 Err(e) => break Err(e.into()),
-                Ok(Event::Key(key)) => {
-                    if key.kind == KeyEventKind::Press {
-                        break Ok(());
-                    }
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                    break Ok(());
                 }
                 _ => {}
             }

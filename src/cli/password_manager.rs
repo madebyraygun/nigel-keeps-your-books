@@ -340,11 +340,9 @@ impl PasswordManager {
                 self.active_input_mut().push(c);
                 self.cursor += 1;
             }
-            KeyCode::Backspace => {
-                if self.cursor > 0 {
-                    self.active_input_mut().pop();
-                    self.cursor -= 1;
-                }
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.active_input_mut().pop();
+                self.cursor -= 1;
             }
             _ => {}
         }
