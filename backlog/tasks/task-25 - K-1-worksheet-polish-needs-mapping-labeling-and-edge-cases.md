@@ -4,6 +4,7 @@ title: 'K-1 worksheet polish: needs-mapping labeling and edge cases'
 status: To Do
 assignee: []
 created_date: '2026-08-05 21:18'
+updated_date: '2026-08-05 21:51'
 labels:
   - reports
 dependencies: []
@@ -21,4 +22,5 @@ Follow-ups from the K-1 mapping final review (task-23): (1) Needs-mapping note s
 - [ ] #1 Needs-mapping section wording and columns make unrecognized form_line values self-diagnosing
 - [ ] #2 Meals gross-vs-deductible presentation is labeled or aligned across tables
 - [ ] #3 Empty-string form_line from the CLI behaves like the TUI (NULL)
+- [ ] #4 A golden-file test renders the complete K-1 worksheet text from a books-shaped fixture DB (mixed mapped/auto-mapped/unmapped/excluded categories, partial payments, meals) and asserts the full output verbatim
 <!-- AC:END -->
