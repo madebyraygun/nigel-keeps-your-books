@@ -1,9 +1,11 @@
 ---
 id: TASK-26
 title: Report exports move into the viewer; remove export screens
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-08-05 22:19'
+updated_date: '2026-08-05 22:37'
 labels:
   - reports
   - ux
@@ -24,3 +26,9 @@ From the dashboard there is no way to set a time period when exporting — e.g. 
 - [ ] #3 Export All is reachable as a secondary function of the View Reports screen
 - [ ] #4 CLI report flags (--mode export, --format, --output, report all) are unchanged
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Per docs/superpowers/plans/2026-08-05-viewer-export.md: 1. Viewer export keys (e=PDF, t=text) using date_params + existing do_export helpers 2. Remove export picker/format screens, rename picker View Reports, append Export All entry 3. Docs + changelog
+<!-- SECTION:PLAN:END -->
