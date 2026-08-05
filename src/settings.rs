@@ -129,7 +129,7 @@ pub struct InvoicingConfig {
     pub r2_access_key: Option<String>,
     pub r2_secret_key: Option<String>,
     pub r2_bucket: Option<String>,
-    pub public_base_url: String,
+    pub public_base_url: Option<String>,
 }
 
 fn env_or(name: &str, file_val: &Option<String>) -> Option<String> {
@@ -148,8 +148,7 @@ pub fn invoicing_config_from(s: &Settings) -> InvoicingConfig {
         r2_access_key: env_or("NIGEL_R2_ACCESS_KEY", &s.r2_access_key),
         r2_secret_key: env_or("NIGEL_R2_SECRET_KEY", &s.r2_secret_key),
         r2_bucket: env_or("NIGEL_R2_BUCKET", &s.r2_bucket),
-        public_base_url: env_or("NIGEL_PUBLIC_BASE_URL", &s.public_base_url)
-            .unwrap_or_else(|| "https://billing.rygn.io/i".into()),
+        public_base_url: env_or("NIGEL_PUBLIC_BASE_URL", &s.public_base_url),
     }
 }
 
@@ -288,23 +287,37 @@ mod tests {
     fn invoicing_config_prefers_env_over_settings() {
         // Uses a real env var name; set/remove around the assertion.
         std::env::set_var("NIGEL_STRIPE_SECRET_KEY", "rk_env");
+        std::env::set_var("NIGEL_PUBLIC_BASE_URL", "https://env.example/i");
         let cfg = invoicing_config_from(&Settings {
             data_dir: "/x".into(),
             user_name: String::new(),
             update_check: true,
             last_update_check: None,
             stripe_secret_key: Some("rk_file".into()),
+            public_base_url: Some("https://file.example/i".into()),
             ..Settings::default()
         });
         assert_eq!(cfg.stripe_secret_key.as_deref(), Some("rk_env"));
+        assert_eq!(
+            cfg.public_base_url.as_deref(),
+            Some("https://env.example/i")
+        );
         std::env::remove_var("NIGEL_STRIPE_SECRET_KEY");
+        std::env::remove_var("NIGEL_PUBLIC_BASE_URL");
 
         let cfg2 = invoicing_config_from(&Settings {
             stripe_secret_key: Some("rk_file".into()),
+            public_base_url: Some("https://file.example/i".into()),
             ..Settings::default()
         });
         assert_eq!(cfg2.stripe_secret_key.as_deref(), Some("rk_file"));
-        assert_eq!(cfg2.public_base_url, "https://billing.rygn.io/i");
+        assert_eq!(
+            cfg2.public_base_url.as_deref(),
+            Some("https://file.example/i")
+        );
+
+        let cfg3 = invoicing_config_from(&Settings::default());
+        assert_eq!(cfg3.public_base_url, None);
     }
 
     #[test]

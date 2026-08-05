@@ -111,7 +111,7 @@ fn build_clients(cfg: InvoicingConfig) -> Result<(StripeClient, R2Publisher, Mai
         access_key: require(cfg.r2_access_key, "r2_access_key")?,
         secret_key: require(cfg.r2_secret_key, "r2_secret_key")?,
         bucket: require(cfg.r2_bucket, "r2_bucket")?,
-        public_base_url: cfg.public_base_url,
+        public_base_url: require(cfg.public_base_url, "public_base_url")?,
     };
     let mail = MailgunClient {
         api_key: require(cfg.mailgun_api_key, "mailgun_api_key")?,
@@ -304,9 +304,8 @@ mod tests {
         assert_eq!(parse_items(&["W:1:10".to_string()]).unwrap().len(), 1);
     }
 
-    #[test]
-    fn missing_secret_names_the_setting() {
-        let cfg = InvoicingConfig {
+    fn test_config() -> InvoicingConfig {
+        InvoicingConfig {
             stripe_secret_key: None,
             mailgun_api_key: None,
             mailgun_domain: "rygn.io".into(),
@@ -315,10 +314,31 @@ mod tests {
             r2_access_key: None,
             r2_secret_key: None,
             r2_bucket: None,
-            public_base_url: "https://billing.rygn.io/i".into(),
+            public_base_url: None,
+        }
+    }
+
+    #[test]
+    fn missing_secret_names_the_setting() {
+        let err = build_clients(test_config())
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("stripe_secret_key"), "got: {err}");
+    }
+
+    #[test]
+    fn missing_public_base_url_names_the_setting() {
+        let cfg = InvoicingConfig {
+            stripe_secret_key: Some("sk_test".into()),
+            r2_account_id: Some("acct".into()),
+            r2_access_key: Some("ak".into()),
+            r2_secret_key: Some("sk".into()),
+            r2_bucket: Some("billing".into()),
+            ..test_config()
         };
         let err = build_clients(cfg).map(|_| ()).unwrap_err().to_string();
-        assert!(err.contains("stripe_secret_key"), "got: {err}");
+        assert!(err.contains("public_base_url"), "got: {err}");
     }
 
     #[test]

@@ -147,7 +147,7 @@ Do not merge or mark work complete if docs are stale.
 - Invoice money is plain `f64` dollars; cents exist only at the Stripe boundary (`to_cents`/`amount_total`) and the InvoiceShelf import boundary. Paid-in-full comparisons carry half a cent of slack
 - Invoice status is derived, never set by hand: `refresh_status` recomputes draft/sent/partial/paid/overdue from `published_at`, the payment total, and the due date; `void` is terminal and blocks send and pay
 - Invoice payments are keyed by Stripe checkout session ID, so `invoice sync` is idempotent; Stripe reconciliation is pull-based (no webhook endpoint)
-- Published invoices are static R2 objects at `i/{token}/index.html` and `i/{token}/invoice.pdf`, served under `public_base_url` (default `https://billing.rygn.io/i`); the 16-character random token is the only access control
+- Published invoices are static R2 objects at `i/{token}/index.html` and `i/{token}/invoice.pdf`, served under `public_base_url` (required for `invoice send`, no default; e.g. `https://billing.rygn.io/i`); the 16-character random token is the only access control
 - Invoicing external clients (`stripe.rs`, `r2.rs`, `mailgun.rs`) split request building/response parsing from transport so tests cover them without network access
 - Platform binary detection: macOS = `nigel-universal-apple-darwin`, Linux x86_64 = `nigel-x86_64-unknown-linux-gnu`, Windows x86_64 = `nigel-x86_64-pc-windows-msvc.exe`
 

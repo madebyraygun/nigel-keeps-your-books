@@ -28,7 +28,7 @@ Secrets and endpoints resolve from the environment first, then from
 | `r2_access_key` | `NIGEL_R2_ACCESS_KEY` | `send` | — |
 | `r2_secret_key` | `NIGEL_R2_SECRET_KEY` | `send` | — |
 | `r2_bucket` | `NIGEL_R2_BUCKET` | `send` | — |
-| `public_base_url` | `NIGEL_PUBLIC_BASE_URL` | `send` | `https://billing.rygn.io/i` |
+| `public_base_url` | `NIGEL_PUBLIC_BASE_URL` | `send` | — |
 
 A missing value is reported by name, e.g.
 `missing invoicing config: r2_bucket (set it in settings.json or the matching NIGEL_ env var)`.
@@ -207,12 +207,13 @@ Published invoices are static files in an R2 bucket. Nigel uploads them with the
 S3 API to `https://{r2_account_id}.r2.cloudflarestorage.com`, using the R2 access
 key pair, and builds client-facing links from `public_base_url`.
 
-The two sides meet at Cloudflare: the bucket is exposed at `billing.rygn.io`
-(a custom domain on the bucket, or an equivalent route into it), so an object
-stored at key `i/{token}/index.html` is served at
-`https://billing.rygn.io/i/{token}/`. Keep the `i/` prefix in `public_base_url`
-aligned with that mapping — Nigel writes keys under `i/`, and the base URL only
-tells it what public address that prefix answers on.
+The two sides meet at Cloudflare: expose the bucket at a hostname you control —
+a custom domain on the bucket, or an equivalent route into it — so an object
+stored at key `i/{token}/index.html` is served at, for example,
+`https://billing.rygn.io/i/{token}/`, and set `public_base_url` to
+`https://billing.rygn.io/i`. Keep the `i/` prefix in `public_base_url` aligned
+with that mapping — Nigel writes keys under `i/`, and the base URL only tells it
+what public address that prefix answers on.
 
 Tokens are random and unguessable, and nothing enumerates the bucket, so an
 invoice is readable only by someone holding its link.
