@@ -494,6 +494,25 @@ pub struct K1PrepReport {
     pub validation: K1Validation,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // Task 2 wires this into get_k1_prep
+pub enum K1Mapping {
+    Excluded,
+    Explicit(String),
+    AutoGrossReceipts,
+    Unmapped,
+}
+
+#[allow(dead_code)] // Task 2 wires this into get_k1_prep
+pub fn resolve_k1_mapping(form_line: Option<&str>, category_type: &str) -> K1Mapping {
+    match form_line {
+        Some("excluded") => K1Mapping::Excluded,
+        Some(fl) => K1Mapping::Explicit(fl.to_string()),
+        None if category_type == "income" => K1Mapping::AutoGrossReceipts,
+        None => K1Mapping::Unmapped,
+    }
+}
+
 pub fn get_k1_prep(conn: &Connection, year: Option<i32>) -> Result<K1PrepReport> {
     let (clause, params) = date_filter(year, None, None, None)?;
 
@@ -904,6 +923,23 @@ mod tests {
         let report = get_k1_prep(&conn, Some(2025)).unwrap();
         // SUM = 100 + (-300) = -200 — net negative surfaces as-is
         assert_eq!(report.gross_receipts, -200.0);
+    }
+
+    #[test]
+    fn test_resolve_k1_mapping() {
+        use K1Mapping::*;
+        assert_eq!(resolve_k1_mapping(Some("excluded"), "expense"), Excluded);
+        assert_eq!(resolve_k1_mapping(Some("excluded"), "income"), Excluded);
+        assert_eq!(
+            resolve_k1_mapping(Some("1120S-19"), "expense"),
+            Explicit("1120S-19".into())
+        );
+        assert_eq!(
+            resolve_k1_mapping(Some("K-16d"), "expense"),
+            Explicit("K-16d".into())
+        );
+        assert_eq!(resolve_k1_mapping(None, "income"), AutoGrossReceipts);
+        assert_eq!(resolve_k1_mapping(None, "expense"), Unmapped);
     }
 
     #[test]
