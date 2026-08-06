@@ -4,7 +4,7 @@ title: Support non-interactive database unlock for automated backups
 status: In Progress
 assignee: []
 created_date: '2026-08-06 18:31'
-updated_date: '2026-08-06 18:38'
+updated_date: '2026-08-06 20:22'
 labels:
   - enhancement
 dependencies: []
@@ -47,7 +47,7 @@ The `~/Scripts/backups/k2so/dr-backup.sh` rclone job, which currently file-copie
 - [x] #1 NIGEL_DB_PASSWORD environment variable unlocks an encrypted database without a TTY
 - [x] #2 A wrong password supplied via the environment fails immediately with a clear error and does not fall back to the interactive prompt
 - [x] #3 An unset environment variable preserves the existing interactive prompt behaviour, including the 3-attempt retry loop
-- [ ] #4 nigel backup completes successfully with no controlling terminal (verified under launchd, not just a shell)
+- [x] #4 nigel backup completes successfully with no controlling terminal (verified under launchd, not just a shell)
 - [x] #5 The password is never echoed to stdout, stderr, or logs on any error path
 - [x] #6 All linting checks pass
 - [x] #7 Update test coverage
@@ -58,27 +58,21 @@ The `~/Scripts/backups/k2so/dr-backup.sh` rclone job, which currently file-copie
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-## What landed
-
-`src/db.rs`
-- Added `PASSWORD_ENV_VAR` (`NIGEL_DB_PASSWORD`) and a private `env_password()` helper, consulted by `prompt_password_if_needed()` before the interactive prompt.
-- `env_password()` takes the variable's value as a parameter rather than reading the process environment, because cargo runs tests as parallel threads sharing one environment.
-- A wrong password from the environment is a hard error. Falling through to the prompt would hang an automated caller until it timed out, which is a worse failure than an explicit one.
-- Unencrypted databases short-circuit before the environment is read, so a stale variable cannot lock a user out.
-
-`tests/cli_dispatch.rs` — three integration tests driving the real binary with no controlling terminal: env unlock (asserting the snapshot is encrypted AND reopens with the original password), fail-fast on a wrong password, and no password echoed to stdout/stderr. All carry timeouts, so a regression that reintroduced the prompt fails the suite rather than hanging it.
-
-`README.md` — new "Automated backups" section covering the keychain-sourced invocation and the `ps -E` visibility tradeoff.
-
-`src/cli/backup.rs` unchanged — it already used SQLite's online-backup API correctly.
-
 ## Verification
 
-331 tests pass (308 unit + 23 integration, plus 3 new integration and 6 new unit). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` both clean.
+AC#4 confirmed under a real launchd run on 2026-08-06, not just a no-tty shell. `launchctl kickstart -k gui/$UID/com.dalton.dr-backup` with the password sourced from the login keychain (`security find-generic-password -s nigel-db -w`, ACL granted to `/usr/bin/security` via `-T` at creation):
 
-AC#4 is deliberately unchecked: the no-TTY path is verified (the test shell reports `not a tty`, which is what produced the original `Device not configured (os error 6)`), but a true launchd run needs the binary installed and the keychain entry created, neither of which is done yet. Keychain reads can behave differently under launchd if the keychain is locked or the ACL excludes `/usr/bin/security`, so that step needs a real run to confirm.
+```
+2026-08-06 13:20:58 — SNAPSHOT: ledger saved to /Users/dalton/Documents/nigel/main/backups/nigel-2026-08-06.db (268K)
+```
 
-## Consumer changes
+The snapshot is encrypted (header is not the SQLite magic) and matches the live database byte count.
 
-`~/Scripts/backups/k2so/dr-backup.sh` gained a `snapshot_nigel()` step ahead of the rclone sync, sourcing the password from the login keychain (`nigel-db`) and pruning snapshots older than 30 days. It uses an absolute `$HOME/.cargo/bin/nigel` because launchd's PATH omits `~/.cargo/bin`. A snapshot failure logs and continues rather than aborting the home-directory backup.
+## Review fixes
+
+A review pass found the new unit tests failed under a default `cargo test`: the fixture set the global `DB_PASSWORD` while cargo ran tests as parallel threads, so concurrent tests inherited it. CI passes `--test-threads=1` and stayed green, but CONTRIBUTING.md and CLAUDE.md both document bare `cargo test`. Fixtures now use `open_connection()` with an explicit password.
+
+Also fixed: a non-UTF-8 value silently fell through to the prompt via `std::env::var().ok()` (now `var_os` with an explicit error); three distinct failures shared one message that named the wrong cause (empty value, and wrong-password-vs-damaged-file, are now distinguished and name the database path); and the leak test passed vacuously on a killed child.
+
+Verified across `cargo test` (default parallel, 5x for the race), `--test-threads=1`, and `--no-default-features`; clippy and fmt clean.
 <!-- SECTION:NOTES:END -->
