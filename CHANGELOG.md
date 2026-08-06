@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.0] (WIP)
+
+### Added
+- **`NIGEL_DB_PASSWORD` for unattended use** — an encrypted database can be unlocked without a terminal, so `nigel backup` runs from launchd, cron, or CI. The variable is consulted whenever the database is encrypted and takes precedence over the prompt; an unusable value (wrong, empty, or not valid UTF-8) is a hard error rather than a fall back to a prompt no scheduled job could answer. Plaintext databases ignore it entirely. See "Automated backups" in the README for the recommended keychain-sourced invocation and its tradeoffs
+
 ## [1.0.1] - 2026-08-05
 
 ### Fixed
