@@ -736,4 +736,156 @@ fn env_password_is_not_echoed_on_failure() {
         !combined.contains("sup3rs3cret"),
         "password leaked into output:\n{combined}"
     );
+
+// ---------------------------------------------------------------------------
+// recategorize
+// ---------------------------------------------------------------------------
+
+/// Pick a transaction ID and its current category name from the demo data.
+fn any_categorized_txn(env: &TestEnv) -> (i64, String) {
+    env.db()
+        .query_row(
+            "SELECT t.id, c.name FROM transactions t JOIN categories c ON t.category_id = c.id \
+             WHERE c.name != 'Travel' LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("demo data has categorized transactions")
+}
+
+#[test]
+fn recategorize_by_id_moves_and_clears_flag() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+    env.db()
+        .execute(
+            "UPDATE transactions SET is_flagged = 1, flag_reason = 'x' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", "Travel"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+
+    let (cat, flagged): (String, i64) = env
+        .db()
+        .query_row(
+            "SELECT c.name, t.is_flagged FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(cat, "Travel");
+    assert_eq!(flagged, 0);
+}
+
+#[test]
+fn recategorize_filter_requires_yes_without_tty() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--yes"));
+}
+
+#[test]
+fn recategorize_filter_with_yes_applies() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized"));
+
+    let remaining: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn recategorize_dry_run_writes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "--category",
+            "Travel",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_unknown_id_changes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "999999",
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("999999"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
 }
