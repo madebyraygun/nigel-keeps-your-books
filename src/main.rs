@@ -1,27 +1,10 @@
-mod browser;
-mod categorizer;
-mod cli;
-mod db;
-mod effects;
-mod error;
-mod fmt;
-mod importer;
-mod migrations;
-mod models;
-#[cfg(feature = "pdf")]
-mod pdf;
-mod reconciler;
-mod reports;
-mod reviewer;
-mod settings;
-mod tui;
-
 use clap::{CommandFactory, Parser};
 
-use cli::{
-    AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
+use nigel::cli::{
+    self, AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
     RulesCommands,
 };
+use nigel::error;
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -73,14 +56,14 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Update
     );
 
-    let db_path = crate::settings::get_data_dir().join("nigel.db");
+    let db_path = nigel::settings::get_data_dir().join("nigel.db");
 
     if needs_existing_db && !db_path.exists() {
         return Err(error::NigelError::NotInitialized);
     }
 
     if needs_password && db_path.exists() {
-        crate::db::prompt_password_if_needed(&db_path)?;
+        nigel::db::prompt_password_if_needed(&db_path)?;
     }
 
     // `restore` overwrites the database file and then migrates the restored copy itself,
@@ -93,8 +76,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // existing database with a usable password; init/demo/restore migrate via their own
     // init_db() call, and the dashboard migrates in its own pre-flight.
     if needs_existing_db && needs_password && !replaces_db {
-        let conn = crate::db::get_connection(&db_path)?;
-        crate::db::init_db(&conn)?;
+        let conn = nigel::db::get_connection(&db_path)?;
+        nigel::db::init_db(&conn)?;
     }
 
     match command {

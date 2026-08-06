@@ -21,7 +21,8 @@ Tests use in-memory SQLite databases with synthetic data — no external files o
 
 ```
 src/
-  main.rs               # Entry point, command dispatch
+  lib.rs                # Library root — exposes all modules as the `nigel` crate
+  main.rs               # Binary entry point: clap parse, panic hook, command dispatch
   cli/                  # CLI subcommands
     mod.rs              # Clap structs (Cli, Commands, subcommands)
     init.rs             # nigel init

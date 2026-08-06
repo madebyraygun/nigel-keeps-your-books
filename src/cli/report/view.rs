@@ -12,27 +12,12 @@ use crate::cli::{parse_month_opt, ReportCommands};
 use crate::db::get_connection;
 use crate::error::Result;
 use crate::fmt::money;
-use crate::reports;
+use crate::reports::{self, DateGranularity, ReportKind};
 use crate::settings::get_data_dir;
 use crate::tui::{
     money_span, run_report_view, ReportView, ReportViewAction, AMOUNT_NEG_STYLE, AMOUNT_POS_STYLE,
     FOOTER_STYLE, HEADER_STYLE,
 };
-
-// ---------------------------------------------------------------------------
-// Date granularity support for report navigation
-// ---------------------------------------------------------------------------
-
-/// What date navigation granularities a report supports.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum DateGranularity {
-    /// Supports both month and year navigation (P&L, Expenses, Cash Flow)
-    MonthAndYear,
-    /// Supports only year navigation (Tax, K-1)
-    YearOnly,
-    /// No date navigation (Flagged, Balance)
-    None,
-}
 
 /// Whether the view is currently showing a month or a full year.
 #[derive(Clone, Copy, PartialEq)]
@@ -431,7 +416,7 @@ pub(crate) fn build_pnl(
         .unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(
         TableReportView::new("Profit & Loss", header, rows, widths).with_date(
-            DateGranularity::MonthAndYear,
+            ReportKind::Pnl.granularity(),
             effective_year,
             mm,
         ),
@@ -501,7 +486,7 @@ pub(crate) fn build_expenses(
         .unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(
         TableReportView::new("Expense Breakdown", header, rows, widths).with_date(
-            DateGranularity::MonthAndYear,
+            ReportKind::Expenses.granularity(),
             effective_year,
             mm,
         ),
@@ -541,7 +526,7 @@ pub(crate) fn build_tax(year: Option<i32>) -> Result<Box<dyn ReportView>> {
     let effective_year = year.unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(
         TableReportView::new("Tax Summary", header, rows, widths).with_date(
-            DateGranularity::YearOnly,
+            ReportKind::Tax.granularity(),
             effective_year,
             None,
         ),
@@ -584,7 +569,7 @@ pub(crate) fn build_cashflow(
         .unwrap_or_else(|| chrono::Datelike::year(&chrono::Local::now()));
     Ok(Box::new(
         TableReportView::new("Cash Flow", header, rows, widths).with_date(
-            DateGranularity::MonthAndYear,
+            ReportKind::Cashflow.granularity(),
             effective_year,
             mm,
         ),
@@ -880,7 +865,7 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
             rows,
             widths,
         )
-        .with_date(DateGranularity::YearOnly, effective_year, None),
+        .with_date(ReportKind::K1.granularity(), effective_year, None),
     ))
 }
 

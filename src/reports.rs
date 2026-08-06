@@ -3,6 +3,63 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+// ---------------------------------------------------------------------------
+// Report identity and date granularity
+// ---------------------------------------------------------------------------
+
+/// What date navigation granularities a report supports.
+#[derive(Clone, Copy, PartialEq)]
+pub enum DateGranularity {
+    /// Supports both month and year navigation (P&L, Expenses, Cash Flow)
+    MonthAndYear,
+    /// Supports only year navigation (Tax, K-1)
+    YearOnly,
+    /// No date navigation (Flagged, Balance)
+    None,
+}
+
+/// The set of reports Nigel can produce, independent of how they are requested.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ReportKind {
+    Pnl,
+    Expenses,
+    Tax,
+    Cashflow,
+    Register,
+    Flagged,
+    Balance,
+    K1,
+    /// Bulk export of every report; not a report in its own right.
+    All,
+}
+
+impl ReportKind {
+    /// Stable slug used for CLI subcommand names and export filenames.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pnl => "pnl",
+            Self::Expenses => "expenses",
+            Self::Tax => "tax",
+            Self::Cashflow => "cashflow",
+            Self::Register => "register",
+            Self::Flagged => "flagged",
+            Self::Balance => "balance",
+            Self::K1 => "k1-prep",
+            Self::All => "all",
+        }
+    }
+
+    pub fn granularity(&self) -> DateGranularity {
+        match self {
+            Self::Pnl | Self::Expenses | Self::Cashflow | Self::Register => {
+                DateGranularity::MonthAndYear
+            }
+            Self::Tax | Self::K1 | Self::All => DateGranularity::YearOnly,
+            Self::Flagged | Self::Balance => DateGranularity::None,
+        }
+    }
+}
+
 fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
     params
         .iter()
@@ -664,6 +721,29 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         init_db(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn report_kind_slugs_and_granularity() {
+        use DateGranularity::*;
+        use ReportKind::*;
+
+        let expected = [
+            (Pnl, "pnl", MonthAndYear),
+            (Expenses, "expenses", MonthAndYear),
+            (Tax, "tax", YearOnly),
+            (Cashflow, "cashflow", MonthAndYear),
+            (Register, "register", MonthAndYear),
+            (Flagged, "flagged", None),
+            (Balance, "balance", None),
+            (K1, "k1-prep", YearOnly),
+            (All, "all", YearOnly),
+        ];
+
+        for (kind, slug, granularity) in expected {
+            assert_eq!(kind.as_str(), slug);
+            assert!(kind.granularity() == granularity, "granularity for {slug}");
+        }
     }
 
     fn seed_transactions(conn: &Connection) {

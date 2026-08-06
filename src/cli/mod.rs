@@ -34,6 +34,8 @@ pub mod update;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::reports::ReportKind;
+
 pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
     if let Some(m) = month {
         let parts: Vec<&str> = m.split('-').collect();
@@ -444,18 +446,22 @@ impl ReportCommands {
         }
     }
 
-    pub fn report_name(&self) -> &'static str {
+    pub fn kind(&self) -> ReportKind {
         match self {
-            Self::Pnl { .. } => "pnl",
-            Self::Expenses { .. } => "expenses",
-            Self::Tax { .. } => "tax",
-            Self::Cashflow { .. } => "cashflow",
-            Self::Register { .. } => "register",
-            Self::Flagged { .. } => "flagged",
-            Self::Balance { .. } => "balance",
-            Self::K1 { .. } => "k1-prep",
-            Self::All { .. } => "all",
+            Self::Pnl { .. } => ReportKind::Pnl,
+            Self::Expenses { .. } => ReportKind::Expenses,
+            Self::Tax { .. } => ReportKind::Tax,
+            Self::Cashflow { .. } => ReportKind::Cashflow,
+            Self::Register { .. } => ReportKind::Register,
+            Self::Flagged { .. } => ReportKind::Flagged,
+            Self::Balance { .. } => ReportKind::Balance,
+            Self::K1 { .. } => ReportKind::K1,
+            Self::All { .. } => ReportKind::All,
         }
+    }
+
+    pub fn report_name(&self) -> &'static str {
+        self.kind().as_str()
     }
 }
 
