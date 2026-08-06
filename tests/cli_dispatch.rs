@@ -5,6 +5,10 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// Bounds any run that could reach the interactive password prompt, so a test
+/// inheriting a tty fails instead of blocking on `rpassword` forever.
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Create an isolated environment: a temp HOME so that `~/.config/nigel/settings.json`
 /// and `~/Documents/nigel/` all live inside the temp dir. Returns the TempDir (must be
 /// kept alive for the duration of the test) and a helper to build `nigel` commands that
@@ -621,4 +625,115 @@ fn completions_skips_the_password_and_migration_preflight() {
         .assert()
         .success()
         .stdout(predicate::str::contains("_nigel"));
+}
+
+/// Read the SQLite magic header to tell an encrypted database from a plaintext one.
+fn is_encrypted_file(path: &std::path::Path) -> bool {
+    let bytes = std::fs::read(path).expect("failed to read database");
+    !bytes.starts_with(b"SQLite format 3\0")
+}
+
+#[test]
+fn backup_unlocks_encrypted_database_from_env() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    let backup_path = env.home.path().join("env-unlocked.db");
+    env.cmd()
+        .args(["backup", "--output", &backup_path.to_string_lossy()])
+        .env("NIGEL_DB_PASSWORD", "hunter2")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup saved to"));
+
+    assert!(backup_path.exists(), "backup file should exist");
+    assert!(
+        is_encrypted_file(&backup_path),
+        "backup of an encrypted database must itself be encrypted"
+    );
+
+    // The snapshot must open with the same password and carry the demo data,
+    // so a backup that merely exists is not mistaken for one that can restore.
+    let conn = rusqlite::Connection::open(&backup_path).unwrap();
+    conn.pragma_update(None, "key", "hunter2").unwrap();
+    let accounts: i64 = conn
+        .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))
+        .expect("backup should be readable with the original password");
+    assert!(accounts > 0, "backup should contain the demo accounts");
+}
+
+#[test]
+fn backup_fails_fast_on_wrong_env_password() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    // The stderr predicate is what catches a regression: reaching the prompt with no
+    // terminal errors with ENXIO, which would satisfy `.failure()` on its own. The
+    // timeout is only a backstop for a run that inherits a tty and blocks.
+    env.cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "wrong-password")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("NIGEL_DB_PASSWORD"));
+}
+
+#[test]
+fn backup_ignores_env_password_on_plain_database() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // No `encrypt()` here: a leftover variable in the operator's shell must not lock
+    // them out of a database that never had a password.
+    env.cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "stale-value-from-another-project")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup saved to"));
+}
+
+#[test]
+fn env_password_is_not_echoed_on_failure() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    let output = env
+        .cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "sup3rs3cret")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .output()
+        .unwrap();
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Assert the run failed and reported before asserting on what it did not print:
+    // a killed or crashed child produces no output, which would satisfy the absence
+    // check while proving nothing.
+    assert!(
+        !output.status.success(),
+        "expected failure, got success:\n{combined}"
+    );
+    assert!(
+        combined.contains("NIGEL_DB_PASSWORD"),
+        "expected the variable to be named in the error:\n{combined}"
+    );
+    assert!(
+        !combined.contains("sup3rs3cret"),
+        "password leaked into output:\n{combined}"
+    );
 }

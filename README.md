@@ -139,6 +139,25 @@ nigel update
 nigel completions bash                            # Also: zsh, fish, powershell
 ```
 
+## Automated backups
+
+`nigel backup` uses SQLite's online-backup API, so it produces a consistent snapshot even while Nigel is running, and an encrypted database yields an encrypted backup. Copying `nigel.db` with `cp` or a file-sync tool does **not** give you this — such a copy can catch the database mid-write, along with an out-of-step `-wal` file, and may not restore.
+
+On an encrypted database, `nigel` normally prompts for the password on the terminal. Scheduled jobs have no terminal, so set `NIGEL_DB_PASSWORD` instead:
+
+```bash
+NIGEL_DB_PASSWORD="$(security find-generic-password -s nigel-db -w)" \
+  nigel backup --output ~/Documents/nigel/backups/nigel-$(date +%F).db
+```
+
+`NIGEL_DB_PASSWORD` is fatal when unusable — wrong, empty, or not valid UTF-8 — rather than falling back to a prompt no scheduled job could answer. An empty value reports itself as empty, since the usual cause is the secret lookup failing rather than a bad password. Leave the variable unset for normal interactive use; while it is set, it takes precedence over the prompt even in a terminal.
+
+A plaintext database ignores the variable entirely, so a value left over in your shell cannot lock you out of a database that never had a password.
+
+Put this in a wrapper script rather than directly in a launchd plist: `ProgramArguments` execs without a shell, so command substitution, `~`, and `VAR=value` prefixes are all inert there. Launch agents also start with a minimal `PATH` that excludes `~/.cargo/bin`, so call `nigel` by absolute path.
+
+Read the password from a secret store, as above, rather than writing it into a script or a plist. Note that an environment variable is visible to other processes running as you (`ps -E` on macOS), so on a shared account prefer running the backup interactively.
+
 ## Configuration
 
 Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch.
