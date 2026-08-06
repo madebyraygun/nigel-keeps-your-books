@@ -4,10 +4,13 @@ title: 'Epic: Web UI (localhost) — nigel serve'
 status: To Do
 assignee: []
 created_date: '2026-08-06 16:24'
+updated_date: '2026-08-06 18:22'
 labels:
   - epic
   - web
 dependencies: []
+documentation:
+  - docs/superpowers/specs/2026-08-06-epic-31-architecture.md
 priority: high
 ---
 

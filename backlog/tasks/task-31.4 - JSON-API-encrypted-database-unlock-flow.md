@@ -4,6 +4,7 @@ title: 'JSON API: encrypted database unlock flow'
 status: To Do
 assignee: []
 created_date: '2026-08-06 16:25'
+updated_date: '2026-08-06 18:22'
 labels:
   - web
   - backend
@@ -11,6 +12,9 @@ dependencies:
   - TASK-31.3
 references:
   - src/db.rs
+documentation:
+  - docs/superpowers/specs/2026-08-06-task-31.4-unlock.md
+  - docs/superpowers/specs/2026-08-06-epic-31-architecture.md
 parent_task_id: TASK-31
 priority: high
 ---

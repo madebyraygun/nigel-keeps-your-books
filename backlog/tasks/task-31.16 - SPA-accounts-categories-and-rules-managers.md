@@ -4,12 +4,16 @@ title: 'SPA: accounts, categories, and rules managers'
 status: To Do
 assignee: []
 created_date: '2026-08-06 16:27'
+updated_date: '2026-08-06 18:22'
 labels:
   - web
   - frontend
 dependencies:
   - TASK-31.6
   - TASK-31.9
+documentation:
+  - docs/superpowers/specs/2026-08-06-task-31.16-managers.md
+  - docs/superpowers/specs/2026-08-06-epic-31-architecture.md
 parent_task_id: TASK-31
 priority: high
 ---
