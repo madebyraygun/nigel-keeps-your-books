@@ -2,12 +2,15 @@ use std::io::{self, BufRead, Write};
 
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::settings::get_data_dir;
 
 /// Information about the most recent import, used for display and deletion.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LastImport {
     pub import_id: i64,
     pub filename: String,

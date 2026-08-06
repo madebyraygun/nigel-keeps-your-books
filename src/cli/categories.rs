@@ -1,11 +1,13 @@
 use comfy_table::{Cell, Table};
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::settings::get_data_dir;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CategoryRow {
     pub id: i64,
     pub name: String,

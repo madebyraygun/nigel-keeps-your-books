@@ -2,6 +2,7 @@ use std::io::BufRead;
 use std::path::Path;
 
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{NigelError, Result};
@@ -189,7 +190,8 @@ pub fn get_for_file(account_type: &str, file_path: &Path) -> Option<ImporterKind
 // Generic CSV config + helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenericCsvConfig {
     pub date_col: usize,
     pub desc_col: usize,
@@ -299,6 +301,8 @@ pub fn parse_generic_csv(
 // import_file
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub imported: usize,
     pub skipped: usize,
@@ -782,6 +786,24 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         init_db(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn generic_csv_config_round_trips_camel_case() {
+        let json = serde_json::json!({
+            "dateCol": 0,
+            "descCol": 1,
+            "amountCol": 3,
+            "dateFormat": "%m/%d/%Y",
+        });
+
+        let config: GenericCsvConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(config.date_col, 0);
+        assert_eq!(config.desc_col, 1);
+        assert_eq!(config.amount_col, 3);
+        assert_eq!(config.date_format, "%m/%d/%Y");
+
+        assert_eq!(serde_json::to_value(&config).unwrap(), json);
     }
 
     fn add_test_account(conn: &Connection) {

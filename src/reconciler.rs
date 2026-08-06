@@ -1,7 +1,10 @@
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::error::{NigelError, Result};
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReconcileResult {
     pub is_reconciled: bool,
     pub statement_balance: f64,

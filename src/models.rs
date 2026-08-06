@@ -1,5 +1,8 @@
+use serde::Serialize;
+
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
     pub id: i64,
     pub name: String,
@@ -9,7 +12,8 @@ pub struct Account {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Category {
     pub id: i64,
     pub name: String,
@@ -22,7 +26,8 @@ pub struct Category {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Transaction {
     pub id: Option<i64>,
     pub account_id: i64,
@@ -38,7 +43,8 @@ pub struct Transaction {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Rule {
     pub id: Option<i64>,
     pub pattern: String,
@@ -51,7 +57,8 @@ pub struct Rule {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportRecord {
     pub id: Option<i64>,
     pub filename: String,
@@ -63,7 +70,8 @@ pub struct ImportRecord {
 }
 
 /// Intermediate representation from a CSV/XLSX parser before DB insert.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ParsedRow {
     pub date: String,
     pub description: String,

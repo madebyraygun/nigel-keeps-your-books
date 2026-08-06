@@ -1,8 +1,10 @@
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::error::{NigelError, Result};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FlaggedTxn {
     pub id: i64,
     pub date: String,
@@ -11,6 +13,8 @@ pub struct FlaggedTxn {
     pub account_name: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CategoryChoice {
     pub id: i64,
     pub name: String,
