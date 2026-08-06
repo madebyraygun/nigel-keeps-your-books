@@ -224,6 +224,36 @@ pub fn save_csv_profile(conn: &Connection, name: &str, config: &GenericCsvConfig
     Ok(())
 }
 
+/// A saved generic-CSV column mapping, addressed by the name `--format` takes.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CsvProfile {
+    pub name: String,
+    pub config: GenericCsvConfig,
+}
+
+/// Every saved CSV profile, alphabetically.
+pub fn list_csv_profiles(conn: &Connection) -> Result<Vec<CsvProfile>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, date_col, desc_col, amount_col, date_format \
+         FROM csv_profiles ORDER BY name",
+    )?;
+    let profiles = stmt
+        .query_map([], |row| {
+            Ok(CsvProfile {
+                name: row.get(0)?,
+                config: GenericCsvConfig {
+                    date_col: row.get::<_, i64>(1)? as usize,
+                    desc_col: row.get::<_, i64>(2)? as usize,
+                    amount_col: row.get::<_, i64>(3)? as usize,
+                    date_format: row.get(4)?,
+                },
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(profiles)
+}
+
 pub fn load_csv_profile(conn: &Connection, name: &str) -> Result<Option<GenericCsvConfig>> {
     let mut stmt = conn.prepare(
         "SELECT date_col, desc_col, amount_col, date_format FROM csv_profiles WHERE name = ?1",
@@ -1426,6 +1456,37 @@ transaction_date,description,amount
         assert_eq!(loaded.desc_col, 2);
         assert_eq!(loaded.amount_col, 4);
         assert_eq!(loaded.date_format, "%d/%m/%Y");
+    }
+
+    #[test]
+    fn list_csv_profiles_round_trips_alphabetically() {
+        let (_dir, conn) = test_db();
+        assert!(list_csv_profiles(&conn).unwrap().is_empty());
+
+        let chase = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 2,
+            amount_col: 4,
+            date_format: "%d/%m/%Y".to_string(),
+        };
+        let amex = GenericCsvConfig {
+            date_col: 1,
+            desc_col: 3,
+            amount_col: 5,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &chase).unwrap();
+        save_csv_profile(&conn, "amex", &amex).unwrap();
+
+        let profiles = list_csv_profiles(&conn).unwrap();
+        let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["amex", "chase"]);
+        assert_eq!(profiles[0].config.date_col, 1);
+        assert_eq!(profiles[1].config.date_format, "%d/%m/%Y");
+
+        let json = serde_json::to_value(&profiles[0]).unwrap();
+        assert_eq!(json["config"]["dateCol"], 1);
+        assert_eq!(json["config"]["dateFormat"], "%m/%d/%Y");
     }
 
     #[test]

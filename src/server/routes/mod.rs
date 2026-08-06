@@ -6,14 +6,20 @@
 //! short list by path, so a new endpoint is guarded by default — forgetting to
 //! mount it in the right place cannot expose a locked database.
 
+pub mod accounts;
+pub mod categories;
+pub mod imports;
+pub mod reports;
+pub mod rules;
 pub mod status;
 
 use axum::http::Uri;
 use axum::routing::get;
 use axum::{middleware, Json, Router};
+use rusqlite::Connection;
 use serde::Serialize;
 
-use super::error::ApiError;
+use super::error::{ApiError, ApiResult};
 use super::state::AppState;
 
 pub fn api_router(state: &AppState) -> Router<AppState> {
@@ -30,11 +36,16 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
 
 /// Every route that touches the database — one merge per domain as they land.
 fn data_router() -> Router<AppState> {
-    let router = Router::new();
+    let router = Router::new()
+        .merge(reports::routes())
+        .merge(accounts::routes())
+        .merge(categories::routes())
+        .merge(rules::routes())
+        .merge(imports::routes());
 
-    // The guard has no real route to protect yet, so the router tests need one
-    // to prove that `api_router` — the assembly later endpoints are mounted
-    // into — actually applies it.
+    // A route that exists only to prove `api_router` — the assembly every
+    // endpoint is mounted into — actually applies the guard, without pinning
+    // that proof to whichever real endpoint happens to exist.
     #[cfg(test)]
     let router = router.route(
         "/_guarded_probe",
@@ -48,6 +59,27 @@ fn data_router() -> Router<AppState> {
 #[derive(Serialize)]
 struct GuardProbe {
     ok: bool,
+}
+
+/// Run a database read on the blocking pool. rusqlite is synchronous and a
+/// `Connection` is not `Send`-shared, so each request opens its own — WAL and
+/// `busy_timeout` handle the concurrency, and there is no pool to size.
+///
+/// `db::get_connection` reads the process-global password itself, so an
+/// unlocked database needs no plumbing through here.
+pub(super) async fn with_conn<T, F>(state: &AppState, work: F) -> ApiResult<T>
+where
+    F: FnOnce(&Connection) -> crate::error::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || -> crate::error::Result<T> {
+        let conn = crate::db::get_connection(&db_path)?;
+        work(&conn)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::from)
 }
 
 #[derive(Serialize)]

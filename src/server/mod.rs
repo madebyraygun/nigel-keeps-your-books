@@ -10,6 +10,8 @@ pub mod routes;
 pub mod secret;
 pub mod state;
 mod static_files;
+#[cfg(test)]
+pub mod testutil;
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -120,98 +122,11 @@ fn build_router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
+    use super::testutil::*;
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use axum::response::Response;
     use tower::ServiceExt;
-
-    const HOST: &str = "127.0.0.1:5731";
-    const PASSWORD: &str = "correct horse battery staple";
-
-    fn test_app() -> (Router, String) {
-        let token = auth::generate_token();
-        let state = AppState::new(PathBuf::from("/nonexistent/nigel.db"), token.clone());
-        (build_router(state), token)
-    }
-
-    fn get_request(uri: &str) -> axum::http::request::Builder {
-        Request::builder().uri(uri).header(header::HOST, HOST)
-    }
-
-    async fn body_string(response: Response) -> String {
-        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .expect("body");
-        String::from_utf8(bytes.to_vec()).expect("utf-8 body")
-    }
-
-    fn content_type(response: &Response) -> String {
-        response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_string()
-    }
-
-    async fn json_body(response: Response) -> serde_json::Value {
-        serde_json::from_str(&body_string(response).await).expect("json body")
-    }
-
-    /// A data directory holding an initialized, unencrypted database. Also
-    /// clears the process-global password, which these tests move around; they
-    /// run under `--test-threads=1` for that reason (see `db.rs`).
-    fn temp_db() -> (tempfile::TempDir, PathBuf) {
-        crate::db::set_db_password(None);
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("nigel.db");
-        let conn = crate::db::open_connection(&db_path, None).expect("open db");
-        crate::db::init_db(&conn).expect("init db");
-        (dir, db_path)
-    }
-
-    fn encrypt(db_path: &std::path::Path) {
-        crate::cli::password::encrypt_database(db_path, PASSWORD).expect("encrypt db");
-    }
-
-    fn app_for(db_path: &std::path::Path) -> (Router, String) {
-        let token = auth::generate_token();
-        let state = AppState::new(db_path.to_path_buf(), token.clone());
-        (build_router(state), token)
-    }
-
-    fn session_get(uri: &str, token: &str) -> Request<Body> {
-        get_request(uri)
-            .header(header::COOKIE, format!("nigel_session={token}"))
-            .body(Body::empty())
-            .expect("request")
-    }
-
-    fn session_post(uri: &str, token: &str, body: &str) -> Request<Body> {
-        Request::builder()
-            .method("POST")
-            .uri(uri)
-            .header(header::HOST, HOST)
-            .header(header::COOKIE, format!("nigel_session={token}"))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_owned()))
-            .expect("request")
-    }
-
-    fn unlock_body(password: &str) -> String {
-        serde_json::json!({ "password": password }).to_string()
-    }
-
-    async fn status_json(app: &Router, token: &str) -> serde_json::Value {
-        let response = app
-            .clone()
-            .oneshot(session_get("/api/status", token))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        json_body(response).await
-    }
 
     #[tokio::test]
     async fn api_without_session_is_unauthorized() {
@@ -508,6 +423,42 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::LOCKED);
         assert_eq!(json_body(response).await["error"]["code"], "locked");
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_refuses_every_data_route() {
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        // Table-driven over the whole read surface: a route mounted outside the
+        // guarded router would answer here instead of refusing.
+        for uri in DATA_ROUTES {
+            let (status, body) = get_json(&app, uri, &token).await;
+            assert_eq!(status, StatusCode::LOCKED, "{uri} while locked: {body}");
+            assert_eq!(body["error"]["code"], "locked", "for {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unlocking_opens_every_data_route() {
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let unlocked = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(unlocked.status(), StatusCode::OK);
+
+        for uri in DATA_ROUTES {
+            let (status, body) = get_json(&app, uri, &token).await;
+            assert_eq!(status, StatusCode::OK, "{uri} after unlock: {body}");
+        }
+
+        crate::db::set_db_password(None);
     }
 
     #[tokio::test]

@@ -161,6 +161,91 @@ delay has already been served, the client may retry immediately.
 A successful unlock resets the counter. It is not persisted, so restarting the
 server clears it.
 
+## Reading data
+
+Every endpoint below reads the database, so all of them answer `423 locked`
+until an encrypted database has been unlocked. All are `GET`, and all are
+read-only.
+
+| Route | Parameters | Response |
+|---|---|---|
+| `/api/reports/pnl` | `year`, `month`, `from`+`to` | `PnlReport` |
+| `/api/reports/expenses` | `year`, `month` | `ExpenseBreakdown` |
+| `/api/reports/tax` | `year` | `TaxSummary` |
+| `/api/reports/cashflow` | `year`, `month` | `CashflowReport` |
+| `/api/reports/balance` | — | `BalanceReport` |
+| `/api/reports/flagged` | — | `FlaggedTransaction[]` |
+| `/api/reports/register` | `year`, `month`, `from`+`to`, `account` | `RegisterReport` |
+| `/api/reports/k1` | `year` | `K1PrepReport` |
+| `/api/accounts` | — | `Account[]` |
+| `/api/categories` | — | `CategoryRow[]` |
+| `/api/rules` | — | `RuleRow[]` |
+| `/api/imports` | — | `ImportListItem[]` |
+| `/api/csv-profiles` | — | `CsvProfile[]` |
+
+### Date parameters
+
+The parameters a route accepts are exactly the flags its `nigel report`
+subcommand accepts. Passing one a route does not support is `400`, rather than
+being ignored: silently dropping `from`/`to` from an expense breakdown would
+answer a question nobody asked.
+
+- `year` — an integer, e.g. `2025`.
+- `month` — `YYYY-MM`, zero-padded. Supplying `month` alone also fixes the year.
+- `from` and `to` — `YYYY-MM-DD`, zero-padded, and **must be supplied as a
+  pair**. One without the other is `400`.
+- `account` — an account name, on `/api/reports/register` only. A name no
+  account has is `404`; an account that simply has no matching transactions is a
+  `200` with an empty `rows`.
+
+When both `year` and `month` are given, `year` wins and `month` contributes only
+its month number — `?year=2024&month=2025-03` means March 2024. This matches the
+CLI.
+
+Unlike the CLI, which ignores a date it cannot parse and quietly widens the
+query, the API rejects it: `?month=2025-13`, `?month=2025-3`, and
+`?from=2025-1-5` are all `400`.
+
+### Report responses
+
+Every report is wrapped with the date granularity it supports, so the SPA can
+build its date controls from the response instead of a hardcoded table:
+
+```json
+{
+  "granularity": "monthAndYear",
+  "report": { "income": [], "expenses": [], "totalIncome": 0, "totalExpenses": 0, "net": 0 }
+}
+```
+
+`granularity` is one of `monthAndYear` (P&L, expenses, cash flow, register),
+`yearOnly` (tax, K-1), or `none` (balance, flagged). It tells the client which
+of `year` and `month` that route will accept.
+
+### List responses
+
+The five list endpoints answer with a bare JSON array — no envelope, no
+pagination.
+
+- `/api/accounts` — every account, by name.
+- `/api/categories` — the active chart of accounts; soft-deleted categories are
+  omitted.
+- `/api/rules` — active rules in the order the categorizer applies them:
+  priority descending, ties by id. `vendor` is `null` when the rule sets none.
+- `/api/imports` — import history, newest first, each with the number of
+  transactions still attached. An import whose transactions were undone still
+  lists, at `transactionCount: 0`.
+- `/api/csv-profiles` — saved generic-CSV column mappings, by name:
+
+```json
+[
+  {
+    "name": "chase",
+    "config": { "dateCol": 0, "descCol": 1, "amountCol": 3, "dateFormat": "%m/%d/%Y" }
+  }
+]
+```
+
 ## Static assets
 
 Everything that is not `/auth` or `/api` is served from the SPA bundle embedded

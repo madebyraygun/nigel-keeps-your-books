@@ -2,11 +2,54 @@ use std::collections::HashMap;
 
 use comfy_table::{Cell, Table};
 use regex::Regex;
+use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::categorizer::matches as rule_matches;
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::settings::get_data_dir;
+
+/// An active categorization rule joined to the category it assigns.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleRow {
+    pub id: i64,
+    pub pattern: String,
+    pub match_type: String,
+    pub vendor: Option<String>,
+    pub category: String,
+    pub category_id: i64,
+    pub priority: i64,
+    pub hit_count: i64,
+}
+
+/// Active rules in the order the categorizer applies them: highest priority
+/// first, ties broken by insertion order so the sequence is stable.
+pub fn list_rules(conn: &Connection) -> Result<Vec<RuleRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.pattern, r.match_type, r.vendor, c.name, r.category_id, \
+                r.priority, r.hit_count \
+         FROM rules r JOIN categories c ON r.category_id = c.id \
+         WHERE r.is_active = 1 \
+         ORDER BY r.priority DESC, r.id ASC",
+    )?;
+    let rules = stmt
+        .query_map([], |row| {
+            Ok(RuleRow {
+                id: row.get(0)?,
+                pattern: row.get(1)?,
+                match_type: row.get(2)?,
+                vendor: row.get(3)?,
+                category: row.get(4)?,
+                category_id: row.get(5)?,
+                priority: row.get(6)?,
+                hit_count: row.get(7)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rules)
+}
 
 pub fn add(
     pattern: &str,
@@ -35,39 +78,20 @@ pub fn add(
 
 pub fn list() -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let mut stmt = conn.prepare(
-        "SELECT r.id, r.pattern, r.match_type, r.vendor, c.name as category, r.priority, r.hit_count \
-         FROM rules r JOIN categories c ON r.category_id = c.id \
-         WHERE r.is_active = 1 ORDER BY r.priority DESC",
-    )?;
-    #[allow(clippy::type_complexity)]
-    let rows: Vec<(i64, String, String, Option<String>, String, i64, i64)> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut table = Table::new();
     table.set_header(vec![
         "ID", "Pattern", "Type", "Vendor", "Category", "Priority", "Hits",
     ]);
-    for (id, pattern, match_type, vendor, category, priority, hits) in rows {
+    for rule in list_rules(&conn)? {
         table.add_row(vec![
-            Cell::new(id),
-            Cell::new(pattern),
-            Cell::new(match_type),
-            Cell::new(vendor.unwrap_or_default()),
-            Cell::new(category),
-            Cell::new(priority),
-            Cell::new(hits),
+            Cell::new(rule.id),
+            Cell::new(rule.pattern),
+            Cell::new(rule.match_type),
+            Cell::new(rule.vendor.unwrap_or_default()),
+            Cell::new(rule.category),
+            Cell::new(rule.priority),
+            Cell::new(rule.hit_count),
         ]);
     }
     println!("Rules\n{table}");
@@ -250,6 +274,23 @@ mod tests {
         conn.last_insert_rowid()
     }
 
+    fn add_rule_with(conn: &Connection, pattern: &str, vendor: Option<&str>, priority: i64) -> i64 {
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO rules (pattern, match_type, vendor, category_id, priority, is_active) \
+             VALUES (?1, 'contains', ?2, ?3, ?4, 1)",
+            rusqlite::params![pattern, vendor, cat_id, priority],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
     #[test]
     fn test_delete_deactivates_rule() {
         let (_dir, conn) = test_db();
@@ -313,6 +354,70 @@ mod tests {
             })
             .unwrap();
         assert_eq!(pat, "PHOTOSHOP");
+    }
+
+    #[test]
+    fn list_rules_orders_by_priority_then_id() {
+        let (_dir, conn) = test_db();
+        let low = add_rule_with(&conn, "LOW", None, 0);
+        let high = add_rule_with(&conn, "HIGH", None, 10);
+        let also_high = add_rule_with(&conn, "ALSO", None, 10);
+
+        let ids: Vec<i64> = super::list_rules(&conn)
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, vec![high, also_high, low]);
+    }
+
+    #[test]
+    fn list_rules_keeps_a_null_vendor_null() {
+        let (_dir, conn) = test_db();
+        add_rule_with(&conn, "NOVENDOR", None, 0);
+        add_rule_with(&conn, "VENDOR", Some("Adobe"), 0);
+
+        let rules = super::list_rules(&conn).unwrap();
+        let by_pattern = |p: &str| {
+            rules
+                .iter()
+                .find(|r| r.pattern == p)
+                .unwrap_or_else(|| panic!("no rule {p}"))
+        };
+        assert_eq!(by_pattern("NOVENDOR").vendor, None);
+        assert_eq!(by_pattern("VENDOR").vendor, Some("Adobe".to_string()));
+    }
+
+    #[test]
+    fn list_rules_excludes_inactive_rules_and_carries_the_category() {
+        let (_dir, conn) = test_db();
+        let id = add_rule(&conn, "ADOBE");
+        let rule = super::list_rules(&conn).unwrap().remove(0);
+        assert_eq!(rule.id, id);
+        assert_eq!(rule.category, "Software & Subscriptions");
+        let expected_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rule.category_id, expected_id);
+
+        conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id])
+            .unwrap();
+        assert!(super::list_rules(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rule_row_serializes_camel_case() {
+        let (_dir, conn) = test_db();
+        add_rule(&conn, "ADOBE");
+        let rule = super::list_rules(&conn).unwrap().remove(0);
+        let json = serde_json::to_value(&rule).unwrap();
+        for key in ["matchType", "categoryId", "hitCount"] {
+            assert!(json.get(key).is_some(), "missing {key} in {json}");
+        }
     }
 
     #[test]
