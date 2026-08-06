@@ -30,6 +30,8 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Settings Manager:** `cli/settings_manager.rs` — inline TUI screen for managing app settings; shows editable business name (saved to DB metadata as `company_name`), password management, and auto-update check toggle; password sub-screen delegates to `PasswordManager`
 - **Web server:** `src/server/` — `nigel serve` runs an axum app on 127.0.0.1 serving the JSON API and the embedded SPA from the same binary; behind the default-on `serve` feature (axum, tokio, tower, rust-embed, open, subtle). `mod.rs` owns the tokio runtime (the crate's only async entry point — `main` stays sync) and assembles the router; `auth.rs` holds the session token, Host/Origin validation, and cookie parsing; `error.rs` defines `ApiError`/`ApiErrorCode` and the `{"error": {...}}` envelope; `state.rs` holds `AppState` (db path, session token, build features); `secret.rs` wraps password strings so they cannot be printed (redacted `Debug`, zeroized on drop); `routes/` gets one module per domain as endpoints land (today: `ping`/`status`/`unlock`, the eight `reports` endpoints, and the `accounts`/`categories`/`rules`/`imports` lists, plus a JSON 404 fallback); `routes/mod.rs` mounts every data endpoint inside `data_router()`, which carries the locked guard, and holds `with_conn()` — the `spawn_blocking` + `db::get_connection` helper every data handler runs its query through; `static_files.rs` serves `web/dist` via rust-embed with an index.html fallback for SPA routes. Handlers open their own connection per request — no pool
 - **Read API:** `src/server/routes/reports.rs` exposes the eight reports at `/api/reports/{pnl,expenses,tax,cashflow,balance,flagged,register,k1}`, each wrapped as `{ granularity, report }` where `granularity` comes from `ReportKind::granularity()`. Which date parameters a route accepts mirrors its `nigel report` subcommand exactly, derived from that same granularity plus per-route `ranges`/`account` flags (`ParamSpec`); `RawQuery` takes every parameter as a string so validation errors land in the standard envelope instead of axum's plain-text `Query` rejection. `routes/{accounts,categories,rules,imports}.rs` serve the five list endpoints as bare JSON arrays
+- **Web UI (SPA):** `web/` is an npm workspace (no turbo) with three packages built in order. `@nigel/theme` composes per-category Lit `css` token modules into one `CSSResult` plus a generated plain stylesheet; tokens shadow Web Awesome's `--wa-*` namespace (no WA stylesheet is loaded — theming rides custom properties) and nigel-specific tokens use `--nc-*`; the brand palette is derived from `src/effects.rs` (a parity test fails if they drift) and every solid color is held to WCAG AA in both light and dark by a contrast test. `@nigel/ui` holds the `wc-*` Lit components, `WcIconBase` + icons, and the preview harness (glob manifest + query-string router on port 9090); each component has a co-located `.preview.ts` and a test that runs axe over every state the preview declares. `@nigel/app` is composition only: `main.ts` (3-line bootstrap), `nigel-app` root container, the screen registry, the app store, and the api client. Cherry-picked Web Awesome imports only, never the autoloader. Build output goes to `web/dist`, which `rust-embed` bakes into the binary
+- **SPA routing and api seam:** `web/apps/app/src/screens/registry.ts` is a `Record<ScreenId, ScreenDef>` describing every screen once — title, nav label, icon, `inNav`, `render()` — and the sidebar, header, and content area all derive from it, so a missing screen is a compile error. `location.hash` (`#/<screen>?<params>`) is the only writer of route state; `hash-route.ts` parses and serialises it. `web/apps/app/src/api/` is the only module that talks to the server: `types.ts` mirrors the serde structs by hand (camelCase), `client.ts` defines `ApiClient` (one typed method per endpoint, no generic `request()`) and `FetchApiClient`, and owns the `appLocked` (423) and `appUnauthorized` (401) transport signals. A guard test fails the build on any `fetch(`/XHR/EventSource/WebSocket/`sendBeacon` outside `src/api`
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, text wrapping, and incremental text search), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation, which `main.rs` invokes in its dispatch pre-flight for every subcommand except `init`, `demo`, `load`, `update`, `password`, `completions`, and `restore`, and which the dashboard invokes in its own pre-flight, so every normal use of the app brings the schema up to date; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases; v2 adds `csv_profiles` table for generic CSV column mappings; v3 backfills `form_line` on the stock chart-of-accounts categories
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
@@ -107,6 +109,58 @@ nigel update                                      # Check for and install the la
 nigel completions bash                            # Generate shell completions (bash, zsh, fish, powershell)
 ```
 
+### Web UI
+
+Requires Node 20.19+ (22 recommended). All commands run from `web/`.
+
+```bash
+npm ci                                            # Install (committed lockfile)
+npm run build                                     # theme -> ui -> app, output to web/dist
+npm test                                          # vitest across all three packages
+npm run lint                                      # eslint across all three packages
+npm run typecheck                                 # tsc --noEmit across all three packages
+npm run dev                                       # Vite dev server on :5173 (proxies to :5731)
+npm run preview                                   # Component preview harness on :9090
+```
+
+Dev loop — run the backend and the dev server side by side, then open the
+token URL **on the vite origin** so the session cookie lands there:
+
+```bash
+cargo run -- serve --no-open                      # terminal 1, prints /auth?token=<hex>
+cd web && npm run dev                             # terminal 2
+# browser: http://localhost:5173/auth?token=<hex>
+```
+
+`cargo build` works without node — `build.rs` seeds `web/dist` from
+`web/placeholder/index.html` and the binary serves a "SPA not built" page. Run
+`npm run build` in `web/` before `cargo build --release` to embed the real app.
+
+## Component-First UI Workflow (MANDATORY)
+
+Every visual change ships through `@nigel/ui`:
+
+1. **The component lives in `web/packages/ui/src/components/`** as `wc-foo.ts`.
+2. **A preview is co-located.** `wc-foo.preview.ts` covers the visible states (default, hover, disabled, loading, empty, dense — whichever apply).
+3. **A11y passes.** `wc-foo.test.ts` calls `describePreviewA11y(preview)`, which runs `axe.run()` over every state the preview declares with zero violations. Adding a state adds its a11y test automatically — do not restate the states inside the test.
+4. **Then it is consumed.** `web/apps/app` imports from `@nigel/ui`. **No bespoke component implementations in `web/apps/app/src/components/`** beyond the `nigel-app` root container.
+
+The preview harness boots with `npm run preview` in `web/` at http://localhost:9090.
+
+### Pre-merge checklist (visual changes)
+
+- [ ] `wc-foo.preview.ts` exists with all visible states
+- [ ] `describePreviewA11y` runs and passes with zero violations
+- [ ] The component reads tokens from `@nigel/theme` — no inline brand values
+- [ ] No styling logic for primitives lives in `web/apps/app/`
+
+Pure logic, state, and service work is exempt.
+
+### Component selection
+
+- Use Web Awesome `<wa-*>` primitives unless behavior demands custom. Import them cherry-picked (`@awesome.me/webawesome/dist/components/<x>/<x>.js`) — never the autoloader, and never the WA stylesheet.
+- A `wc-*` wrapper reads `@nigel/theme` tokens and exposes them as cascading variables; it never duplicates a brand value inline.
+
 ## Documentation Policy
 
 Every feature change must update the relevant documentation before the work is considered complete:
@@ -147,7 +201,11 @@ Do not merge or mark work complete if docs are stale.
 - Unknown `account` on `/api/reports/register` is a 404. `reports::get_register` itself reports an unknown account as an empty register, which over HTTP is indistinguishable from an account with no transactions, so the route checks existence first
 - The database password never reaches a log, an error message, or `Debug` output: request bodies hold it in `server::secret::Secret` (redacted `Debug`, zeroized on drop), and errors from opening the database on the unlock path are replaced with a fixed message because rusqlite renders `PRAGMA key = '<password>'` as literal SQL inside `SqlInputError`
 - The session middleware wraps the `/api` router with `.layer`, not `.route_layer`, so it also covers that router's 404 fallback — otherwise unauthenticated requests to unknown `/api` paths would skip the check
-- Web assets are embedded with rust-embed's `debug-embed` on, so debug and release builds behave identically and neither reads `web/dist` at runtime. `web/dist/index.html` is a committed placeholder so `cargo build` works without node
+- Web assets are embedded with rust-embed's `debug-embed` on, so debug and release builds behave identically and neither reads `web/dist` at runtime. `web/dist` is generated by the vite build and gitignored; `build.rs` seeds it from the committed `web/placeholder/index.html` when no `index.html` is present, so `cargo build` works without node
+- `build.rs` also emits `cargo:rerun-if-changed` for `web/dist`. This is load bearing, not decorative: `debug-embed` controls *when* assets are baked in, not when cargo reconsiders them, and rust-embed's proc macro cannot emit the key itself — without the build script a fresh `npm run build` followed by `cargo run` serves the previously embedded bytes. Both CI and the release workflow build `web/` before any cargo step for the same reason; a release built without node would ship the placeholder
+- Every visual change ships through `@nigel/ui` (see "Component-First UI Workflow" below). All server access goes through `web/apps/app/src/api/` — a guard test enforces it. No `window.confirm`: confirmations use `wc-confirm`/`confirmDialog()`
+- A 401 carrying `invalid_password` is a mistyped database password, not a dead session, and must never raise `appUnauthorized` — that would show a "session expired" banner to someone who simply typed the wrong key
+- `wc-money` renders the sign as a literal `-` rather than conveying it by color alone as `tui::money_span` does. A terminal can rely on red-versus-green; a browser cannot (WCAG 1.4.1), and red/green is the pair color-vision deficiency flattens most. Its formatting is tested against the same vectors `src/fmt.rs` asserts, so the two front ends cannot disagree about how an amount reads
 
 ## Project Structure
 
@@ -225,9 +283,29 @@ src/
   settings.rs           # Settings management (~/.config/nigel/)
   fmt.rs                # Number formatting helpers
   error.rs              # Error types
-web/
-  dist/
-    index.html          # Placeholder SPA shell (embedded in the binary; replaced by the vite build)
+build.rs                # Seeds web/dist from the placeholder; rerun-if-changed for rust-embed
+web/                    # npm workspace for the SPA (see web/README.md)
+  package.json          # Workspace root: packages/*, apps/* — no turbo
+  placeholder/
+    index.html          # Committed "SPA not built" fallback (build.rs copies it into dist/)
+  dist/                 # Generated by `npm run build`, gitignored, embedded by rust-embed
+  packages/
+    theme/              # @nigel/theme — token modules composed into one CSSResult + a plain .css
+      src/tokens/       # color, gradient, typography, spacing, radius, shadow, motion
+      src/global.ts     # ::part() overrides for wa-* primitives (document-level)
+      scripts/build-css.js
+    ui/                 # @nigel/ui — wc-* components + preview harness
+      src/components/   # wc-app-shell, wc-nav-sidebar, wc-toast, wc-confirm, wc-money,
+                        #   wc-empty-state, wc-spinner (each with .preview.ts + .test.ts)
+      src/icons/        # WcIconBase + the starter icon set
+      preview/          # Glob manifest, query-string router, axe suite (port 9090)
+  apps/
+    app/                # @nigel/app — composition only
+      src/api/          # types.ts, client.ts — the ONLY module that talks to the server
+      src/screens/      # registry.ts (Record<ScreenId, ScreenDef>), hash-route.ts, 12 stubs
+      src/state/        # app-store.ts (status/locked/company signals)
+      src/mixins/       # signal-watcher.ts — the @lit-labs/signals seam
+      src/components/   # nigel-app.ts — root container
 docs/
   api.md                # HTTP API inventory (endpoints, error envelope, security model)
   importers.md          # Importer format specifications and authoring guide

@@ -175,6 +175,25 @@ cargo test               # Run all tests
 cargo test --no-default-features  # Test without gusto/pdf features
 ```
 
+### Building the web UI
+
+`nigel serve` serves a single-page app that is compiled into the binary. It
+lives in `web/` and needs Node 20.19 or newer (22 recommended):
+
+```bash
+cd web
+npm ci
+npm run build            # writes web/dist, which the binary embeds
+```
+
+`cargo build` works without Node — the binary then serves a placeholder page
+explaining that the UI has not been built. Run the `npm run build` above before
+`cargo build --release` if you want a binary with the real interface in it.
+
+For the live dev loop (Vite on :5173 proxying to a running `nigel serve`), the
+component preview harness, and the theme and API conventions, see
+[web/README.md](web/README.md).
+
 ## License
 
 MIT
