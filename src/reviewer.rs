@@ -239,7 +239,7 @@ pub fn find_transactions_for_recategorize(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn.prepare(&sql)?;
     let mut rows: Vec<RecategorizeCandidate> = stmt
-        .query_map(param_refs.as_slice(), |row| candidate_from_row(row))?
+        .query_map(param_refs.as_slice(), candidate_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     // Regex (and the other match types) filter in Rust via the categorizer, so the
@@ -261,7 +261,7 @@ pub fn get_transactions_by_ids(
          FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
     )?;
     for &id in ids {
-        match stmt.query_row([id], |row| candidate_from_row(row)) {
+        match stmt.query_row([id], candidate_from_row) {
             Ok(c) => out.push(c),
             Err(rusqlite::Error::QueryReturnedNoRows) => missing.push(id.to_string()),
             Err(e) => return Err(e.into()),
