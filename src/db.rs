@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -415,9 +416,11 @@ pub fn validate_password(db_path: &Path, password: &str) -> Result<bool> {
     }
 }
 
-/// Environment variable consulted for the database password before prompting,
-/// so `nigel` can unlock an encrypted database where no terminal exists.
-pub const PASSWORD_ENV_VAR: &str = "NIGEL_DB_PASSWORD";
+/// Environment variable consulted for the database password whenever the
+/// database is encrypted, so `nigel` can unlock one with no terminal attached.
+/// Set but empty, invalid UTF-8, or wrong are all errors rather than a silent
+/// fall back to prompting.
+const PASSWORD_ENV_VAR: &str = "NIGEL_DB_PASSWORD";
 
 /// Validate a password supplied through the environment, where `raw` is the
 /// variable's value or `None` when unset. `Ok(None)` means nothing was supplied
@@ -426,31 +429,50 @@ pub const PASSWORD_ENV_VAR: &str = "NIGEL_DB_PASSWORD";
 /// `raw` is a parameter rather than read from the process environment here
 /// because cargo runs tests as parallel threads of one process, which share
 /// one environment and would clobber each other's setting.
-fn env_password(db_path: &Path, raw: Option<String>) -> Result<Option<String>> {
-    let Some(mut pw) = raw else {
+fn env_password(db_path: &Path, raw: Option<OsString>) -> Result<Option<String>> {
+    let Some(raw) = raw else {
         return Ok(None);
     };
+
+    // Every failure below is fatal. A caller running unattended cannot answer the
+    // prompt, so falling through to one would hang the job instead of reporting.
+    let Ok(mut pw) = raw.into_string() else {
+        return Err(crate::error::NigelError::Other(format!(
+            "{PASSWORD_ENV_VAR} is set but is not valid UTF-8."
+        )));
+    };
+
+    if pw.is_empty() {
+        return Err(crate::error::NigelError::Other(format!(
+            "{PASSWORD_ENV_VAR} is set but empty — the command that supplies it likely failed."
+        )));
+    }
+
     if validate_password(db_path, &pw)? {
         return Ok(Some(pw));
     }
     pw.zeroize();
+
+    // A wrong password and a damaged file are indistinguishable here: SQLCipher
+    // reports both as "not a database", and `is_encrypted` reads anything without
+    // the plaintext header as encrypted. Naming one cause would send an operator
+    // rotating a password when the ledger is actually corrupt.
     Err(crate::error::NigelError::Other(format!(
-        "{PASSWORD_ENV_VAR} is set but does not unlock the database."
+        "{PASSWORD_ENV_VAR} did not unlock {}. The password may be wrong, or the database file may be damaged.",
+        db_path.display()
     )))
 }
 
 /// If the database is encrypted, unlock it from `NIGEL_DB_PASSWORD`, falling
-/// back to prompting the user (up to 3 attempts).
-/// Sets the global password on success. Returns an error after 3 failures.
+/// back to prompting the user (up to 3 attempts). Sets the global password on
+/// success. Returns an error if the environment holds an unusable password, or
+/// after 3 failed prompts.
 pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
     if !is_encrypted(db_path)? {
         return Ok(());
     }
 
-    // A caller running unattended cannot answer the prompt below, so a password
-    // supplied via the environment is authoritative: a wrong one fails here
-    // rather than falling through to a prompt that would hang the job.
-    if let Some(pw) = env_password(db_path, std::env::var(PASSWORD_ENV_VAR).ok())? {
+    if let Some(pw) = env_password(db_path, std::env::var_os(PASSWORD_ENV_VAR))? {
         set_db_password(Some(pw));
         return Ok(());
     }
@@ -729,14 +751,17 @@ mod tests {
     }
 
     /// Build an encrypted database at a temp path locked with "secret".
+    ///
+    /// Uses `open_connection` with an explicit password rather than the global
+    /// `DB_PASSWORD`: cargo runs these as parallel threads of one process, and a
+    /// test that set the global would hand its password to every other test
+    /// building a fixture through `get_connection`.
     fn encrypted_db() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("encrypted.db");
-        set_db_password(Some("secret".into()));
-        let conn = get_connection(&db_path).unwrap();
+        let conn = open_connection(&db_path, Some("secret")).unwrap();
         init_db(&conn).unwrap();
         drop(conn);
-        set_db_password(None);
         (dir, db_path)
     }
 
@@ -761,9 +786,28 @@ mod tests {
     }
 
     #[test]
-    fn test_env_password_empty_errors() {
+    fn test_env_password_empty_is_fatal_not_treated_as_unset() {
         let (_dir, db_path) = encrypted_db();
-        assert!(env_password(&db_path, Some(String::new())).is_err());
+        let err = env_password(&db_path, Some(OsString::new()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("empty"),
+            "message should name the cause: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_env_password_invalid_utf8_is_fatal_not_treated_as_unset() {
+        use std::os::unix::ffi::OsStringExt;
+        let (_dir, db_path) = encrypted_db();
+        let raw = OsString::from_vec(b"secret\xff".to_vec());
+        let err = env_password(&db_path, Some(raw)).unwrap_err().to_string();
+        assert!(
+            err.contains("UTF-8"),
+            "message should name the cause: {err}"
+        );
     }
 
     #[test]
@@ -776,14 +820,26 @@ mod tests {
     }
 
     #[test]
-    fn test_env_password_ignored_for_plain_db() {
+    fn test_env_password_failure_names_both_possible_causes() {
+        let (_dir, db_path) = encrypted_db();
+        let err = env_password(&db_path, Some("wrong".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("password may be wrong"), "{err}");
+        assert!(err.contains("may be damaged"), "{err}");
+        assert!(err.contains(&db_path.display().to_string()), "{err}");
+    }
+
+    /// The companion `backup_ignores_env_password_on_plain_database` covers the
+    /// case this cannot: setting the variable requires a child process, because
+    /// the environment is shared across cargo's parallel test threads.
+    #[test]
+    fn test_plain_db_needs_no_password() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("plain.db");
-        let conn = get_connection(&db_path).unwrap();
+        let conn = open_connection(&db_path, None).unwrap();
         init_db(&conn).unwrap();
         drop(conn);
-        // Unencrypted databases short-circuit before the environment is read,
-        // so a stale variable cannot lock the user out of their own database.
         assert!(prompt_password_if_needed(&db_path).is_ok());
     }
 

@@ -147,12 +147,16 @@ On an encrypted database, `nigel` normally prompts for the password on the termi
 
 ```bash
 NIGEL_DB_PASSWORD="$(security find-generic-password -s nigel-db -w)" \
-  nigel backup --output ~/Documents/nigel/main/backups/nigel-$(date +%F).db
+  nigel backup --output ~/Documents/nigel/backups/nigel-$(date +%F).db
 ```
 
-If `NIGEL_DB_PASSWORD` is set but wrong, the command fails immediately rather than falling back to a prompt no scheduled job could answer. Leave it unset for normal interactive use.
+`NIGEL_DB_PASSWORD` is fatal when unusable — wrong, empty, or not valid UTF-8 — rather than falling back to a prompt no scheduled job could answer. An empty value reports itself as empty, since the usual cause is the secret lookup failing rather than a bad password. Leave the variable unset for normal interactive use; while it is set, it takes precedence over the prompt even in a terminal.
 
-Read the password from a secret store, as above, rather than writing it into a script or a launchd plist. Note that an environment variable is visible to other processes running as you (`ps -E`), so on a shared account prefer running the backup interactively.
+A plaintext database ignores the variable entirely, so a value left over in your shell cannot lock you out of a database that never had a password.
+
+Put this in a wrapper script rather than directly in a launchd plist: `ProgramArguments` execs without a shell, so command substitution, `~`, and `VAR=value` prefixes are all inert there. Launch agents also start with a minimal `PATH` that excludes `~/.cargo/bin`, so call `nigel` by absolute path.
+
+Read the password from a secret store, as above, rather than writing it into a script or a plist. Note that an environment variable is visible to other processes running as you (`ps -E` on macOS), so on a shared account prefer running the backup interactively.
 
 ## Configuration
 

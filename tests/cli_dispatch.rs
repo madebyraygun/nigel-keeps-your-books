@@ -5,6 +5,10 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// Bounds any run that could reach the interactive password prompt, so a test
+/// inheriting a tty fails instead of blocking on `rpassword` forever.
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Create an isolated environment: a temp HOME so that `~/.config/nigel/settings.json`
 /// and `~/Documents/nigel/` all live inside the temp dir. Returns the TempDir (must be
 /// kept alive for the duration of the test) and a helper to build `nigel` commands that
@@ -640,7 +644,7 @@ fn backup_unlocks_encrypted_database_from_env() {
         .args(["backup", "--output", &backup_path.to_string_lossy()])
         .env("NIGEL_DB_PASSWORD", "hunter2")
         .write_stdin("")
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(TEST_TIMEOUT)
         .assert()
         .success()
         .stdout(predicate::str::contains("Backup saved to"));
@@ -667,16 +671,34 @@ fn backup_fails_fast_on_wrong_env_password() {
     env.init_and_demo();
     env.encrypt("hunter2");
 
-    // The timeout is the assertion that matters: falling through to the interactive
-    // prompt would block here rather than returning, hanging any automated caller.
+    // The stderr predicate is what catches a regression: reaching the prompt with no
+    // terminal errors with ENXIO, which would satisfy `.failure()` on its own. The
+    // timeout is only a backstop for a run that inherits a tty and blocks.
     env.cmd()
         .args(["backup"])
         .env("NIGEL_DB_PASSWORD", "wrong-password")
         .write_stdin("")
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(TEST_TIMEOUT)
         .assert()
         .failure()
         .stderr(predicate::str::contains("NIGEL_DB_PASSWORD"));
+}
+
+#[test]
+fn backup_ignores_env_password_on_plain_database() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // No `encrypt()` here: a leftover variable in the operator's shell must not lock
+    // them out of a database that never had a password.
+    env.cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "stale-value-from-another-project")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup saved to"));
 }
 
 #[test]
@@ -690,7 +712,7 @@ fn env_password_is_not_echoed_on_failure() {
         .args(["backup"])
         .env("NIGEL_DB_PASSWORD", "sup3rs3cret")
         .write_stdin("")
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(TEST_TIMEOUT)
         .output()
         .unwrap();
 
@@ -698,6 +720,17 @@ fn env_password_is_not_echoed_on_failure() {
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    // Assert the run failed and reported before asserting on what it did not print:
+    // a killed or crashed child produces no output, which would satisfy the absence
+    // check while proving nothing.
+    assert!(
+        !output.status.success(),
+        "expected failure, got success:\n{combined}"
+    );
+    assert!(
+        combined.contains("NIGEL_DB_PASSWORD"),
+        "expected the variable to be named in the error:\n{combined}"
     );
     assert!(
         !combined.contains("sup3rs3cret"),
