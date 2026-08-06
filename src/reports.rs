@@ -2,7 +2,7 @@ use chrono::Datelike;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 
 // ---------------------------------------------------------------------------
 // Report identity and date granularity
@@ -388,7 +388,7 @@ pub fn get_cashflow(
 // Register (all transactions)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRow {
     pub id: i64,
@@ -454,6 +454,38 @@ pub fn get_register(
 
     let total: f64 = rows.iter().map(|r| r.amount).sum();
     Ok(RegisterReport { rows, total })
+}
+
+/// One register row by id — the shape an edited transaction answers with, so
+/// the row a client sends back is the row it already knows how to render.
+pub fn get_register_row(conn: &Connection, id: i64) -> Result<RegisterRow> {
+    conn.query_row(
+        "SELECT t.id, t.date, t.description, t.amount, c.name, t.category_id, t.vendor, a.name, t.is_flagged \
+         FROM transactions t \
+         JOIN accounts a ON t.account_id = a.id \
+         LEFT JOIN categories c ON t.category_id = c.id \
+         WHERE t.id = ?1",
+        [id],
+        |row| {
+            Ok(RegisterRow {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                description: row.get(2)?,
+                amount: row.get(3)?,
+                category: row.get(4)?,
+                category_id: row.get(5)?,
+                vendor: row.get(6)?,
+                account_name: row.get(7)?,
+                is_flagged: row.get(8)?,
+            })
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("No transaction found with ID {id}"))
+        }
+        other => NigelError::Db(other),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +791,43 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         init_db(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn get_register_row_matches_the_full_register() {
+        let (_dir, conn) = test_db();
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
+        let account = conn.last_insert_rowid();
+        let category: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id, vendor, is_flagged) \
+             VALUES (?1, '2025-01-15', 'ADOBE', -50.0, ?2, 'Adobe', 1)",
+            rusqlite::params![account, category],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+
+        let row = get_register_row(&conn, id).unwrap();
+        let from_report = get_register(&conn, None, None, None, None, None).unwrap();
+        let expected = &from_report.rows[0];
+        assert_eq!(row.id, expected.id);
+        assert_eq!(row.category, expected.category);
+        assert_eq!(row.vendor, expected.vendor);
+        assert_eq!(row.account_name, expected.account_name);
+        assert_eq!(row.is_flagged, expected.is_flagged);
+
+        let err = get_register_row(&conn, 4242).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err}");
     }
 
     #[test]

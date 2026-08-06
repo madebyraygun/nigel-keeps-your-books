@@ -9,15 +9,18 @@
 pub mod accounts;
 pub mod categories;
 pub mod imports;
+pub mod reconcile;
 pub mod reports;
+pub mod review;
 pub mod rules;
 pub mod status;
+pub mod transactions;
 
 use axum::http::Uri;
 use axum::routing::get;
 use axum::{middleware, Json, Router};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::error::{ApiError, ApiResult};
 use super::state::AppState;
@@ -41,7 +44,10 @@ fn data_router() -> Router<AppState> {
         .merge(accounts::routes())
         .merge(categories::routes())
         .merge(rules::routes())
-        .merge(imports::routes());
+        .merge(imports::routes())
+        .merge(transactions::routes())
+        .merge(review::routes())
+        .merge(reconcile::routes());
 
     // A route that exists only to prove `api_router` — the assembly every
     // endpoint is mounted into — actually applies the guard, without pinning
@@ -80,6 +86,50 @@ where
     .await
     .map_err(ApiError::internal)?
     .map_err(ApiError::from)
+}
+
+/// Filtering by an account name that does not exist is a wrong question, not an
+/// empty answer: `get_register` and `list_reconciliations` would both report a
+/// typo as "nothing here".
+pub(super) fn ensure_account_exists(conn: &Connection, name: &str) -> crate::error::Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE name = ?1)",
+        [name],
+        |row| row.get(0),
+    )?;
+    if exists {
+        Ok(())
+    } else {
+        Err(crate::error::NigelError::UnknownAccount(name.to_string()))
+    }
+}
+
+/// What a delete answers with. A body rather than a bare `204` so a client can
+/// decode every response the same way.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Deleted {
+    id: i64,
+    deleted: bool,
+}
+
+impl Deleted {
+    pub(crate) fn new(id: i64) -> Json<Self> {
+        Json(Self { id, deleted: true })
+    }
+}
+
+/// Tell "field absent" from "field explicitly null" in a PATCH body.
+///
+/// A plain `Option<T>` collapses the two, which is exactly the distinction a
+/// partial update needs: absent means leave it alone, `null` means clear it.
+/// Used with `#[serde(default, deserialize_with = "double_option")]`.
+pub(crate) fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer).map(Some)
 }
 
 #[derive(Serialize)]

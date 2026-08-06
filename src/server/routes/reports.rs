@@ -11,15 +11,13 @@ use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::NaiveDate;
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::error::NigelError;
 use crate::reports::{self, DateGranularity, ReportKind};
 
 use super::super::error::{ApiError, ApiResult};
 use super::super::state::AppState;
-use super::with_conn;
+use super::{ensure_account_exists, with_conn};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -191,7 +189,7 @@ fn parse_year(value: &str) -> ApiResult<i32> {
 /// `YYYY-MM`, strictly. `cli::parse_month_opt` answers a malformed month with
 /// `(None, None)`, which over HTTP would silently widen the request to the whole
 /// database instead of reporting the typo.
-fn parse_month(value: &str) -> ApiResult<(i32, u32)> {
+pub(super) fn parse_month(value: &str) -> ApiResult<(i32, u32)> {
     let invalid = || {
         ApiError::bad_request(format!(
             "Invalid `month`: expected YYYY-MM, got \"{value}\"."
@@ -220,22 +218,6 @@ fn parse_date(param: &str, value: &str) -> ApiResult<String> {
     Err(ApiError::bad_request(format!(
         "Invalid `{param}`: expected YYYY-MM-DD, got \"{value}\"."
     )))
-}
-
-/// `get_register` filters on the account name and reports an unknown one as an
-/// empty register; over HTTP "no such account" and "no transactions" are
-/// different answers.
-fn ensure_account_exists(conn: &Connection, name: &str) -> crate::error::Result<()> {
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM accounts WHERE name = ?1)",
-        [name],
-        |row| row.get(0),
-    )?;
-    if exists {
-        Ok(())
-    } else {
-        Err(NigelError::UnknownAccount(name.to_string()))
-    }
 }
 
 // ---------------------------------------------------------------------------

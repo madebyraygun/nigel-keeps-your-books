@@ -3,13 +3,65 @@ use serde::Serialize;
 
 use crate::error::{NigelError, Result};
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReconcileResult {
     pub is_reconciled: bool,
     pub statement_balance: f64,
     pub calculated_balance: f64,
     pub discrepancy: f64,
+}
+
+/// A stored reconciliation, joined to the account it belongs to.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationRecord {
+    pub id: i64,
+    pub account_id: i64,
+    pub account_name: String,
+    pub month: String,
+    /// Nullable in the schema: a record can predate either balance.
+    pub statement_balance: Option<f64>,
+    pub calculated_balance: Option<f64>,
+    pub is_reconciled: bool,
+    pub reconciled_at: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// Reconciliation history, newest month first, optionally for one account.
+pub fn list_reconciliations(
+    conn: &Connection,
+    account: Option<&str>,
+) -> Result<Vec<ReconciliationRecord>> {
+    let mut sql = String::from(
+        "SELECT r.id, r.account_id, a.name, r.month, r.statement_balance, r.calculated_balance, \
+                r.is_reconciled, r.reconciled_at, r.notes \
+         FROM reconciliations r JOIN accounts a ON r.account_id = a.id",
+    );
+    let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::new();
+    if let Some(name) = account.as_ref() {
+        sql.push_str(" WHERE a.name = ?1");
+        params.push(name);
+    }
+    sql.push_str(" ORDER BY r.month DESC, r.id DESC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok(ReconciliationRecord {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                account_name: row.get(2)?,
+                month: row.get(3)?,
+                statement_balance: row.get(4)?,
+                calculated_balance: row.get(5)?,
+                is_reconciled: row.get(6)?,
+                reconciled_at: row.get(7)?,
+                notes: row.get(8)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 pub fn reconcile(
@@ -114,5 +166,50 @@ mod tests {
             .query_row("SELECT count(*) FROM reconciliations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_list_reconciliations_is_newest_first_and_filters_by_account() {
+        let (_dir, conn) = test_db();
+        setup_account_with_txns(&conn, 500.0);
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Other', 'credit_card')",
+            [],
+        )
+        .unwrap();
+        let other = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount) VALUES (?1, '2025-02-05', 'Charge', -20.0)",
+            rusqlite::params![other],
+        )
+        .unwrap();
+
+        reconcile(&conn, "Test Checking", "2025-01", 500.0).unwrap();
+        reconcile(&conn, "Other", "2025-02", -20.0).unwrap();
+
+        let all = list_reconciliations(&conn, None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].month, "2025-02");
+        assert_eq!(all[0].account_name, "Other");
+        assert!(all[0].is_reconciled);
+        assert_eq!(all[0].statement_balance, Some(-20.0));
+        assert!(all[0].reconciled_at.is_some());
+        assert!(all[0].notes.is_none());
+
+        let filtered = list_reconciliations(&conn, Some("Test Checking")).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].month, "2025-01");
+
+        assert!(list_reconciliations(&conn, Some("Nope"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_reconcile_reports_an_empty_month() {
+        let (_dir, conn) = test_db();
+        setup_account_with_txns(&conn, 500.0);
+        let err = reconcile(&conn, "Test Checking", "2025-07", 500.0).unwrap_err();
+        assert!(matches!(err, NigelError::NoTransactions { .. }));
     }
 }

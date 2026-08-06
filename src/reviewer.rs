@@ -59,7 +59,7 @@ pub fn get_transaction_by_id(conn: &Connection, id: i64) -> Result<FlaggedTxn> {
     )
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => {
-            NigelError::Other(format!("No transaction found with ID {id}"))
+            NigelError::NotFound(format!("No transaction found with ID {id}"))
         }
         other => other.into(),
     })
@@ -148,16 +148,44 @@ pub fn update_transaction_vendor(
     Ok(())
 }
 
-pub fn toggle_transaction_flag(conn: &Connection, transaction_id: i64) -> Result<bool> {
-    conn.execute(
-        "UPDATE transactions SET is_flagged = NOT is_flagged WHERE id = ?1",
-        rusqlite::params![transaction_id],
-    )?;
-    let new_state: bool = conn.query_row(
+/// The flag as it stands, erroring if the transaction is not there.
+pub fn transaction_flag(conn: &Connection, transaction_id: i64) -> Result<bool> {
+    conn.query_row(
         "SELECT is_flagged FROM transactions WHERE id = ?1",
         rusqlite::params![transaction_id],
         |row| row.get(0),
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("No transaction found with ID {transaction_id}"))
+        }
+        other => other.into(),
+    })
+}
+
+/// Set the flag to a given state. Idempotent, which is what an HTTP client
+/// needs — a toggle would drift out of step with the screen it came from.
+///
+/// `flag_reason` is deliberately untouched: the flag is the state, the reason
+/// is the story of how it got there, and clearing a flag by hand does not
+/// rewrite that story.
+pub fn set_transaction_flag(conn: &Connection, transaction_id: i64, flagged: bool) -> Result<()> {
+    let updated = conn.execute(
+        "UPDATE transactions SET is_flagged = ?1 WHERE id = ?2",
+        rusqlite::params![flagged, transaction_id],
     )?;
+    if updated == 0 {
+        return Err(NigelError::NotFound(format!(
+            "No transaction found with ID {transaction_id}"
+        )));
+    }
+    Ok(())
+}
+
+/// Flip the flag and report the new state — what the register's `f` key does.
+pub fn toggle_transaction_flag(conn: &Connection, transaction_id: i64) -> Result<bool> {
+    let new_state = !transaction_flag(conn, transaction_id)?;
+    set_transaction_flag(conn, transaction_id, new_state)?;
     Ok(new_state)
 }
 
@@ -389,5 +417,36 @@ mod tests {
 
         let new_state2 = toggle_transaction_flag(&conn, txn_id).unwrap();
         assert!(new_state2); // toggled back to flagged
+    }
+
+    #[test]
+    fn test_set_transaction_flag_is_idempotent() {
+        let (_dir, conn) = test_db();
+        let txn_id = add_flagged_txn(&conn); // starts flagged
+
+        // Setting the state it already has is a no-op, not a toggle.
+        set_transaction_flag(&conn, txn_id, true).unwrap();
+        assert!(transaction_flag(&conn, txn_id).unwrap());
+
+        set_transaction_flag(&conn, txn_id, false).unwrap();
+        set_transaction_flag(&conn, txn_id, false).unwrap();
+        assert!(!transaction_flag(&conn, txn_id).unwrap());
+    }
+
+    #[test]
+    fn test_flag_helpers_report_a_missing_transaction() {
+        let (_dir, conn) = test_db();
+        assert!(matches!(
+            set_transaction_flag(&conn, 4242, true).unwrap_err(),
+            NigelError::NotFound(_)
+        ));
+        assert!(matches!(
+            transaction_flag(&conn, 4242).unwrap_err(),
+            NigelError::NotFound(_)
+        ));
+        assert!(matches!(
+            toggle_transaction_flag(&conn, 4242).unwrap_err(),
+            NigelError::NotFound(_)
+        ));
     }
 }

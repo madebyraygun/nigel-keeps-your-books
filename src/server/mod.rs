@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod extract;
 pub mod routes;
 pub mod secret;
 pub mod state;
@@ -437,6 +438,24 @@ mod tests {
             let (status, body) = get_json(&app, uri, &token).await;
             assert_eq!(status, StatusCode::LOCKED, "{uri} while locked: {body}");
             assert_eq!(body["error"]["code"], "locked", "for {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_refuses_every_mutation() {
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for route in WRITE_ROUTES {
+            let (status, body) = send_write(&app, route, &token).await;
+            let (method, uri, _) = route;
+            assert_eq!(
+                status,
+                StatusCode::LOCKED,
+                "{method} {uri} while locked: {body}"
+            );
+            assert_eq!(body["error"]["code"], "locked", "for {method} {uri}");
         }
     }
 

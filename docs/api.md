@@ -246,6 +246,180 @@ pagination.
 ]
 ```
 
+## Changing data
+
+Every endpoint in this section writes, and every one is refused with `423
+locked` until an encrypted database is unlocked.
+
+| Route | Method | Body | Response |
+|---|---|---|---|
+| `/api/transactions/:id` | `PATCH` | `categoryId?`, `vendor?`, `flag?` | `RegisterRow` |
+| `/api/categorize` | `POST` | — | `CategorizeResult` |
+| `/api/review/queue` | `GET` | — | `FlaggedTxn[]` |
+| `/api/review/:id` | `GET` | — | `RegisterRow` |
+| `/api/review/:id/apply` | `POST` | `categoryId`, `vendor?`, `createRule?`, `rulePattern?` | `{ transactionId, ruleId }` |
+| `/api/review/:id/undo` | `POST` | `ruleId?` | `RegisterRow` |
+| `/api/accounts` | `POST` | `name`, `accountType`, `institution?`, `lastFour?` | `Account` (`201`) |
+| `/api/accounts/:id` | `PATCH` | `name` | `Account` |
+| `/api/accounts/:id` | `DELETE` | — | `{ id, deleted }` |
+| `/api/categories` | `POST` | `name`, `categoryType`, `taxLine?`, `formLine?` | `CategoryRow` (`201`) |
+| `/api/categories/:id` | `PATCH` | `name?`, `categoryType?`, `taxLine?`, `formLine?` | `CategoryRow` |
+| `/api/categories/:id` | `DELETE` | — | `{ id, deleted }` |
+| `/api/rules` | `POST` | `pattern`, `categoryId`, `matchType?`, `vendor?`, `priority?` | `RuleRow` (`201`) |
+| `/api/rules/:id` | `PATCH` | `pattern?`, `categoryId?`, `matchType?`, `vendor?`, `priority?` | `RuleRow` |
+| `/api/rules/:id` | `DELETE` | — | `{ id, deleted }` |
+| `/api/rules/test` | `POST` | `pattern`, `matchType?` | `RuleTestResult` |
+| `/api/reconcile` | `POST` | `account`, `month`, `statementBalance` | `ReconcileResult` |
+| `/api/reconciliations` | `GET` | `account` (query) | `ReconciliationRecord[]` |
+| `/api/imports/:id` | `DELETE` | — | `{ id, deletedTransactions }` |
+
+### Write conventions
+
+- **Creating** answers `201` with the new row, which carries the id and any
+  server-side defaults. **Editing** and **deleting** answer `200`; deletes carry
+  a small JSON body rather than a bare `204` so every response decodes the same
+  way.
+- **`PATCH` is a true partial update.** A field you omit is left alone, so two
+  screens editing different fields of the same row cannot blank each other's
+  work. A `PATCH` with no recognized field is `400` — an empty edit is more
+  likely a bug than an intention.
+- **`null` clears a field**, where clearing makes sense: `vendor` on a
+  transaction or a rule, `taxLine` and `formLine` on a category. `categoryId` is
+  the exception — `null` there is `400`, because uncategorizing is what
+  `/api/review/:id/undo` is for.
+- Unknown fields in a body are ignored.
+- Requesting a route with the wrong method is axum's bodyless `405`, the one
+  response on the API that is not an error envelope.
+
+### Transaction edits
+
+`PATCH /api/transactions/:id` is what the register's inline editing sends. All
+three fields are applied in one database transaction, so a rejected value — an
+unknown `categoryId`, say — leaves the row exactly as it was.
+
+```json
+{ "categoryId": 12, "vendor": "Adobe", "flag": false }
+```
+
+`flag` is a state, not a toggle: sending `true` twice leaves the transaction
+flagged once, which is what lets a client retry without wondering whether the
+first attempt landed. The response is the full register row, ready to swap into
+a table in place.
+
+`POST /api/categorize` runs the rules engine over everything uncategorized, the
+same pass an import ends with, and answers with what it did:
+
+```json
+{ "categorized": 12, "stillFlagged": 3 }
+```
+
+### Review
+
+`GET /api/review/queue` is the work list — flagged transactions, oldest first.
+`GET /api/review/:id` fetches one, for re-reviewing a specific transaction the
+way `nigel review --id` does.
+
+`apply` records a decision and optionally turns it into a rule:
+
+```json
+{ "categoryId": 12, "vendor": "Adobe", "createRule": true, "rulePattern": "ADOBE" }
+```
+
+```json
+{ "transactionId": 42, "ruleId": 7 }
+```
+
+`ruleId` is `null` unless a rule was created. `createRule` without a
+`rulePattern` is `400` rather than a silently rule-less success.
+
+`undo` takes that `ruleId` back:
+
+```json
+{ "ruleId": 7 }
+```
+
+It re-flags the transaction, clears the category and vendor, and **deletes** the
+rule outright — undo leaves no trace of the decision, which is what makes the
+review screen's back button safe. The body is required, but `{}` is valid and
+means "just restore the transaction". The response is the restored register row.
+
+### Accounts, categories, and rules
+
+Accounts are hard-deleted and categories are soft-deleted, exactly as in the CLI
+and the TUI. `PATCH /api/accounts/:id` renames and nothing else — institution
+and last four are set at creation, which is all the data layer offers.
+
+Rules address their category by **id**; only the CLI resolves a category name.
+`matchType` defaults to `contains` and `priority` to `0`, matching
+`nigel rules add`. A `matchType` outside `contains`, `starts_with`, and `regex`
+is `400`, as is a `regex` pattern that will not compile — the categorizer
+answers "no match" to both, so a rule saved with either would be dead weight.
+
+`POST /api/rules/test` is a dry run against the real transaction descriptions,
+the same scan `nigel rules test` prints:
+
+```json
+{ "pattern": "ADOBE", "matchType": "contains" }
+```
+
+```json
+{
+  "total": 3,
+  "matches": [{ "description": "ADOBE CREATIVE CLOUD", "count": 3 }]
+}
+```
+
+Identical descriptions collapse into one entry with a count, busiest first.
+Matching nothing is a `200` with `total: 0`, not an error.
+
+### Reconcile and undo
+
+`POST /api/reconcile` compares a statement balance against the calculated one
+and **records the result**, including a mismatch — that record is how the
+history knows which months have been checked. `GET /api/reconciliations`, with
+an optional `?account=`, returns that history newest month first.
+
+```json
+{ "account": "BofA Checking", "month": "2025-02", "statementBalance": 4928.01 }
+```
+
+```json
+{
+  "isReconciled": true,
+  "statementBalance": 4928.01,
+  "calculatedBalance": 4928.01,
+  "discrepancy": 0.0
+}
+```
+
+`DELETE /api/imports/:id` rolls back one import — its transactions and its
+record — the way `nigel undo` rolls back the most recent one. It answers with
+`{ "id": 3, "deletedTransactions": 42 }`. An import that is already gone is
+`404`, not a successful undo of nothing.
+
+### Conflict reasons
+
+A `409` always carries `details.reason`, so a client can explain the block in
+its own words instead of parsing ours:
+
+| Reason | Also carries | Raised by |
+|---|---|---|
+| `has_transactions` | `count` | Deleting an account or category still in use |
+| `has_active_rules` | `count` | Deleting a category an active rule assigns |
+| `duplicate_name` | `name` | Creating or renaming to a name already taken |
+| `already_inactive` | — | Editing or deleting an already soft-deleted rule |
+| `no_transactions` | `account`, `month` | Reconciling a month with nothing in it |
+
+```json
+{
+  "error": {
+    "code": "conflict",
+    "message": "Cannot delete: account has 5 transactions",
+    "details": { "reason": "has_transactions", "count": 5 }
+  }
+}
+```
+
 ## Static assets
 
 Everything that is not `/auth` or `/api` is served from the SPA bundle embedded

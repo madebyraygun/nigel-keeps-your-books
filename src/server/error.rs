@@ -139,9 +139,33 @@ impl From<NigelError> for ApiError {
         match err {
             NigelError::UnknownAccount(_)
             | NigelError::UnknownCategory(_)
-            | NigelError::NoTransactions { .. } => Self::not_found(err.to_string()),
-            NigelError::UnknownFormat(_) | NigelError::NoImporter(_) => {
+            | NigelError::NotFound(_) => Self::not_found(err.to_string()),
+            NigelError::UnknownFormat(_) | NigelError::NoImporter(_) | NigelError::Invalid(_) => {
                 Self::bad_request(err.to_string())
+            }
+            // The account exists and the request was well formed; there is
+            // simply nothing in that month to reconcile against.
+            NigelError::NoTransactions {
+                ref account,
+                ref month,
+            } => {
+                let details = serde_json::json!({
+                    "reason": "no_transactions",
+                    "account": account,
+                    "month": month,
+                });
+                Self::conflict(err.to_string(), details)
+            }
+            NigelError::DuplicateName { kind: _, ref name } => {
+                let details = serde_json::json!({ "reason": "duplicate_name", "name": name });
+                Self::conflict(err.to_string(), details)
+            }
+            NigelError::Blocked(block) => Self::conflict(
+                err.to_string(),
+                serde_json::json!({ "reason": block.reason_code(), "count": block.count }),
+            ),
+            NigelError::Conflict { code, .. } => {
+                Self::conflict(err.to_string(), serde_json::json!({ "reason": code }))
             }
             other => Self::internal(other),
         }
@@ -255,12 +279,67 @@ mod tests {
             ApiErrorCode::NotFound
         );
         assert_eq!(
+            ApiError::from(NigelError::NotFound("no rule".into())).code(),
+            ApiErrorCode::NotFound
+        );
+        assert_eq!(
             ApiError::from(NigelError::UnknownFormat("nope".into())).code(),
+            ApiErrorCode::BadRequest
+        );
+        assert_eq!(
+            ApiError::from(NigelError::Invalid("bad type".into())).code(),
             ApiErrorCode::BadRequest
         );
         assert_eq!(
             ApiError::from(NigelError::NotInitialized).code(),
             ApiErrorCode::Internal
         );
+    }
+
+    /// Every guardrail answers 409 with a reason a client can branch on — the
+    /// contract the manager screens render from instead of parsing messages.
+    #[test]
+    fn guardrails_carry_a_machine_readable_reason() {
+        use crate::error::DeleteBlock;
+
+        let cases: [(NigelError, serde_json::Value); 5] = [
+            (
+                NigelError::Blocked(DeleteBlock::transactions("account", 3)),
+                json!({"reason": "has_transactions", "count": 3}),
+            ),
+            (
+                NigelError::Blocked(DeleteBlock::active_rules("category", 2)),
+                json!({"reason": "has_active_rules", "count": 2}),
+            ),
+            (
+                NigelError::DuplicateName {
+                    kind: "Account",
+                    name: "BofA Checking".into(),
+                },
+                json!({"reason": "duplicate_name", "name": "BofA Checking"}),
+            ),
+            (
+                NigelError::Conflict {
+                    code: "already_inactive",
+                    message: "Rule 7 is already inactive".into(),
+                },
+                json!({"reason": "already_inactive"}),
+            ),
+            (
+                NigelError::NoTransactions {
+                    account: "BofA Checking".into(),
+                    month: "2025-07".into(),
+                },
+                json!({"reason": "no_transactions", "account": "BofA Checking", "month": "2025-07"}),
+            ),
+        ];
+
+        for (err, expected) in cases {
+            let message = err.to_string();
+            let api = ApiError::from(err);
+            assert_eq!(api.code(), ApiErrorCode::Conflict, "for {message}");
+            assert_eq!(api.details, Some(expected), "for {message}");
+            assert_eq!(api.message, message, "the human message is preserved");
+        }
     }
 }

@@ -70,6 +70,17 @@ pub fn get_last_import(conn: &Connection) -> Result<Option<LastImport>> {
         }))
 }
 
+/// Whether an import record still exists. `delete_import` reports a missing
+/// import as zero transactions deleted, which over HTTP would read as success.
+pub fn import_exists(conn: &Connection, import_id: i64) -> Result<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM imports WHERE id = ?1)",
+        [import_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists)
+}
+
 /// Delete all transactions and the import record for the given import.
 /// Returns the number of transactions deleted.
 pub fn delete_import(conn: &Connection, import_id: i64) -> Result<usize> {
@@ -241,6 +252,22 @@ mod tests {
         for key in ["accountName", "importDate", "transactionCount"] {
             assert!(json.get(key).is_some(), "missing {key} in {json}");
         }
+    }
+
+    #[test]
+    fn test_import_exists_tells_a_deleted_import_from_a_live_one() {
+        let (_dir, conn) = test_db();
+        let acct = add_account(&conn);
+        let import_id = add_import(&conn, acct, "test.csv");
+
+        assert!(import_exists(&conn, import_id).unwrap());
+        assert!(!import_exists(&conn, 4242).unwrap());
+
+        delete_import(&conn, import_id).unwrap();
+        assert!(
+            !import_exists(&conn, import_id).unwrap(),
+            "undoing an import takes its record with it"
+        );
     }
 
     #[test]

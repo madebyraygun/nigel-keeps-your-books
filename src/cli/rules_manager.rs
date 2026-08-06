@@ -229,8 +229,8 @@ impl RulesManager {
                 if let Some(rule) = self.rules.get(self.selection) {
                     let id = rule.id;
                     let pattern = rule.pattern.clone();
-                    match conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id]) {
-                        Ok(_) => {
+                    match crate::cli::rules::deactivate_rule(conn, id) {
+                        Ok(()) => {
                             self.reload(conn);
                             self.screen = Screen::List;
                             self.set_status(format!("Deleted rule {id}: '{pattern}'"));

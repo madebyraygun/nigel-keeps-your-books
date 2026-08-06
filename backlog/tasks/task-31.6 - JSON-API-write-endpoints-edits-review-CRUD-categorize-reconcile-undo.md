@@ -1,11 +1,11 @@
 ---
 id: TASK-31.6
 title: 'JSON API: write endpoints (edits, review, CRUD, categorize, reconcile, undo)'
-status: In Progress
+status: Done
 assignee:
   - '@agent-31.6'
 created_date: '2026-08-06 16:26'
-updated_date: '2026-08-06 20:46'
+updated_date: '2026-08-06 21:41'
 labels:
   - web
   - backend
@@ -28,10 +28,10 @@ Mutation endpoints wrapping the existing write data layer: transaction category/
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Transaction edit endpoints cover category, vendor, and flag toggle; review apply and undo work including created-rule cleanup
-- [ ] #2 CRUD endpoints for accounts, categories, and rules enforce existing blocking and soft-delete semantics with clear error payloads
-- [ ] #3 Endpoints exist to test a rule pattern (dry run), run the categorizer, reconcile an account month, and undo a specific import by id
-- [ ] #4 All mutations are rejected while the database is locked
+- [x] #1 Transaction edit endpoints cover category, vendor, and flag toggle; review apply and undo work including created-rule cleanup
+- [x] #2 CRUD endpoints for accounts, categories, and rules enforce existing blocking and soft-delete semantics with clear error payloads
+- [x] #3 Endpoints exist to test a rule pattern (dry run), run the categorizer, reconcile an account month, and undo a specific import by id
+- [x] #4 All mutations are rejected while the database is locked
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -422,3 +422,135 @@ extended there with post_json/patch_json/delete_json helpers:
    the envelope shape and that `nigel rules list` / the TUI managers show the
    same rows afterwards.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Manual smoke (plan §8)
+
+Ran `nigel serve --no-open` against a fresh `nigel demo` database and exercised
+every write route with curl. All responses were error-envelope shaped; the CLI
+(`nigel rules list`, `nigel report register`) agreed with the API afterwards.
+
+- Create/edit/delete cycle per resource: accounts (201 -> rename -> delete),
+  categories (201 -> one-field patch -> `formLine: null` cleared it -> soft
+  delete), rules (201 with `matchType` defaulted to `contains` -> patch priority
+  and `vendor: null` -> deactivate).
+- `POST /api/rules/test` on the demo data: `{"total":18,"matches":[{"description":"ADOBE CREATIVE CLOUD","count":18}]}`.
+- `PATCH /api/transactions/:id` applied category + vendor + flag together and
+  answered with the register row; sending `flag:false` twice left it unflagged.
+- Review round trip: apply with `createRule` returned `{"transactionId":12,"ruleId":12}`;
+  undo re-flagged the transaction, cleared category and vendor, and the rule was
+  gone from `GET /api/rules`.
+- Reconcile against a month with data recorded a mismatch
+  (`isReconciled:false`, discrepancy 70841.7) and it appeared in
+  `GET /api/reconciliations`.
+- Undo of a real 2-row import returned `{"deletedTransactions":2}` and the
+  July 2026 register went from 17 rows to 15.
+- One 409 per reason code, all with `details.reason`: has_transactions (count
+  270), has_transactions on a category (count 36), duplicate_name,
+  already_inactive, no_transactions (with account + month).
+- 404s: unknown import, unknown transaction. 400s: empty patch, `categoryId:
+  null`, uncompilable regex, non-numeric path id ("Expected a numeric id in the
+  path."), malformed JSON body.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds the JSON API's write half: 19 routes covering transaction edits, the review
+loop, CRUD for accounts/categories/rules, rule pattern testing, categorize,
+reconcile, and undoing an import. Handlers stay thin — validate, then call the
+same `&Connection` data layer the TUI uses — so the web UI and the terminal
+cannot drift apart.
+
+## The interesting part: guardrails became data
+
+Every guardrail and not-found in the data layer was `NigelError::Other`, which
+the API could only have turned into a 500 or a string match. Five typed variants
+now carry the meaning — `NotFound` (404), `Invalid` (400), `DuplicateName`,
+`Blocked(DeleteBlock)`, and `Conflict { code }` (409) — plus a remap of
+`NoTransactions` from 404 to 409, since there the account exists and the month is
+simply empty.
+
+Every `Display` string is byte-identical to what the CLI printed before, and the
+existing message assertions were left untouched as the proof: `nigel accounts
+delete 1` still says "Cannot delete: account has 270 transactions", while the
+same failure over HTTP carries `details: { reason: "has_transactions", count:
+270 }`. The five reason codes (has_transactions, has_active_rules,
+duplicate_name, already_inactive, no_transactions) are what 31.16's manager
+screens render from instead of parsing prose.
+
+## Changes
+
+- Rules data layer (cli/rules.rs): `add_rule`, `update_rule` (partial;
+  `vendor: Some(None)` clears), `deactivate_rule`, `get_rule`, `test_pattern`
+  (the dry run `rules test` used to compute and throw away), plus
+  `validate_match_type` and `resolve_category_id`. The CLI subcommands became
+  wrappers; rules_manager.rs's inline `UPDATE ... is_active = 0` now calls
+  `deactivate_rule`.
+- Structured blockers: `accounts::delete_blocker` and
+  `categories::delete_blocker` return `DeleteBlock`; `blocking_reason` is a
+  `to_string()` wrapper, so the TUI status line is unchanged.
+- Idempotent flag: `reviewer::set_transaction_flag` sets an explicit state and
+  `toggle_transaction_flag` is expressed in terms of it, so `PATCH {flag:true}`
+  twice lands where the caller intended. Both now 404 on a missing id instead of
+  surfacing a raw rusqlite error.
+- New reads the writes needed: `reports::get_register_row` (the response shape
+  for every transaction edit), `reconciler::list_reconciliations`,
+  `undo::import_exists`.
+- Server: extract.rs adds `ApiJson`/`ApiPath` so a malformed body or a
+  non-numeric id answers inside the error envelope rather than axum's plain
+  text; routes/mod.rs gains `double_option` (absent vs explicit null),
+  `ensure_account_exists` (promoted from reports.rs), and the `Deleted` body.
+- CLI fixes that fell out: `rules add --match-type bogus` and an uncompilable
+  regex now error instead of saving a rule the categorizer can never match;
+  `accounts add` gained the duplicate-name and type checks it had bypassed by
+  inserting directly.
+
+## Semantics worth knowing
+
+- PATCH is a true partial update; `null` clears `vendor`, `taxLine`, `formLine`.
+  `categoryId: null` is a 400 — uncategorizing is what review undo is for.
+- Multi-field transaction edits run in one `unchecked_transaction`, so a
+  rejected `categoryId` does not leave the vendor change behind.
+- Creates answer 201; deletes answer 200 with a small JSON body so every
+  response decodes the same way.
+- Review undo deletes the created rule outright rather than deactivating it,
+  which is what makes the back button leave no trace.
+
+## Tests
+
+430 lib + 25 CLI dispatch tests, green under --test-threads=1. New coverage: the
+rules data layer (partial updates, already-inactive conflicts, match-type and
+regex validation, `test_pattern` parity against `categorizer::matches` for all
+three match types), delete blockers and their counts, flag idempotency,
+`get_register_row`, reconciliation history, `import_exists`, the error-code
+mapping table, and per-endpoint HTTP tests including a table-driven locked-423
+sweep over all 13 write routes — a mutation mounted outside `data_router()`
+fails that test.
+
+## Docs
+
+docs/api.md gains a "Changing data" section: the 19-route table, write
+conventions, per-group detail with request/response examples, and the
+conflict-reason table. CLAUDE.md records the new modules, the data-layer
+additions, and four behavioral constraints (structured reasons, idempotent flag,
+null-clears-column, match-type validation).
+
+## Verification
+
+Full 8-command matrix: fmt clean; build clean; `cargo test` 430+25;
+`--no-default-features` 331+26; `--no-default-features --features serve` 423+25;
+`cargo clippy --all-targets -D warnings` clean; `clippy --no-default-features`
+reports exactly the two pre-existing task-34 `needless_return` lints
+(dashboard.rs:852, report/mod.rs:160) and nothing new. Manual curl smoke over
+every write route recorded in the implementation notes.
+
+## Risks and follow-ups
+
+- A wrong HTTP method on a valid path is still axum's bodyless 405 — the one
+  response outside the error envelope. Documented in docs/api.md, not fixed.
+- `PATCH /api/accounts/:id` renames only; institution and last four have no
+  update path in the data layer. 31.16 can request one if its screen needs it.
+<!-- SECTION:FINAL_SUMMARY:END -->

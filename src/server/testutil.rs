@@ -89,6 +89,66 @@ pub fn session_post(uri: &str, token: &str, body: &str) -> Request<Body> {
         .expect("request")
 }
 
+/// A request with a session cookie, a method, and an optional JSON body.
+pub fn session_request(method: &str, uri: &str, token: &str, body: Option<&str>) -> Request<Body> {
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, format!("nigel_session={token}"));
+    match body {
+        Some(json) => builder
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json.to_owned()))
+            .expect("request"),
+        None => builder.body(Body::empty()).expect("request"),
+    }
+}
+
+async fn send(app: &Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    let uri = request.uri().to_string();
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    assert!(
+        content_type(&response).starts_with("application/json"),
+        "{uri} did not answer with JSON"
+    );
+    (status, json_body(response).await)
+}
+
+/// POST a JSON body with a valid session.
+pub async fn post_json(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    send(
+        app,
+        session_request("POST", uri, token, Some(&body.to_string())),
+    )
+    .await
+}
+
+/// PATCH a JSON body with a valid session.
+pub async fn patch_json(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    send(
+        app,
+        session_request("PATCH", uri, token, Some(&body.to_string())),
+    )
+    .await
+}
+
+/// DELETE with a valid session.
+pub async fn delete_json(app: &Router, uri: &str, token: &str) -> (StatusCode, serde_json::Value) {
+    send(app, session_request("DELETE", uri, token, None)).await
+}
+
 pub fn unlock_body(password: &str) -> String {
     serde_json::json!({ "password": password }).to_string()
 }
@@ -128,7 +188,7 @@ pub async fn ok_json(app: &Router, uri: &str, token: &str) -> serde_json::Value 
 /// Every route that reads the database, for tests that must hold across all of
 /// them — the locked guard especially, where a route mounted in the wrong place
 /// would silently answer while the database is still encrypted.
-pub const DATA_ROUTES: [&str; 13] = [
+pub const DATA_ROUTES: [&str; 16] = [
     "/api/reports/pnl",
     "/api/reports/expenses",
     "/api/reports/tax",
@@ -142,7 +202,47 @@ pub const DATA_ROUTES: [&str; 13] = [
     "/api/rules",
     "/api/imports",
     "/api/csv-profiles",
+    "/api/review/queue",
+    "/api/review/1",
+    "/api/reconciliations",
 ];
+
+/// Every route that writes, as method, path, and a body good enough to reach
+/// the handler. The locked guard has to refuse all of them: a mutation that
+/// slipped past it would be changing a database nobody has unlocked.
+pub const WRITE_ROUTES: [(&str, &str, &str); 13] = [
+    ("PATCH", "/api/transactions/1", r#"{"flag":true}"#),
+    ("POST", "/api/categorize", "{}"),
+    ("POST", "/api/review/1/apply", r#"{"categoryId":1}"#),
+    ("POST", "/api/review/1/undo", "{}"),
+    (
+        "POST",
+        "/api/accounts",
+        r#"{"name":"X","accountType":"checking"}"#,
+    ),
+    ("PATCH", "/api/accounts/1", r#"{"name":"X"}"#),
+    ("DELETE", "/api/accounts/1", ""),
+    (
+        "POST",
+        "/api/categories",
+        r#"{"name":"X","categoryType":"expense"}"#,
+    ),
+    ("PATCH", "/api/categories/1", r#"{"name":"X"}"#),
+    ("DELETE", "/api/categories/1", ""),
+    ("POST", "/api/rules", r#"{"pattern":"X","categoryId":1}"#),
+    ("POST", "/api/rules/test", r#"{"pattern":"X"}"#),
+    ("DELETE", "/api/imports/1", ""),
+];
+
+/// Send one entry of [`WRITE_ROUTES`].
+pub async fn send_write(
+    app: &Router,
+    (method, uri, body): (&str, &str, &str),
+    token: &str,
+) -> (StatusCode, serde_json::Value) {
+    let body = (!body.is_empty()).then_some(body);
+    send(app, session_request(method, uri, token, body)).await
+}
 
 /// An initialized database with a fixed, hand-built data set.
 ///
