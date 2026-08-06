@@ -139,6 +139,21 @@ nigel update
 nigel completions bash                            # Also: zsh, fish, powershell
 ```
 
+## Automated backups
+
+`nigel backup` uses SQLite's online-backup API, so it produces a consistent snapshot even while Nigel is running, and an encrypted database yields an encrypted backup. Copying `nigel.db` with `cp` or a file-sync tool does **not** give you this — such a copy can catch the database mid-write, along with an out-of-step `-wal` file, and may not restore.
+
+On an encrypted database, `nigel` normally prompts for the password on the terminal. Scheduled jobs have no terminal, so set `NIGEL_DB_PASSWORD` instead:
+
+```bash
+NIGEL_DB_PASSWORD="$(security find-generic-password -s nigel-db -w)" \
+  nigel backup --output ~/Documents/nigel/main/backups/nigel-$(date +%F).db
+```
+
+If `NIGEL_DB_PASSWORD` is set but wrong, the command fails immediately rather than falling back to a prompt no scheduled job could answer. Leave it unset for normal interactive use.
+
+Read the password from a secret store, as above, rather than writing it into a script or a launchd plist. Note that an environment variable is visible to other processes running as you (`ps -E`), so on a shared account prefer running the backup interactively.
+
 ## Configuration
 
 Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch.

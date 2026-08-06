@@ -622,3 +622,85 @@ fn completions_skips_the_password_and_migration_preflight() {
         .success()
         .stdout(predicate::str::contains("_nigel"));
 }
+
+/// Read the SQLite magic header to tell an encrypted database from a plaintext one.
+fn is_encrypted_file(path: &std::path::Path) -> bool {
+    let bytes = std::fs::read(path).expect("failed to read database");
+    !bytes.starts_with(b"SQLite format 3\0")
+}
+
+#[test]
+fn backup_unlocks_encrypted_database_from_env() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    let backup_path = env.home.path().join("env-unlocked.db");
+    env.cmd()
+        .args(["backup", "--output", &backup_path.to_string_lossy()])
+        .env("NIGEL_DB_PASSWORD", "hunter2")
+        .write_stdin("")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup saved to"));
+
+    assert!(backup_path.exists(), "backup file should exist");
+    assert!(
+        is_encrypted_file(&backup_path),
+        "backup of an encrypted database must itself be encrypted"
+    );
+
+    // The snapshot must open with the same password and carry the demo data,
+    // so a backup that merely exists is not mistaken for one that can restore.
+    let conn = rusqlite::Connection::open(&backup_path).unwrap();
+    conn.pragma_update(None, "key", "hunter2").unwrap();
+    let accounts: i64 = conn
+        .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))
+        .expect("backup should be readable with the original password");
+    assert!(accounts > 0, "backup should contain the demo accounts");
+}
+
+#[test]
+fn backup_fails_fast_on_wrong_env_password() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    // The timeout is the assertion that matters: falling through to the interactive
+    // prompt would block here rather than returning, hanging any automated caller.
+    env.cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "wrong-password")
+        .write_stdin("")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("NIGEL_DB_PASSWORD"));
+}
+
+#[test]
+fn env_password_is_not_echoed_on_failure() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    let output = env
+        .cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "sup3rs3cret")
+        .write_stdin("")
+        .timeout(std::time::Duration::from_secs(60))
+        .output()
+        .unwrap();
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !combined.contains("sup3rs3cret"),
+        "password leaked into output:\n{combined}"
+    );
+}

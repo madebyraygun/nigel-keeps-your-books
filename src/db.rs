@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
+use zeroize::Zeroize;
 
 use crate::error::Result;
 use crate::migrations;
@@ -414,12 +415,46 @@ pub fn validate_password(db_path: &Path, password: &str) -> Result<bool> {
     }
 }
 
-/// If the database is encrypted, prompt the user for a password (up to 3 attempts).
+/// Environment variable consulted for the database password before prompting,
+/// so `nigel` can unlock an encrypted database where no terminal exists.
+pub const PASSWORD_ENV_VAR: &str = "NIGEL_DB_PASSWORD";
+
+/// Validate a password supplied through the environment, where `raw` is the
+/// variable's value or `None` when unset. `Ok(None)` means nothing was supplied
+/// and the caller should prompt.
+///
+/// `raw` is a parameter rather than read from the process environment here
+/// because cargo runs tests as parallel threads of one process, which share
+/// one environment and would clobber each other's setting.
+fn env_password(db_path: &Path, raw: Option<String>) -> Result<Option<String>> {
+    let Some(mut pw) = raw else {
+        return Ok(None);
+    };
+    if validate_password(db_path, &pw)? {
+        return Ok(Some(pw));
+    }
+    pw.zeroize();
+    Err(crate::error::NigelError::Other(format!(
+        "{PASSWORD_ENV_VAR} is set but does not unlock the database."
+    )))
+}
+
+/// If the database is encrypted, unlock it from `NIGEL_DB_PASSWORD`, falling
+/// back to prompting the user (up to 3 attempts).
 /// Sets the global password on success. Returns an error after 3 failures.
 pub fn prompt_password_if_needed(db_path: &Path) -> Result<()> {
     if !is_encrypted(db_path)? {
         return Ok(());
     }
+
+    // A caller running unattended cannot answer the prompt below, so a password
+    // supplied via the environment is authoritative: a wrong one fails here
+    // rather than falling through to a prompt that would hang the job.
+    if let Some(pw) = env_password(db_path, std::env::var(PASSWORD_ENV_VAR).ok())? {
+        set_db_password(Some(pw));
+        return Ok(());
+    }
+
     for attempt in 1..=3 {
         let pw = rpassword::prompt_password("Database password: ")
             .map_err(|e| crate::error::NigelError::Other(e.to_string()))?;
@@ -691,6 +726,65 @@ mod tests {
         let path = dir.path().join("garbage.db");
         std::fs::write(&path, b"this is not a database at all").unwrap();
         assert!(!validate_password(&path, "test").unwrap());
+    }
+
+    /// Build an encrypted database at a temp path locked with "secret".
+    fn encrypted_db() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("encrypted.db");
+        set_db_password(Some("secret".into()));
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        set_db_password(None);
+        (dir, db_path)
+    }
+
+    #[test]
+    fn test_env_password_unset_defers_to_prompt() {
+        let (_dir, db_path) = encrypted_db();
+        assert_eq!(env_password(&db_path, None).unwrap(), None);
+    }
+
+    #[test]
+    fn test_env_password_correct_unlocks() {
+        let (_dir, db_path) = encrypted_db();
+        let resolved = env_password(&db_path, Some("secret".into())).unwrap();
+        assert_eq!(resolved.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn test_env_password_wrong_errors_without_prompting() {
+        let (_dir, db_path) = encrypted_db();
+        let err = env_password(&db_path, Some("wrong".into())).unwrap_err();
+        assert!(err.to_string().contains(PASSWORD_ENV_VAR));
+    }
+
+    #[test]
+    fn test_env_password_empty_errors() {
+        let (_dir, db_path) = encrypted_db();
+        assert!(env_password(&db_path, Some(String::new())).is_err());
+    }
+
+    #[test]
+    fn test_env_password_error_does_not_leak_password() {
+        let (_dir, db_path) = encrypted_db();
+        let err = env_password(&db_path, Some("hunter2".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("hunter2"));
+    }
+
+    #[test]
+    fn test_env_password_ignored_for_plain_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("plain.db");
+        let conn = get_connection(&db_path).unwrap();
+        init_db(&conn).unwrap();
+        drop(conn);
+        // Unencrypted databases short-circuit before the environment is read,
+        // so a stale variable cannot lock the user out of their own database.
+        assert!(prompt_password_if_needed(&db_path).is_ok());
     }
 
     #[test]
