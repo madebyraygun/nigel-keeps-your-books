@@ -1,11 +1,11 @@
 ---
 id: TASK-31.9
 title: 'SPA scaffold: app shell, api client seam, embedded build'
-status: In Progress
+status: Done
 assignee:
   - '@agent-31.9'
 created_date: '2026-08-06 16:26'
-updated_date: '2026-08-06 21:01'
+updated_date: '2026-08-06 21:51'
 labels:
   - web
   - frontend
@@ -26,11 +26,11 @@ Create the web/ SPA (Vite; framework, component library, and patterns carried ov
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 SPA builds and is embedded in the binary; nigel serve serves it at the root path
-- [ ] #2 All server communication flows through the single api client module — no scattered fetch calls — with token and locked-state handling centralized
-- [ ] #3 Routing and navigation shell exists with routes stubbed for all planned screens
-- [ ] #4 Dev workflow (vite proxy against nigel serve) is documented and works
-- [ ] #5 CI builds the SPA and cargo test stays green
+- [x] #1 SPA builds and is embedded in the binary; nigel serve serves it at the root path
+- [x] #2 All server communication flows through the single api client module — no scattered fetch calls — with token and locked-state handling centralized
+- [x] #3 Routing and navigation shell exists with routes stubbed for all planned screens
+- [x] #4 Dev workflow (vite proxy against nigel serve) is documented and works
+- [x] #5 CI builds the SPA and cargo test stays green
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -765,3 +765,134 @@ serve --no-open` -> the "SPA not built" placeholder renders, nothing panics.
 Staleness path: `npm run build` then `cargo run -- serve` without touching any
 .rs file -> the new bundle is served (proves build.rs's rerun-if-changed works).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch nigel-31-spa (worktree /home/dalton/Dev/nigel/nigel-31-spa),
+five commits: 282ae55 workspace + build.rs, b673b43 theme, c9f3e95 ui,
+9c0d505 app, c1ffbf4 ci + docs.
+
+Deviations found during implementation, all within the approved plan's intent:
+
+- Lit's `css` refuses non-CSSResult interpolation, so the palette ramp goes
+  through `unsafeCSS`. Input is a join of frozen hex literals, so there is
+  nothing for an injection to ride in on.
+- jsdom needed one shim the plan did not anticipate: `Element.getAnimations`.
+  Web Awesome awaits it from a requestAnimationFrame callback on every dialog
+  show/hide, where a throw escapes as an uncaught exception rather than a
+  failed assertion. Seven such errors were surfacing before the shim.
+- The api-seam guard flagged its own pattern literals. It now skips its own
+  file and carries a positive control asserting each pattern still matches a
+  synthetic violation, so the exclusion cannot silently disarm the guard.
+- @nigel/app sets `declaration: false`: it inherits `declaration: true` from
+  the base config, and declaration emit fails outright on
+  SignalWatcher(LitElement) because a mixin's return type has no name to write
+  into a .d.ts. Applications publish no types, so nothing is lost.
+- @nigel/ui needed `types: ["vite/client", "node"]` for the preview harness
+  (import.meta.glob and the node builtins its plugin reads files with).
+  tsconfig.build.json excludes preview/, so none of it reaches the published
+  types.
+- The root-index server test asserted the placeholder's marker text, which the
+  built SPA does not contain. It now asserts `<title>Nigel</title>`, which both
+  carry, so the Rust suite no longer depends on whether web/ has been built.
+
+Verified the two build paths the placeholder mechanism exists for: removing
+web/dist and running cargo build re-seeds the placeholder and compiles; running
+npm run build then cargo build re-embeds the real SPA with no .rs file touched,
+which is the rust-embed staleness bug the build script fixes.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Builds the whole web/ SPA workspace: the app shell, the api client seam, and
+the embedded build. Screen tasks 31.10-31.17 now only add screens and
+components.
+
+## What changed
+
+**web/ npm workspace** (no turbo, three packages built in order):
+
+- `@nigel/theme` — per-category Lit `css` token modules composed into one
+  CSSResult plus a generated plain stylesheet. Tokens shadow Web Awesome's
+  `--wa-*` namespace (no WA stylesheet is loaded); nigel-specific tokens use
+  `--nc-*`. The brand palette is the `src/effects.rs` pastel rainbow, used raw
+  for gradients and dark mode and darkened for every solid semantic color.
+- `@nigel/ui` — wc-app-shell, wc-nav-sidebar, wc-toast, wc-confirm, wc-money,
+  wc-empty-state, wc-spinner, WcIconBase and 18 icons, each with a co-located
+  preview and an axe test. Preview harness on port 9090.
+- `@nigel/app` — 3-line bootstrap, `nigel-app` root container, screen registry,
+  hash routing, app store, and the api client.
+
+**Api client seam.** `web/apps/app/src/api/` is the only module that talks to
+the server. `ApiClient` has one typed method per endpoint and deliberately no
+generic `request()` — exposing one would let screens hand-roll URLs, which a
+Tauri or remote-server implementation cannot honour. `FetchApiClient`
+normalizes network failures, error envelopes, and status-only errors into a
+typed `ApiError`, and owns the `appLocked` (423) and `appUnauthorized` (401)
+transport signals.
+
+**Routing.** One `Record<ScreenId, ScreenDef>` feeds the sidebar, the header
+and the content area, so a missing screen is a compile error rather than a
+blank page — the epic's departure from boxcraft's three-place screen identity.
+`location.hash` is the only writer of route state, which is what makes the back
+button and a pasted deep link behave like a click. Routes already carry query
+params so screen tasks need not reopen the seam.
+
+**Embedded build.** Vite writes to `web/dist`, which rust-embed bakes in.
+
+## Notable fixes beyond the brief
+
+- **rust-embed staleness.** `debug-embed` controls when assets are baked in,
+  not when cargo reconsiders them, and its proc macro cannot emit
+  `cargo:rerun-if-changed`. Without a build script, `npm run build` followed by
+  `cargo run` served the previously embedded bytes. The new `build.rs` emits
+  the key and also seeds `web/dist` from the committed
+  `web/placeholder/index.html` so `cargo build` still works without node. This
+  also removes the dirty-tree problem of committing a file at the vite output
+  path.
+- **release.yml had no node step at all**, so every published binary would have
+  shipped the "SPA not built" placeholder. Both release jobs now build the web
+  UI first.
+
+## Deliberate departures (all approved)
+
+- `wc-money` renders a literal minus sign rather than relying on color as
+  `tui::money_span` does — a terminal can lean on red/green, a browser cannot
+  (WCAG 1.4.1). Tested against the exact vectors `src/fmt.rs` asserts.
+- `wc-toast` listens on `window`, so toasts still reach the region from inside
+  wa-dialog's top layer.
+- The axe suite is driven off the preview object rather than restating states
+  in the test, so adding a state adds its a11y test.
+- System font stacks, no bundled webfonts. In-house icon geometry, no
+  third-party icon license in the binary.
+
+## Guards added
+
+Palette parity against `src/effects.rs`; WCAG AA contrast over 17 pairings in
+both modes; no-fetch-outside-src/api (with a positive control so excluding the
+guard from its own scan cannot disarm it); dependency manifest; screen registry
+completeness; theme token contract.
+
+## Tests
+
+336 web tests (theme 79, ui 158, app 99) plus lint, typecheck and build green
+across all three packages. Full cargo matrix green: fmt, build, test (382+25),
+`--no-default-features` (309+26), `--no-default-features --features serve`
+(375+25), clippy on default features. `clippy --no-default-features` reports
+exactly the two known task-34 `needless_return` lints and nothing else.
+
+End to end, `cargo run -- serve --no-open` serves the real SPA — verified by
+curl that `/` returns the built app rather than the placeholder, that hashed
+assets serve with correct MIME types, that unknown paths fall back to index,
+that `/auth?token=` sets the session cookie and redirects, and that
+ping/status/unlock match `types.ts` field for field.
+
+## Risks and follow-ups
+
+- CLAUDE.md and both workflow files will conflict with the concurrent API
+  stream; the edits were kept additive to ease that merge.
+- `environmentMatchGlobs` is deprecated in vitest 3. We pin ^2, so it works
+  today; migrating to `projects` is a later chore.
+<!-- SECTION:FINAL_SUMMARY:END -->
