@@ -1,10 +1,10 @@
 ---
 id: TASK-39
 title: Support non-interactive database unlock for automated backups
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-06 18:31'
-updated_date: '2026-08-06 20:22'
+updated_date: '2026-08-06 22:10'
 labels:
   - enhancement
 dependencies: []
@@ -52,7 +52,7 @@ The `~/Scripts/backups/k2so/dr-backup.sh` rclone job, which currently file-copie
 - [x] #6 All linting checks pass
 - [x] #7 Update test coverage
 - [x] #8 Create or update documentation, making sure to remove any out of date information
-- [ ] #9 **IMPORTANT**: Any PRs created from this issue must be created as DRAFTS until manually reviewed by the user
+- [x] #9 **IMPORTANT**: Any PRs created from this issue must be created as DRAFTS until manually reviewed by the user
 <!-- AC:END -->
 
 ## Implementation Notes
