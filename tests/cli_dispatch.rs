@@ -736,6 +736,7 @@ fn env_password_is_not_echoed_on_failure() {
         !combined.contains("sup3rs3cret"),
         "password leaked into output:\n{combined}"
     );
+}
 
 // ---------------------------------------------------------------------------
 // recategorize
@@ -1045,4 +1046,21 @@ fn recategorize_zero_match_filter_exits_cleanly() {
         .assert()
         .success()
         .stdout(predicate::str::contains("No transactions matched."));
+}
+
+#[test]
+fn recategorize_works_on_encrypted_db_via_env_password() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+    env.encrypt("hunter2");
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", "Travel"])
+        .env("NIGEL_DB_PASSWORD", "hunter2")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
 }
