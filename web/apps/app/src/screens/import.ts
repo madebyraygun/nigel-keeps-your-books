@@ -1,0 +1,12 @@
+import { html, type TemplateResult } from 'lit';
+import '@nigel/ui';
+
+export function renderImport(): TemplateResult {
+  return html`
+    <wc-empty-state
+      icon="wc-icon-import"
+      heading="Import"
+      message="Importing bank CSV and XLSX statements arrives in task 31.14."
+    ></wc-empty-state>
+  `;
+}
