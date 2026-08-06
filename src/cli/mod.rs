@@ -17,6 +17,7 @@ pub mod load_manager;
 pub mod onboarding;
 pub mod password;
 pub mod password_manager;
+pub mod recategorize;
 pub mod reconcile;
 pub mod reconcile_manager;
 pub mod report;
@@ -105,6 +106,11 @@ pub enum Commands {
     },
     /// Re-run categorization rules on uncategorized transactions.
     Categorize,
+    /// Change the category of existing transactions by ID or filters.
+    Recategorize {
+        #[command(flatten)]
+        args: recategorize::RecategorizeArgs,
+    },
     /// Manage categorization rules.
     Rules {
         #[command(subcommand)]

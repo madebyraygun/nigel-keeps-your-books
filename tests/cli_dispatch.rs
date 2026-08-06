@@ -737,3 +737,330 @@ fn env_password_is_not_echoed_on_failure() {
         "password leaked into output:\n{combined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// recategorize
+// ---------------------------------------------------------------------------
+
+/// Pick a transaction ID and its current category name from the demo data.
+fn any_categorized_txn(env: &TestEnv) -> (i64, String) {
+    env.db()
+        .query_row(
+            "SELECT t.id, c.name FROM transactions t JOIN categories c ON t.category_id = c.id \
+             WHERE c.name != 'Travel' LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("demo data has categorized transactions")
+}
+
+#[test]
+fn recategorize_by_id_moves_and_clears_flag() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+    env.db()
+        .execute(
+            "UPDATE transactions SET is_flagged = 1, flag_reason = 'x' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", "Travel"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+
+    let (cat, flagged): (String, i64) = env
+        .db()
+        .query_row(
+            "SELECT c.name, t.is_flagged FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(cat, "Travel");
+    assert_eq!(flagged, 0);
+}
+
+#[test]
+fn recategorize_filter_requires_yes_without_tty() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--yes"));
+}
+
+#[test]
+fn recategorize_filter_with_yes_applies() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized"));
+
+    let remaining: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn recategorize_dry_run_writes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "--category",
+            "Travel",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_unknown_id_changes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "999999",
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("999999"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_malformed_month_fails_and_changes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+    let before: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--month",
+            "April",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("expected YYYY-MM"));
+
+    let after: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn recategorize_unknown_target_category_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "--category",
+            "Bogus Category",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Bogus Category"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_unknown_account_filter_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--account",
+            "No Such Bank",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No Such Bank"));
+}
+
+#[test]
+fn recategorize_already_in_target_skips_and_preserves_flag() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+    env.db()
+        .execute(
+            "UPDATE transactions SET is_flagged = 1, flag_reason = 'check me' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", &old])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Skipping 1 already in {old}"
+        )));
+
+    let (flagged, reason): (i64, Option<String>) = env
+        .db()
+        .query_row(
+            "SELECT is_flagged, flag_reason FROM transactions WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flagged, 1);
+    assert_eq!(reason.as_deref(), Some("check me"));
+}
+
+#[test]
+fn recategorize_duplicate_ids_count_once() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            &id.to_string(),
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+}
+
+#[test]
+fn recategorize_zero_match_filter_exits_cleanly() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--pattern",
+            "NO SUCH TRANSACTION DESCRIPTION XYZZY",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No transactions matched."));
+}
+
+#[test]
+fn recategorize_works_on_encrypted_db_via_env_password() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+    env.encrypt("hunter2");
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", "Travel"])
+        .env("NIGEL_DB_PASSWORD", "hunter2")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+}

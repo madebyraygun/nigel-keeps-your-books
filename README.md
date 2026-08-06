@@ -20,6 +20,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
 - **Undo imports** — `nigel undo` rolls back the last import, removing its transactions after confirmation
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
+- **Bulk recategorization** — `nigel recategorize` moves transactions between categories by ID or by filters (category, date range, pattern, account, amount), with `--dry-run` preview and confirmation for filter-based moves
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
@@ -90,6 +91,11 @@ nigel categorize
 # Review flagged transactions
 nigel review
 nigel review --id 185                 # Re-review a specific transaction by ID
+
+# Recategorize transactions non-interactively (by ID, or in bulk by filters)
+nigel recategorize 185 212 --category "Software & Subscriptions"
+nigel recategorize --from-category "Cost of Goods Sold" --year 2025 --category "Supplies" --dry-run
+nigel recategorize --from-category "Cost of Goods Sold" --year 2025 --category "Supplies" --yes
 
 # View reports (interactive ratatui views)
 nigel report pnl --year 2025
