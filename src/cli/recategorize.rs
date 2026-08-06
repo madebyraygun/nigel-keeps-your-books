@@ -109,6 +109,48 @@ pub(crate) fn validate(args: &RecategorizeArgs) -> Result<()> {
             "--year/--month and --from/--to are mutually exclusive".to_string(),
         ));
     }
+    if args.year.is_some() && args.month.is_some() {
+        return Err(NigelError::Other(
+            "--year and --month are mutually exclusive (the month already names its year)"
+                .to_string(),
+        ));
+    }
+    // parse_month_opt is lenient — a malformed month would silently widen the
+    // selection to the whole ledger, so this write path must hard-error instead.
+    if let Some(ref m) = args.month {
+        let parts: Vec<&str> = m.split('-').collect();
+        let ok = parts.len() == 2
+            && parts[0].len() == 4
+            && parts[0].parse::<i32>().is_ok()
+            && parts[1]
+                .parse::<u32>()
+                .map(|v| (1..=12).contains(&v))
+                .unwrap_or(false);
+        if !ok {
+            return Err(NigelError::Other(format!(
+                "Invalid month '{m}': expected YYYY-MM (e.g. 2025-04)"
+            )));
+        }
+    }
+    for (flag, value) in [
+        ("--min-amount", args.min_amount),
+        ("--max-amount", args.max_amount),
+    ] {
+        if let Some(v) = value {
+            if v < 0.0 {
+                return Err(NigelError::Other(format!(
+                    "{flag} must be non-negative: amounts are compared by absolute value"
+                )));
+            }
+        }
+    }
+    if let (Some(min), Some(max)) = (args.min_amount, args.max_amount) {
+        if min > max {
+            return Err(NigelError::Other(
+                "--min-amount is greater than --max-amount".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -116,33 +158,54 @@ pub fn run(args: RecategorizeArgs) -> Result<()> {
     validate(&args)?;
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
 
-    let target_id: i64 = conn
-        .query_row(
-            "SELECT id FROM categories WHERE name = ?1 AND is_active = 1",
-            [&args.category],
-            |row| row.get(0),
-        )
-        .map_err(|_| NigelError::UnknownCategory(args.category.clone()))?;
+    let target_id: i64 = match conn.query_row(
+        "SELECT id, is_active FROM categories WHERE name = ?1 ORDER BY is_active DESC",
+        [&args.category],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    ) {
+        Ok((id, 1)) => id,
+        Ok((_, _)) => {
+            return Err(NigelError::Other(format!(
+                "Category '{}' is inactive. Reactivate it or pick another category.",
+                args.category
+            )))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(NigelError::UnknownCategory(args.category.clone()))
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let candidates = if args.ids.is_empty() {
         let from_category_id = match &args.from_category {
-            Some(name) => Some(
-                conn.query_row("SELECT id FROM categories WHERE name = ?1", [name], |r| {
+            Some(name) => {
+                match conn.query_row("SELECT id FROM categories WHERE name = ?1", [name], |r| {
                     r.get(0)
-                })
-                .map_err(|_| NigelError::UnknownCategory(name.clone()))?,
-            ),
+                }) {
+                    Ok(id) => Some(id),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => {
+                        return Err(NigelError::UnknownCategory(name.clone()))
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
             None => None,
         };
         let account_id = match &args.account {
-            Some(name) => Some(
-                conn.query_row("SELECT id FROM accounts WHERE name = ?1", [name], |r| {
+            Some(name) => {
+                match conn.query_row("SELECT id FROM accounts WHERE name = ?1", [name], |r| {
                     r.get(0)
-                })
-                .map_err(|_| NigelError::UnknownAccount(name.clone()))?,
-            ),
+                }) {
+                    Ok(id) => Some(id),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => {
+                        return Err(NigelError::UnknownAccount(name.clone()))
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
             None => None,
         };
+        // validate() guarantees --month is well-formed and excludes --year here.
         let (year, month) = if args.month.is_some() {
             crate::cli::parse_month_opt(&args.month)
         } else {
@@ -163,43 +226,48 @@ pub fn run(args: RecategorizeArgs) -> Result<()> {
         };
         find_transactions_for_recategorize(&conn, &filter)?
     } else {
-        get_transactions_by_ids(&conn, &args.ids)?
+        let mut ids = args.ids.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        get_transactions_by_ids(&conn, &ids)?
     };
 
     let (to_move, already): (Vec<_>, Vec<_>) = candidates
         .into_iter()
-        .partition(|c| c.category.as_deref() != Some(args.category.as_str()));
+        .partition(|c| c.category_id != Some(target_id));
 
     if to_move.is_empty() && already.is_empty() {
         println!("No transactions matched.");
         return Ok(());
     }
 
-    let mut table = Table::new();
-    table.set_header(vec!["ID", "Date", "Description", "Amount", "Category", "→"]);
-    let mut total = 0.0;
-    for c in &to_move {
-        total += c.amount.abs();
-        table.add_row(vec![
-            Cell::new(c.id),
-            Cell::new(&c.date),
-            Cell::new(&c.description),
-            Cell::new(format!("{:.2}", c.amount)),
-            Cell::new(c.category.as_deref().unwrap_or("—")),
-            Cell::new(&args.category),
-        ]);
+    if !to_move.is_empty() {
+        let mut table = Table::new();
+        table.set_header(vec!["ID", "Date", "Description", "Amount", "Category", "→"]);
+        let mut total = 0.0;
+        for c in &to_move {
+            total += c.amount.abs();
+            table.add_row(vec![
+                Cell::new(c.id),
+                Cell::new(&c.date),
+                Cell::new(&c.description),
+                Cell::new(format!("{:.2}", c.amount)),
+                Cell::new(c.category.as_deref().unwrap_or("—")),
+                Cell::new(&args.category),
+            ]);
+        }
+        println!("{table}");
+        println!(
+            "{} transaction{} → {} (total ${:.2})",
+            to_move.len(),
+            if to_move.len() == 1 { "" } else { "s" },
+            args.category,
+            total
+        );
     }
-    println!("{table}");
     if !already.is_empty() {
         println!("Skipping {} already in {}.", already.len(), args.category);
     }
-    println!(
-        "{} transaction{} → {} (total ${:.2})",
-        to_move.len(),
-        if to_move.len() == 1 { "" } else { "s" },
-        args.category,
-        total
-    );
 
     if to_move.is_empty() {
         return Ok(());
@@ -313,6 +381,42 @@ mod tests {
         args.match_type = "regex".to_string();
         let err = validate(&args).unwrap_err().to_string();
         assert!(err.contains("Invalid regex"), "got: {err}");
+    }
+
+    #[test]
+    fn year_and_month_conflict() {
+        let mut args = base_args();
+        args.year = Some(2025);
+        args.month = Some("2025-06".to_string());
+        let err = validate(&args).unwrap_err().to_string();
+        assert!(err.contains("mutually exclusive"), "got: {err}");
+    }
+
+    #[test]
+    fn malformed_month_errors() {
+        for bad in ["April", "2025", "2025/06", "2025-", "2025-13", "25-06"] {
+            let mut args = base_args();
+            args.month = Some(bad.to_string());
+            let err = validate(&args).unwrap_err().to_string();
+            assert!(err.contains("expected YYYY-MM"), "'{bad}' got: {err}");
+        }
+        let mut args = base_args();
+        args.month = Some("2025-06".to_string());
+        assert!(validate(&args).is_ok());
+    }
+
+    #[test]
+    fn negative_amounts_error() {
+        let mut args = base_args();
+        args.min_amount = Some(-100.0);
+        let err = validate(&args).unwrap_err().to_string();
+        assert!(err.contains("non-negative"), "got: {err}");
+
+        let mut args = base_args();
+        args.min_amount = Some(500.0);
+        args.max_amount = Some(100.0);
+        let err = validate(&args).unwrap_err().to_string();
+        assert!(err.contains("greater than"), "got: {err}");
     }
 
     #[test]

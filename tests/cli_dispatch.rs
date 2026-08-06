@@ -889,3 +889,160 @@ fn recategorize_unknown_id_changes_nothing() {
         .unwrap();
     assert_eq!(cat, old);
 }
+
+#[test]
+fn recategorize_malformed_month_fails_and_changes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+    let before: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--month",
+            "April",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("expected YYYY-MM"));
+
+    let after: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn recategorize_unknown_target_category_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "--category",
+            "Bogus Category",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Bogus Category"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_unknown_account_filter_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--account",
+            "No Such Bank",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No Such Bank"));
+}
+
+#[test]
+fn recategorize_already_in_target_skips_and_preserves_flag() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+    env.db()
+        .execute(
+            "UPDATE transactions SET is_flagged = 1, flag_reason = 'check me' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", &old])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Skipping 1 already in {old}"
+        )));
+
+    let (flagged, reason): (i64, Option<String>) = env
+        .db()
+        .query_row(
+            "SELECT is_flagged, flag_reason FROM transactions WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flagged, 1);
+    assert_eq!(reason.as_deref(), Some("check me"));
+}
+
+#[test]
+fn recategorize_duplicate_ids_count_once() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            &id.to_string(),
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+}
+
+#[test]
+fn recategorize_zero_match_filter_exits_cleanly() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--pattern",
+            "NO SUCH TRANSACTION DESCRIPTION XYZZY",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No transactions matched."));
+}

@@ -158,7 +158,7 @@ pub fn toggle_transaction_flag(conn: &Connection, transaction_id: i64) -> Result
 }
 
 /// Filter for selecting transactions to recategorize. All set fields are ANDed.
-#[derive(Default)]
+/// Amount bounds compare against the absolute transaction amount.
 pub struct RecategorizeFilter {
     pub from_category_id: Option<i64>,
     pub uncategorized: bool,
@@ -173,12 +173,33 @@ pub struct RecategorizeFilter {
     pub max_amount: Option<f64>,
 }
 
+// Manual impl so `..Default::default()` yields a usable match_type — the derived
+// empty string would make any pattern silently match nothing.
+impl Default for RecategorizeFilter {
+    fn default() -> Self {
+        Self {
+            from_category_id: None,
+            uncategorized: false,
+            year: None,
+            month: None,
+            from_date: None,
+            to_date: None,
+            pattern: None,
+            match_type: "contains".to_string(),
+            account_id: None,
+            min_amount: None,
+            max_amount: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RecategorizeCandidate {
     pub id: i64,
     pub date: String,
     pub description: String,
     pub amount: f64,
+    pub category_id: Option<i64>,
     pub category: Option<String>,
 }
 
@@ -188,7 +209,8 @@ fn candidate_from_row(row: &rusqlite::Row) -> rusqlite::Result<RecategorizeCandi
         date: row.get(1)?,
         description: row.get(2)?,
         amount: row.get(3)?,
-        category: row.get(4)?,
+        category_id: row.get(4)?,
+        category: row.get(5)?,
     })
 }
 
@@ -231,7 +253,7 @@ pub fn find_transactions_for_recategorize(
     }
 
     let sql = format!(
-        "SELECT t.id, t.date, t.description, t.amount, c.name \
+        "SELECT t.id, t.date, t.description, t.amount, t.category_id, c.name \
          FROM transactions t LEFT JOIN categories c ON t.category_id = c.id \
          WHERE {} ORDER BY t.date, t.id",
         clauses.join(" AND ")
@@ -243,8 +265,22 @@ pub fn find_transactions_for_recategorize(
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     // Regex (and the other match types) filter in Rust via the categorizer, so the
-    // semantics match rules exactly; SQLite has no regex function loaded.
+    // semantics match rules exactly; SQLite has no regex function loaded. The
+    // categorizer treats a bad match type or regex as "matches nothing", which
+    // here would silently select zero rows — reject both up front instead.
     if let Some(ref pattern) = filter.pattern {
+        let valid_types = ["contains", "starts_with", "regex"];
+        if !valid_types.contains(&filter.match_type.as_str()) {
+            return Err(NigelError::Other(format!(
+                "Invalid match type: {}. Must be one of: {}",
+                filter.match_type,
+                valid_types.join(", ")
+            )));
+        }
+        if filter.match_type == "regex" {
+            regex::Regex::new(pattern)
+                .map_err(|e| NigelError::Other(format!("Invalid regex: {e}")))?;
+        }
         rows.retain(|r| crate::categorizer::matches(&r.description, pattern, &filter.match_type));
     }
     Ok(rows)
@@ -257,7 +293,7 @@ pub fn get_transactions_by_ids(
     let mut out = Vec::with_capacity(ids.len());
     let mut missing = Vec::new();
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.date, t.description, t.amount, c.name \
+        "SELECT t.id, t.date, t.description, t.amount, t.category_id, c.name \
          FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
     )?;
     for &id in ids {
@@ -277,8 +313,9 @@ pub fn get_transactions_by_ids(
     Ok(out)
 }
 
-/// Batch-move transactions to a category, clearing review flags exactly like an
-/// in-app review. All rows update in one transaction — all or nothing.
+/// Batch-move transactions to a category, clearing `is_flagged`/`flag_reason` the
+/// same way a review does. Vendor is left untouched. All rows update in one
+/// transaction — all or nothing.
 pub fn recategorize_transactions(
     conn: &Connection,
     ids: &[i64],
@@ -387,7 +424,6 @@ mod tests {
         let filter = RecategorizeFilter {
             from_category_id: Some(category_id(&conn, "Cost of Goods Sold")),
             year: Some(2025),
-            match_type: "contains".to_string(),
             ..Default::default()
         };
         let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
@@ -416,7 +452,6 @@ mod tests {
 
         let filter = RecategorizeFilter {
             pattern: Some("istock".to_string()),
-            match_type: "contains".to_string(),
             ..Default::default()
         };
         let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
@@ -425,7 +460,6 @@ mod tests {
 
         let filter = RecategorizeFilter {
             min_amount: Some(100.0),
-            match_type: "contains".to_string(),
             ..Default::default()
         };
         let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
@@ -441,13 +475,46 @@ mod tests {
 
         let filter = RecategorizeFilter {
             uncategorized: true,
-            match_type: "contains".to_string(),
             ..Default::default()
         };
         let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, flagged);
         assert!(found[0].category.is_none());
+    }
+
+    #[test]
+    fn test_find_for_recategorize_rejects_bad_pattern_config() {
+        let (_dir, conn) = test_db();
+        add_categorized_txn(
+            &conn,
+            "2025-01-21",
+            "ISTOCKPHOTO",
+            -45.0,
+            "Cost of Goods Sold",
+        );
+
+        let err = find_transactions_for_recategorize(
+            &conn,
+            &RecategorizeFilter {
+                pattern: Some("(".to_string()),
+                match_type: "regex".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid regex"), "got: {err}");
+
+        let err = find_transactions_for_recategorize(
+            &conn,
+            &RecategorizeFilter {
+                pattern: Some("ISTOCK".to_string()),
+                match_type: "fuzzy".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid match type"), "got: {err}");
     }
 
     #[test]

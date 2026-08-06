@@ -8,7 +8,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 
 ## Architecture
 
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, status, password, update, completions
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, recategorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, status, password, update, completions
 - **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `validate_password()` tests a password without side effects; `prompt_password_if_needed()` prompts via rpassword with 3 retries (used by CLI subcommands)
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; `GenericCsvConfig` supports user-defined column mappings stored as profiles in `csv_profiles` table; malformed CSV rows are counted and reported in import output
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
@@ -27,7 +27,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Goodbye:** `cli/goodbye.rs` — 1.2-second farewell screen shown when quitting the dashboard; displays Nigel ASCII logo with "Goodbye!" text, plays the reverse of the splash reveal animation (characters disappear), with particle background; dismissable by any keypress
 - **Updater:** `cli/update.rs` — `nigel update` command and launch-time version check; queries GitHub Releases API for latest version, compares via `semver`, downloads correct platform binary, and self-replaces via `self_replace` crate; `check_and_notify()` runs on launch with 24-hour cooldown (stored in `last_update_check` in settings.json); opt-out via `update_check: false` in settings; dashboard shows yellow notification bar; CLI prints to stderr
 - **Settings Manager:** `cli/settings_manager.rs` — inline TUI screen for managing app settings; shows editable business name (saved to DB metadata as `company_name`), password management, and auto-update check toggle; password sub-screen delegates to `PasswordManager`
-- **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, text wrapping, and incremental text search), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
+- **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review + recategorize data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, text wrapping, and incremental text search), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation, which `main.rs` invokes in its dispatch pre-flight for every subcommand except `init`, `demo`, `load`, `update`, `password`, `completions`, and `restore`, and which the dashboard invokes in its own pre-flight, so every normal use of the app brings the schema up to date; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases; v2 adds `csv_profiles` table for generic CSV column mappings; v3 backfills `form_line` on the stock chart-of-accounts categories
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
 - **Accounting model:** Cash-basis, single-entry. Negative amounts = expenses, positive = income. Categories map to IRS Schedule C / Form 1120-S line items via `tax_line` and `form_line` columns.
@@ -68,6 +68,9 @@ nigel rules update 1 --priority 10                # Update a rule field
 nigel rules update 5 --category "Rent / Lease"    # Reassign rule category
 nigel rules delete 3                              # Deactivate a rule (soft-delete)
 nigel categorize                                  # Re-run rules on uncategorized
+nigel recategorize 185 212 --category "Travel"    # Bulk move by IDs (applies immediately)
+nigel recategorize --from-category "Cost of Goods Sold" --year 2025 --category "Supplies" --yes
+                                                  # Bulk move by filters (--dry-run to preview; --yes to apply)
 nigel review                                      # Interactive review
 nigel review --id 185                             # Re-review a specific transaction by ID
 nigel report pnl --year 2025                      # Interactive view (ratatui)
@@ -113,6 +116,7 @@ Do not merge or mark work complete if docs are stale.
 ## Key Design Constraints
 
 - All financial modifications require user confirmation — auto-categorizes but never silently changes confirmed data
+- `recategorize` confirmation asymmetry: explicit IDs apply immediately (typing the IDs is the confirmation); filter selections print the matched rows and require `--yes`, or a y/N prompt on a TTY. Filter mode with zero filters is an error, and a malformed `--month` is a hard error — never a silently widened selection
 - Interactive review supports back navigation: Esc goes back to re-review the previous transaction (undoing its categorization and any created rule), Tab skips forward
 - Duplicate detection uses file checksums (imports table) and transaction-level matching (date + amount + description + account)
 - Rules are ordered by priority DESC; first match wins
@@ -154,6 +158,7 @@ src/
     undo.rs             # nigel undo (undo last import, data-layer + CLI)
     undo_manager.rs     # TUI undo screen (confirm + execute from dashboard)
     categorize.rs       # nigel categorize
+    recategorize.rs     # nigel recategorize (bulk category reassignment by IDs or filters)
     rules.rs            # nigel rules add/list/update/delete/test
     rules_manager.rs    # TUI rules screen (scrollable list + delete)
     password.rs         # nigel password set/change/remove (encrypt/decrypt/rekey)
