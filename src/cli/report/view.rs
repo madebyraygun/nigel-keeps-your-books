@@ -108,6 +108,11 @@ const HEADER_ROW_STYLE: Style = Style::new()
     .fg(Color::DarkGray)
     .add_modifier(Modifier::BOLD);
 
+#[cfg(feature = "pdf")]
+const EXPORT_HINT: &str = "e=export pdf  t=export text  ";
+#[cfg(not(feature = "pdf"))]
+const EXPORT_HINT: &str = "t=export text  ";
+
 pub(crate) struct TableReportView {
     title: String,
     header: Row<'static>,
@@ -115,6 +120,7 @@ pub(crate) struct TableReportView {
     widths: Vec<Constraint>,
     offset: usize,
     visible_count: usize,
+    export_hints: bool,
     // Date navigation state
     granularity: DateGranularity,
     period_mode: PeriodMode,
@@ -137,6 +143,7 @@ impl TableReportView {
             widths,
             offset: 0,
             visible_count: 20,
+            export_hints: false,
             granularity: DateGranularity::None,
             period_mode: PeriodMode::Year,
             year: chrono::Datelike::year(&now),
@@ -277,9 +284,10 @@ impl ReportView for TableReportView {
             DateGranularity::YearOnly => "\u{2190}/\u{2192}=year  ",
             DateGranularity::None => "",
         };
+        let export_hint = if self.export_hints { EXPORT_HINT } else { "" };
         frame.render_widget(
             Paragraph::new(format!(
-                " {nav_hint}\u{2191}/\u{2193}=scroll  q/Esc=close{pos_info}"
+                " {nav_hint}{export_hint}\u{2191}/\u{2193}=scroll  q/Esc=close{pos_info}"
             ))
             .style(FOOTER_STYLE),
             footer_area,
@@ -336,6 +344,10 @@ impl ReportView for TableReportView {
 
     fn date_params(&self) -> (Option<i32>, Option<String>) {
         self.date_params()
+    }
+
+    fn set_export_hints(&mut self, enabled: bool) {
+        self.export_hints = enabled;
     }
 }
 

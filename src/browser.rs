@@ -51,6 +51,7 @@ pub struct RegisterBrowser {
     search_matches: Vec<usize>,
     search_index: usize,
     search_query: String,
+    export_hints: bool,
 }
 
 impl RegisterBrowser {
@@ -88,7 +89,27 @@ impl RegisterBrowser {
             search_matches: Vec::new(),
             search_index: 0,
             search_query: String::new(),
+            export_hints: false,
         }
+    }
+
+    /// Show the export key hints in the footer. Only the dashboard binds the
+    /// export keys, so standalone browsing (`nigel browse register`) leaves
+    /// this off.
+    pub fn set_export_hints(&mut self, enabled: bool) {
+        self.export_hints = enabled;
+    }
+
+    /// Whether the host may claim the export keys before this browser sees them.
+    pub fn export_hints_enabled(&self) -> bool {
+        self.export_hints
+    }
+
+    /// Whether the browser is currently reading typed text (search, jump-to,
+    /// or an inline edit). A host must pass every key straight through while
+    /// this is true, or typed characters get eaten as commands.
+    pub fn is_capturing_input(&self) -> bool {
+        !matches!(self.mode, BrowseMode::Normal)
     }
 
     /// Scroll so that the last transaction on or before today is visible.
@@ -357,8 +378,13 @@ impl RegisterBrowser {
                 } else {
                     "  n:next match  N:prev match"
                 };
+                let export_keys = match (self.export_hints, cfg!(feature = "pdf")) {
+                    (false, _) => "",
+                    (true, true) => "  x:pdf  t:text",
+                    (true, false) => "  t:text",
+                };
                 Paragraph::new(format!(
-                    "\u{2191}/\u{2193}:select  e:edit  f:flag  \u{2192}:next  \u{2190}:prev  g:page  d:date  i:id  /:search{search_keys}  q:quit"
+                    "\u{2191}/\u{2193}:select  e:edit  f:flag  \u{2192}:next  \u{2190}:prev  g:page  d:date  i:id  /:search{search_keys}{export_keys}  q:quit"
                 ))
                 .style(FOOTER_STYLE)
             }
@@ -1002,6 +1028,42 @@ mod tests {
         assert_eq!(browser.offset, 0); // unchanged
         assert!(browser.status_message.is_some());
         assert!(browser.status_message.as_ref().unwrap().contains("999"));
+    }
+
+    #[test]
+    fn test_export_hints_are_opt_in() {
+        let mut browser = RegisterBrowser::new(make_rows(5), 0.0, String::new(), vec![]);
+        assert!(!browser.export_hints_enabled());
+        browser.set_export_hints(true);
+        assert!(browser.export_hints_enabled());
+    }
+
+    #[test]
+    fn test_is_capturing_input_tracks_mode() {
+        let mut browser = RegisterBrowser::new(make_rows(5), 0.0, String::new(), make_categories());
+        assert!(!browser.is_capturing_input());
+
+        for key in ['/', 'g', 'd', 'i', 'e'] {
+            browser.handle_key_event(KeyCode::Char(key));
+            assert!(
+                browser.is_capturing_input(),
+                "'{key}' should start capturing input"
+            );
+            browser.handle_key_event(KeyCode::Esc);
+            assert!(!browser.is_capturing_input(), "Esc should end '{key}' mode");
+        }
+    }
+
+    #[test]
+    fn test_export_key_chars_are_typed_into_search() {
+        let mut browser = RegisterBrowser::new(make_rows(5), 0.0, String::new(), vec![]);
+        browser.handle_key_event(KeyCode::Char('/'));
+        browser.handle_key_event(KeyCode::Char('t'));
+        browser.handle_key_event(KeyCode::Char('x'));
+        match &browser.mode {
+            BrowseMode::Search(q) => assert_eq!(q, "tx"),
+            _ => panic!("expected search mode"),
+        }
     }
 
     #[test]

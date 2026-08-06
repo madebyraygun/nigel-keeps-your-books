@@ -73,6 +73,9 @@ pub trait ReportView {
     fn date_params(&self) -> (Option<i32>, Option<String>) {
         (None, None)
     }
+    /// Show the export key hints in the footer. Only the dashboard binds the
+    /// export keys, so standalone views (`run_report_view`) leave this off.
+    fn set_export_hints(&mut self, _enabled: bool) {}
 }
 
 /// Run an interactive ratatui report view. Sets up the terminal, event loop,
