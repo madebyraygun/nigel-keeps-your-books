@@ -16,6 +16,7 @@ use crate::error::NigelError;
 pub enum ApiErrorCode {
     BadRequest,
     Unauthorized,
+    InvalidPassword,
     Forbidden,
     NotFound,
     Conflict,
@@ -28,7 +29,7 @@ impl ApiErrorCode {
     pub fn status(self) -> StatusCode {
         match self {
             Self::BadRequest => StatusCode::BAD_REQUEST,
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Unauthorized | Self::InvalidPassword => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict => StatusCode::CONFLICT,
@@ -42,6 +43,7 @@ impl ApiErrorCode {
         match self {
             Self::BadRequest => "bad_request",
             Self::Unauthorized => "unauthorized",
+            Self::InvalidPassword => "invalid_password",
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
@@ -83,6 +85,17 @@ impl ApiError {
         Self::new(
             ApiErrorCode::Unauthorized,
             "Not signed in. Open the URL printed by `nigel serve` to start a session.",
+        )
+    }
+
+    /// A rejected unlock attempt. `details` carries the attempt budget and the
+    /// delay the server already applied before answering.
+    pub fn invalid_password(attempts_remaining: u32, retry_after_ms: u128) -> Self {
+        Self::new(ApiErrorCode::InvalidPassword, "Wrong password.").with_details(
+            serde_json::json!({
+                "attemptsRemaining": attempts_remaining,
+                "retryAfterMs": retry_after_ms,
+            }),
         )
     }
 
@@ -173,6 +186,7 @@ mod tests {
         let pairs = [
             (ApiErrorCode::BadRequest, 400, "bad_request"),
             (ApiErrorCode::Unauthorized, 401, "unauthorized"),
+            (ApiErrorCode::InvalidPassword, 401, "invalid_password"),
             (ApiErrorCode::Forbidden, 403, "forbidden"),
             (ApiErrorCode::NotFound, 404, "not_found"),
             (ApiErrorCode::Conflict, 409, "conflict"),
@@ -221,6 +235,16 @@ mod tests {
                 "message": "in use",
                 "details": {"reason": "has_transactions", "count": 3}
             }})
+        );
+    }
+
+    #[test]
+    fn invalid_password_carries_the_attempt_budget() {
+        let err = ApiError::invalid_password(2, 1000);
+        assert_eq!(err.code(), ApiErrorCode::InvalidPassword);
+        assert_eq!(
+            err.details,
+            Some(json!({"attemptsRemaining": 2, "retryAfterMs": 1000}))
         );
     }
 

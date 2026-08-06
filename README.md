@@ -27,7 +27,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network
 - **SQLite storage** — single portable database, no server required
-- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen; backups preserve encryption state
+- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen, or in the browser when using `nigel serve`; backups preserve encryption state
 - **Auto-updater** — checks GitHub Releases for new versions on launch (once per 24 hours); run `nigel update` to download and install the latest binary in-place; opt out via the Settings screen or `update_check: false` in settings.json
 - **Settings screen** — edit business name, manage database password, and toggle auto-update checks from the dashboard (`p` key)
 - **Snake** - 🍎 🐍
@@ -148,7 +148,7 @@ nigel completions bash                            # Also: zsh, fish, powershell
 
 Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch.
 
-`nigel serve` binds 127.0.0.1 only and generates a fresh session token on every start, so the URL it prints is what grants access — it is never saved to disk. Requests from any other host or origin are refused. See [docs/api.md](docs/api.md) for the endpoint inventory and security model.
+`nigel serve` binds 127.0.0.1 only and generates a fresh session token on every start, so the URL it prints is what grants access — it is never saved to disk. Requests from any other host or origin are refused. An encrypted database stays locked until you enter its password in the browser; the password is held in memory for that run only. See [docs/api.md](docs/api.md) for the endpoint inventory and security model.
 
 ## Feature Flags
 

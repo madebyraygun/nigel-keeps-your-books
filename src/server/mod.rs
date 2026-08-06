@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod error;
 pub mod routes;
+pub mod secret;
 pub mod state;
 mod static_files;
 
@@ -104,7 +105,7 @@ async fn shutdown_signal() {
 /// unauthenticated request to an unknown `/api` path would skip the check.
 /// `/auth` and the static assets sit outside the nest and need no session.
 fn build_router(state: AppState) -> Router {
-    let api = routes::api_router().layer(middleware::from_fn_with_state(
+    let api = routes::api_router(&state).layer(middleware::from_fn_with_state(
         state.clone(),
         auth::session_guard,
     ));
@@ -126,6 +127,7 @@ mod tests {
     use tower::ServiceExt;
 
     const HOST: &str = "127.0.0.1:5731";
+    const PASSWORD: &str = "correct horse battery staple";
 
     fn test_app() -> (Router, String) {
         let token = auth::generate_token();
@@ -155,6 +157,60 @@ mod tests {
 
     async fn json_body(response: Response) -> serde_json::Value {
         serde_json::from_str(&body_string(response).await).expect("json body")
+    }
+
+    /// A data directory holding an initialized, unencrypted database. Also
+    /// clears the process-global password, which these tests move around; they
+    /// run under `--test-threads=1` for that reason (see `db.rs`).
+    fn temp_db() -> (tempfile::TempDir, PathBuf) {
+        crate::db::set_db_password(None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("nigel.db");
+        let conn = crate::db::open_connection(&db_path, None).expect("open db");
+        crate::db::init_db(&conn).expect("init db");
+        (dir, db_path)
+    }
+
+    fn encrypt(db_path: &std::path::Path) {
+        crate::cli::password::encrypt_database(db_path, PASSWORD).expect("encrypt db");
+    }
+
+    fn app_for(db_path: &std::path::Path) -> (Router, String) {
+        let token = auth::generate_token();
+        let state = AppState::new(db_path.to_path_buf(), token.clone());
+        (build_router(state), token)
+    }
+
+    fn session_get(uri: &str, token: &str) -> Request<Body> {
+        get_request(uri)
+            .header(header::COOKIE, format!("nigel_session={token}"))
+            .body(Body::empty())
+            .expect("request")
+    }
+
+    fn session_post(uri: &str, token: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(header::HOST, HOST)
+            .header(header::COOKIE, format!("nigel_session={token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_owned()))
+            .expect("request")
+    }
+
+    fn unlock_body(password: &str) -> String {
+        serde_json::json!({ "password": password }).to_string()
+    }
+
+    async fn status_json(app: &Router, token: &str) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(session_get("/api/status", token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        json_body(response).await
     }
 
     #[tokio::test]
@@ -365,6 +421,290 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("/api/does-not-exist"));
+    }
+
+    #[tokio::test]
+    async fn status_describes_an_unencrypted_database() {
+        let (dir, db_path) = temp_db();
+        let conn = crate::db::open_connection(&db_path, None).unwrap();
+        crate::db::set_metadata(&conn, "company_name", "Raygun LLC").unwrap();
+        drop(conn);
+
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        assert_eq!(json["initialized"], true);
+        assert_eq!(json["encrypted"], false);
+        assert_eq!(json["locked"], false);
+        assert_eq!(json["companyName"], "Raygun LLC");
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["dataDir"], dir.path().display().to_string());
+    }
+
+    #[tokio::test]
+    async fn status_reports_a_missing_database_as_uninitialized() {
+        crate::db::set_db_password(None);
+        let dir = tempfile::tempdir().unwrap();
+        let (app, token) = app_for(&dir.path().join("nigel.db"));
+        let json = status_json(&app, &token).await;
+
+        assert_eq!(json["initialized"], false);
+        assert_eq!(json["encrypted"], false);
+        assert_eq!(json["locked"], false);
+        assert_eq!(json["companyName"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_an_encrypted_database_as_locked() {
+        let (_dir, db_path) = temp_db();
+        let conn = crate::db::open_connection(&db_path, None).unwrap();
+        crate::db::set_metadata(&conn, "company_name", "Raygun LLC").unwrap();
+        drop(conn);
+        encrypt(&db_path);
+
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        assert_eq!(json["initialized"], true);
+        assert_eq!(json["encrypted"], true);
+        assert_eq!(json["locked"], true);
+        // Reading it would need the key we do not have yet.
+        assert_eq!(json["companyName"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn locked_database_refuses_data_routes_but_answers_the_gate() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let guarded = app
+            .clone()
+            .oneshot(session_get("/api/_guarded_probe", &token))
+            .await
+            .unwrap();
+        assert_eq!(guarded.status(), StatusCode::LOCKED);
+        let json = json_body(guarded).await;
+        assert_eq!(json["error"]["code"], "locked");
+
+        for uri in ["/api/ping", "/api/status"] {
+            let response = app.clone().oneshot(session_get(uri, &token)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri} while locked");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_gates_unknown_api_paths_too() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        // The guard wraps the whole /api router, fallback included, so a locked
+        // database answers 423 before it answers 404. Nothing is leaked either
+        // way, and the SPA gets the routing signal it needs.
+        let response = app
+            .oneshot(session_get("/api/does-not-exist", &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::LOCKED);
+        assert_eq!(json_body(response).await["error"]["code"], "locked");
+    }
+
+    #[tokio::test]
+    async fn unencrypted_database_has_no_gate() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .oneshot(session_get("/api/_guarded_probe", &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unlock_rejects_wrong_passwords_with_a_shrinking_budget() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for (attempt, remaining) in [(1, 2), (2, 1)] {
+            let response = app
+                .clone()
+                .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "attempt {attempt}"
+            );
+            let json = json_body(response).await;
+            assert_eq!(json["error"]["code"], "invalid_password");
+            assert_eq!(json["error"]["details"]["attemptsRemaining"], remaining);
+            assert_eq!(json["error"]["details"]["retryAfterMs"], 0);
+        }
+
+        // The third failure is the first the server holds back.
+        let started = std::time::Instant::now();
+        let response = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["details"]["attemptsRemaining"], 0);
+        assert_eq!(json["error"]["details"]["retryAfterMs"], 1000);
+        assert!(
+            elapsed >= std::time::Duration::from_millis(900),
+            "expected a backoff delay, took {elapsed:?}"
+        );
+
+        assert_eq!(status_json(&app, &token).await["locked"], true);
+        assert!(crate::db::get_db_password().is_none());
+    }
+
+    #[tokio::test]
+    async fn unlock_with_the_right_password_opens_the_data_routes() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["locked"], false);
+
+        let json = status_json(&app, &token).await;
+        assert_eq!(json["encrypted"], true);
+        assert_eq!(json["locked"], false);
+
+        let guarded = app
+            .clone()
+            .oneshot(session_get("/api/_guarded_probe", &token))
+            .await
+            .unwrap();
+        assert_eq!(guarded.status(), StatusCode::OK);
+
+        // Unlocking twice is not an error.
+        let again = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(again.status(), StatusCode::OK);
+
+        crate::db::set_db_password(None);
+    }
+
+    #[tokio::test]
+    async fn a_successful_unlock_restores_the_attempt_budget() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let ok = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        // Simulate a fresh lock so the counter is observable again.
+        crate::db::set_db_password(None);
+        let response = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+            .await
+            .unwrap();
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["details"]["attemptsRemaining"], 2);
+    }
+
+    #[tokio::test]
+    async fn unlock_on_an_unencrypted_database_is_a_bad_request() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "bad_request");
+        assert!(crate::db::get_db_password().is_none());
+    }
+
+    #[tokio::test]
+    async fn unlock_with_a_malformed_body_is_a_bad_request_that_echoes_nothing() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .oneshot(session_post(
+                "/api/unlock",
+                &token,
+                r#"{"passphrase": "hunter2"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "bad_request");
+        assert!(
+            !json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("hunter2"),
+            "body echoed back: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_runs_the_migrations_serve_had_to_defer() {
+        // A 0.1.x-era database: the base schema, no csv_profiles table, and a
+        // version stamp from before the migrations that add one.
+        crate::db::set_db_password(None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("nigel.db");
+        let conn = crate::db::open_connection(&db_path, None).unwrap();
+        conn.execute_batch(crate::db::SCHEMA).unwrap();
+        crate::db::set_metadata(&conn, "schema_version", "1").unwrap();
+        drop(conn);
+        encrypt(&db_path);
+
+        let conn = crate::db::open_connection(&db_path, Some(PASSWORD)).unwrap();
+        assert_eq!(crate::migrations::get_schema_version(&conn).unwrap(), 1);
+        drop(conn);
+
+        let (app, token) = app_for(&db_path);
+        let response = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let conn = crate::db::open_connection(&db_path, Some(PASSWORD)).unwrap();
+        assert_eq!(
+            crate::migrations::get_schema_version(&conn).unwrap(),
+            crate::migrations::LATEST_VERSION
+        );
+
+        crate::db::set_db_password(None);
     }
 
     #[tokio::test]
