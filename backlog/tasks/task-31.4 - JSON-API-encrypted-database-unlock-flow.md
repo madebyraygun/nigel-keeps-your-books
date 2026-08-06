@@ -1,11 +1,11 @@
 ---
 id: TASK-31.4
 title: 'JSON API: encrypted database unlock flow'
-status: In Progress
+status: Done
 assignee:
   - '@agent-31.4'
 created_date: '2026-08-06 16:25'
-updated_date: '2026-08-06 20:31'
+updated_date: '2026-08-06 20:33'
 labels:
   - web
   - backend
