@@ -1,4 +1,4 @@
-import { css } from 'lit';
+import { css, unsafeCSS } from 'lit';
 
 /**
  * Nigel's pastel rainbow, in the order `GRADIENT` declares it in
@@ -20,7 +20,10 @@ export const NIGEL_PALETTE = [
   '#ffb3de', // soft magenta
 ] as const;
 
-const ramp = NIGEL_PALETTE.join(', ');
+// unsafeCSS is required to interpolate anything that is not itself a
+// CSSResult. The value is a join of the frozen hex literals above — no input
+// reaches it — so there is nothing here for a stylesheet injection to ride in on.
+const ramp = unsafeCSS(NIGEL_PALETTE.join(', '));
 
 export const gradientCss = css`
   :root {
