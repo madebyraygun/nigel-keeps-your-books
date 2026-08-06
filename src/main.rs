@@ -46,13 +46,15 @@ fn dispatch(command: Commands) -> error::Result<()> {
     );
 
     // Commands that need the encryption password up front. `password` does its own
-    // prompting as part of set/change/remove, and `completions` never touches the DB.
+    // prompting as part of set/change/remove, `completions` never touches the DB, and
+    // `serve` has no stdin to prompt on — its clients unlock over HTTP instead.
     let needs_password = !matches!(
         command,
         Commands::Init { .. }
             | Commands::Demo
             | Commands::Password { .. }
             | Commands::Completions { .. }
+            | Commands::Serve { .. }
             | Commands::Update
     );
 
@@ -74,7 +76,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // Bring the schema up to date before any command reads or writes data. The
     // intersection of the two guards above is exactly the set of commands that open the
     // existing database with a usable password; init/demo/restore migrate via their own
-    // init_db() call, and the dashboard migrates in its own pre-flight.
+    // init_db() call, the dashboard migrates in its own pre-flight, and serve migrates
+    // whatever it can reach without a password.
     if needs_existing_db && needs_password && !replaces_db {
         let conn = nigel::db::get_connection(&db_path)?;
         nigel::db::init_db(&conn)?;
@@ -200,6 +203,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
         Commands::Restore { path } => cli::restore::run(&path),
+        Commands::Serve { port, no_open } => cli::serve::run(port, no_open),
         Commands::Undo => cli::undo::run(),
         Commands::Update => cli::update::run(),
         Commands::Status => cli::status::run(),

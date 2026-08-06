@@ -9,7 +9,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 ## Architecture
 
 - **Crate layout:** lib + bin. `src/lib.rs` exposes every module (`db`, `models`, `reports`, `reviewer`, `importer`, `categorizer`, `reconciler`, `migrations`, `settings`, `error`, `fmt`, `browser`, `tui`, `effects`, `pdf`, `cli`) as the `nigel` library; `src/main.rs` is the `nigel` binary and holds only clap parsing, the ratatui panic hook, and the dispatch pre-flight, calling into the library via `nigel::`
-- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, status, password, update, completions
+- **CLI:** Clap derive app in `src/cli/mod.rs` — subcommands are optional; running `nigel` with no arguments launches the interactive dashboard. Subcommands: init, demo, import, undo, categorize, review, reconcile, accounts, categories, rules, report, browse, load, backup, restore, serve, status, password, update, completions
 - **Database:** SQLite via rusqlite (bundled-sqlcipher) in `src/db.rs` — tables: accounts, categories (with form_line for 1120-S mapping), transactions, rules, imports, reconciliations, metadata (key-value store for per-database settings like company_name). Optional SQLCipher encryption via `PRAGMA key`; password stored in runtime global `Mutex<Option<String>>` (`set_db_password`/`get_db_password`); `get_connection()` reads it internally so zero call-site changes needed; `open_connection()` for explicit password; `is_encrypted()` probes a DB file; `validate_password()` tests a password without side effects; `prompt_password_if_needed()` prompts via rpassword with 3 retries (used by CLI subcommands)
 - **Importers:** `src/importer.rs` — `ImporterKind` enum dispatch (bofa_checking, bofa_credit_card, bofa_line_of_credit, gusto_payroll); each variant implements `detect()` and `parse()`; `GenericCsvConfig` supports user-defined column mappings stored as profiles in `csv_profiles` table; malformed CSV rows are counted and reported in import output
 - **TUI:** `tui.rs` — shared ratatui helpers (style constants, `money_span`, `wrap_text`, `ReportView` trait with `date_params()`, `run_report_view()`) for interactive screens; `ReportViewAction` enum includes `Continue`, `Close`, and `Reload` (for date navigation); `browser.rs`, `cli/review.rs`, `cli/report/view.rs`, and `cli/dashboard.rs` use ratatui `Terminal::draw()` render loop
@@ -28,6 +28,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Goodbye:** `cli/goodbye.rs` — 1.2-second farewell screen shown when quitting the dashboard; displays Nigel ASCII logo with "Goodbye!" text, plays the reverse of the splash reveal animation (characters disappear), with particle background; dismissable by any keypress
 - **Updater:** `cli/update.rs` — `nigel update` command and launch-time version check; queries GitHub Releases API for latest version, compares via `semver`, downloads correct platform binary, and self-replaces via `self_replace` crate; `check_and_notify()` runs on launch with 24-hour cooldown (stored in `last_update_check` in settings.json); opt-out via `update_check: false` in settings; dashboard shows yellow notification bar; CLI prints to stderr
 - **Settings Manager:** `cli/settings_manager.rs` — inline TUI screen for managing app settings; shows editable business name (saved to DB metadata as `company_name`), password management, and auto-update check toggle; password sub-screen delegates to `PasswordManager`
+- **Web server:** `src/server/` — `nigel serve` runs an axum app on 127.0.0.1 serving the JSON API and the embedded SPA from the same binary; behind the default-on `serve` feature (axum, tokio, tower, rust-embed, open, subtle). `mod.rs` owns the tokio runtime (the crate's only async entry point — `main` stays sync) and assembles the router; `auth.rs` holds the session token, Host/Origin validation, and cookie parsing; `error.rs` defines `ApiError`/`ApiErrorCode` and the `{"error": {...}}` envelope; `state.rs` holds `AppState` (db path, session token, build features); `routes/` gets one module per domain as endpoints land (today: `GET /api/ping` plus a JSON 404 fallback); `static_files.rs` serves `web/dist` via rust-embed with an index.html fallback for SPA routes. Handlers open their own connection per request — no pool
 - **Modules:** `categorizer.rs` (rules engine), `reviewer.rs` (review data layer), `reports.rs` (P&L, expenses, tax, cashflow, balance, flagged, register, K-1 prep), `browser.rs` (interactive register browser via ratatui with row selection, inline category/vendor editing, flag toggling, scroll navigation, text wrapping, and incremental text search), `reconciler.rs` (monthly reconciliation), `pdf.rs` (PDF rendering via printpdf, feature-gated)
 - **Migrations:** `migrations.rs` — sequential schema migration runner; `MIGRATIONS` array of `(version, description, up_fn)`; runs inside `init_db()` after table creation, which `main.rs` invokes in its dispatch pre-flight for every subcommand except `init`, `demo`, `load`, `update`, `password`, `completions`, and `restore`, and which the dashboard invokes in its own pre-flight, so every normal use of the app brings the schema up to date; each migration executes in a savepoint transaction; version tracked in `metadata` table under `schema_version` key; v1 is the no-op baseline for existing 0.1.x databases; v2 adds `csv_profiles` table for generic CSV column mappings; v3 backfills `form_line` on the stock chart-of-accounts categories
 - **Data flow:** CSV/XLSX import → automatic pre-import DB snapshot (`<data_dir>/snapshots/`) → format auto-detect via `ImporterKind::detect()` → duplicate detection → auto-categorize via rules → flag unknowns for review → generate reports
@@ -90,6 +91,9 @@ nigel browse register                            # All transactions, starts at t
 nigel browse register --year 2025                 # Filter to a specific year
 nigel browse register --account "BofA Checking"   # Browse filtered by account
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
+nigel serve                                       # Web UI + JSON API on 127.0.0.1:5731 (opens a browser)
+nigel serve --port 8080                           # Bind a different port (0 = ephemeral)
+nigel serve --no-open                             # Print the tokenized URL instead of opening a browser
 nigel status                                      # Show active DB and summary stats
 nigel load ~/other-books                          # Switch to a different data directory
 nigel backup                                      # Back up DB to <data_dir>/backups/
@@ -129,11 +133,15 @@ Do not merge or mark work complete if docs are stale.
 - Demo databases are always unencrypted; `init` and `demo` subcommands skip password detection
 - Backups and snapshots preserve the encryption state of the source database
 - Cross-encryption-state operations (encrypt/decrypt) use `sqlcipher_export` via ATTACH DATABASE; same-encryption operations (backup, rekey) use SQLite backup API or `PRAGMA rekey`
-- Schema migrations run in the `dispatch()` pre-flight — after the initialization check and the password prompt — for every subcommand except `init`, `demo`, `load`, `update`, `password`, `completions`, and `restore`; the dashboard runs the same pre-flight before its render loop. The exemptions: `init`, `demo`, and `restore` call `init_db()` themselves on the database they create or replace; `load` only rewrites `settings.json`; `update` needs no database; `password` and `completions` are password-exempt and so cannot open an encrypted database. A failed migration aborts the command. Each migration is transactional (savepoint); to add a migration: append to `MIGRATIONS` array in `migrations.rs`, bump `LATEST_VERSION`, implement `up()` function with SQL statements
+- Schema migrations run in the `dispatch()` pre-flight — after the initialization check and the password prompt — for every subcommand except `init`, `demo`, `load`, `update`, `password`, `completions`, `serve`, and `restore`; the dashboard runs the same pre-flight before its render loop. The exemptions: `init`, `demo`, and `restore` call `init_db()` themselves on the database they create or replace; `load` only rewrites `settings.json`; `update` needs no database; `password`, `completions`, and `serve` are password-exempt and so cannot open an encrypted database. A failed migration aborts the command. Each migration is transactional (savepoint); to add a migration: append to `MIGRATIONS` array in `migrations.rs`, bump `LATEST_VERSION`, implement `up()` function with SQL statements
 - Generic CSV profiles are stored in `csv_profiles` table; `--format <name>` resolves built-in importers first, then csv_profiles; generic CSV is never auto-detected
 - `--dry-run` skips snapshot creation, imports table insertion, and transaction insertion; still runs full parse and duplicate detection
 - Auto-update check runs once per 24 hours on launch (both dashboard and CLI); respects `update_check: false` in settings.json; silently skips on network failure; `nigel update` command always checks and can be exempt from init/password checks
 - Platform binary detection: macOS = `nigel-universal-apple-darwin`, Linux x86_64 = `nigel-x86_64-unknown-linux-gnu`, Windows x86_64 = `nigel-x86_64-pc-windows-msvc.exe`
+- `serve` is password-exempt in the dispatch pre-flight — it has no stdin to prompt on. It runs migrations itself at startup, but only when the database is unencrypted; an encrypted database stays locked until a client unlocks it over HTTP, and migrations run then
+- Localhost is not a trust boundary for `serve`. Three layers, in middleware order: bind 127.0.0.1 only; reject any request whose `Host` (or `Origin`, when present) is not exactly `localhost`/`127.0.0.1`/`[::1]` on any port (403, blocks DNS rebinding); require the `nigel_session` cookie on every `/api` route (401). The per-run 32-byte token is compared in constant time, is never persisted, and never appears in a response body. Static assets are session-exempt because they carry no data
+- The session middleware wraps the `/api` router with `.layer`, not `.route_layer`, so it also covers that router's 404 fallback — otherwise unauthenticated requests to unknown `/api` paths would skip the check
+- Web assets are embedded with rust-embed's `debug-embed` on, so debug and release builds behave identically and neither reads `web/dist` at runtime. `web/dist/index.html` is a committed placeholder so `cargo build` works without node
 
 ## Project Structure
 
@@ -177,8 +185,17 @@ src/
     load.rs             # nigel load (switch data directory)
     backup.rs           # nigel backup (database backup)
     restore.rs          # nigel restore (restore database from backup)
+    serve.rs            # nigel serve (feature gate + pre-flight, delegates to src/server/)
     status.rs           # nigel status (show active DB + stats)
     update.rs           # nigel update (version check + self-replace from GitHub Releases)
+  server/               # Web server (feature-gated behind "serve")
+    mod.rs              # Tokio runtime, router assembly, middleware order, graceful shutdown
+    auth.rs             # Session token, Host/Origin validation, cookie parsing, /auth handler
+    error.rs            # ApiError + ApiErrorCode, JSON error envelope, status mapping
+    state.rs            # AppState (db path, session token, build features)
+    static_files.rs     # rust-embed hosting of web/dist with SPA index fallback
+    routes/
+      mod.rs            # API router; GET /api/ping + JSON 404 fallback
   db.rs                 # SQLite schema, connection, category seeding
   migrations.rs          # Schema migration runner (version tracking, sequential up() functions)
   models.rs             # Structs (Account, Transaction, Rule, ParsedRow, etc.)
@@ -194,7 +211,11 @@ src/
   settings.rs           # Settings management (~/.config/nigel/)
   fmt.rs                # Number formatting helpers
   error.rs              # Error types
+web/
+  dist/
+    index.html          # Placeholder SPA shell (embedded in the binary; replaced by the vite build)
 docs/
+  api.md                # HTTP API inventory (endpoints, error envelope, security model)
   importers.md          # Importer format specifications and authoring guide
   walkthrough.md        # Guided tour using demo data
   skills.md             # Claude skills documentation

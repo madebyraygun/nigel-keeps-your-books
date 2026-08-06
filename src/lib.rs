@@ -20,5 +20,7 @@ pub mod pdf;
 pub mod reconciler;
 pub mod reports;
 pub mod reviewer;
+#[cfg(feature = "serve")]
+pub mod server;
 pub mod settings;
 pub mod tui;

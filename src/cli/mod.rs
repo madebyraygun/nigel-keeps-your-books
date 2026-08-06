@@ -24,6 +24,7 @@ pub mod restore;
 pub mod review;
 pub mod rules;
 pub mod rules_manager;
+pub mod serve;
 pub mod settings_manager;
 pub mod snake;
 pub mod splash;
@@ -156,6 +157,15 @@ pub enum Commands {
     Browse {
         #[command(subcommand)]
         command: BrowseCommands,
+    },
+    /// Serve the web UI and JSON API on localhost.
+    Serve {
+        /// Port to bind on 127.0.0.1 (0 picks an ephemeral port)
+        #[arg(long, default_value_t = 5731)]
+        port: u16,
+        /// Don't open a browser window
+        #[arg(long)]
+        no_open: bool,
     },
     /// Show current database and summary statistics.
     Status,

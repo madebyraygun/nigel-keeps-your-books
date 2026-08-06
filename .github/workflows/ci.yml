@@ -35,3 +35,6 @@ jobs:
 
       - name: Run tests (no default features)
         run: cargo test --no-default-features -- --test-threads=1
+
+      - name: Run tests (serve only)
+        run: cargo test --no-default-features --features serve -- --test-threads=1
