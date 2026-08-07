@@ -1,13 +1,15 @@
 use std::io::{self, BufRead, Write};
 
 use rusqlite::Connection;
-use rusqlite::OptionalExtension;
+use serde::Serialize;
 
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
 use crate::settings::get_data_dir;
 
 /// Information about the most recent import, used for display and deletion.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LastImport {
     pub import_id: i64,
     pub filename: String,
@@ -16,44 +18,67 @@ pub struct LastImport {
     pub transaction_count: i64,
 }
 
+/// One row of import history.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportListItem {
+    pub id: i64,
+    pub filename: String,
+    pub account_name: String,
+    pub import_date: String,
+    pub transaction_count: i64,
+}
+
+/// Every import ever recorded, newest first, each with the number of
+/// transactions still attached to it.
+pub fn list_imports(conn: &Connection) -> Result<Vec<ImportListItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT i.id, i.filename, COALESCE(a.name, '(unknown)'), i.import_date, COUNT(t.id)
+         FROM imports i
+         LEFT JOIN accounts a ON a.id = i.account_id
+         LEFT JOIN transactions t ON t.import_id = i.id
+         GROUP BY i.id
+         ORDER BY i.id DESC",
+    )?;
+
+    let imports = stmt
+        .query_map([], |row| {
+            Ok(ImportListItem {
+                id: row.get(0)?,
+                filename: row.get(1)?,
+                account_name: row.get(2)?,
+                import_date: row.get(3)?,
+                transaction_count: row.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(imports)
+}
+
 /// Query the most recent import and its associated transaction count.
 /// Returns None if there are no imports in the database.
 pub fn get_last_import(conn: &Connection) -> Result<Option<LastImport>> {
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.filename, COALESCE(a.name, '(unknown)'), i.import_date
-         FROM imports i
-         LEFT JOIN accounts a ON a.id = i.account_id
-         ORDER BY i.id DESC LIMIT 1",
-    )?;
+    Ok(list_imports(conn)?
+        .into_iter()
+        .next()
+        .map(|item| LastImport {
+            import_id: item.id,
+            filename: item.filename,
+            account_name: item.account_name,
+            import_date: item.import_date,
+            transaction_count: item.transaction_count,
+        }))
+}
 
-    let result = stmt
-        .query_row([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
-        .optional()?;
-
-    let Some((import_id, filename, account_name, import_date)) = result else {
-        return Ok(None);
-    };
-
-    let transaction_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM transactions WHERE import_id = ?1",
+/// Whether an import record still exists. `delete_import` reports a missing
+/// import as zero transactions deleted, which over HTTP would read as success.
+pub fn import_exists(conn: &Connection, import_id: i64) -> Result<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM imports WHERE id = ?1)",
         [import_id],
         |row| row.get(0),
     )?;
-
-    Ok(Some(LastImport {
-        import_id,
-        filename,
-        account_name,
-        import_date,
-        transaction_count,
-    }))
+    Ok(exists)
 }
 
 /// Delete all transactions and the import record for the given import.
@@ -175,6 +200,74 @@ mod tests {
 
         let last = get_last_import(&conn).unwrap().unwrap();
         assert_eq!(last.transaction_count, 3);
+    }
+
+    #[test]
+    fn list_imports_returns_newest_first_with_counts() {
+        let (_dir, conn) = test_db();
+        let acct = add_account(&conn);
+        let first = add_import(&conn, acct, "first.csv");
+        let second = add_import(&conn, acct, "second.csv");
+        add_transaction(&conn, acct, first, "TXN A");
+        add_transaction(&conn, acct, first, "TXN B");
+
+        let imports = list_imports(&conn).unwrap();
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].id, second);
+        assert_eq!(imports[0].filename, "second.csv");
+        // An import whose rows were all removed still lists, at zero.
+        assert_eq!(imports[0].transaction_count, 0);
+        assert_eq!(imports[1].id, first);
+        assert_eq!(imports[1].transaction_count, 2);
+        assert_eq!(imports[1].account_name, "Test Checking");
+    }
+
+    #[test]
+    fn list_imports_is_empty_for_a_fresh_database() {
+        let (_dir, conn) = test_db();
+        assert!(list_imports(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_imports_names_an_orphaned_account() {
+        let (_dir, conn) = test_db();
+        conn.execute(
+            "INSERT INTO imports (filename, account_id, record_count, checksum) \
+             VALUES ('orphan.csv', NULL, 0, 'sum')",
+            [],
+        )
+        .unwrap();
+
+        let imports = list_imports(&conn).unwrap();
+        assert_eq!(imports[0].account_name, "(unknown)");
+    }
+
+    #[test]
+    fn import_list_item_serializes_camel_case() {
+        let (_dir, conn) = test_db();
+        let acct = add_account(&conn);
+        add_import(&conn, acct, "stmt.csv");
+
+        let json = serde_json::to_value(&list_imports(&conn).unwrap()[0]).unwrap();
+        for key in ["accountName", "importDate", "transactionCount"] {
+            assert!(json.get(key).is_some(), "missing {key} in {json}");
+        }
+    }
+
+    #[test]
+    fn test_import_exists_tells_a_deleted_import_from_a_live_one() {
+        let (_dir, conn) = test_db();
+        let acct = add_account(&conn);
+        let import_id = add_import(&conn, acct, "test.csv");
+
+        assert!(import_exists(&conn, import_id).unwrap());
+        assert!(!import_exists(&conn, 4242).unwrap());
+
+        delete_import(&conn, import_id).unwrap();
+        assert!(
+            !import_exists(&conn, import_id).unwrap(),
+            "undoing an import takes its record with it"
+        );
     }
 
     #[test]

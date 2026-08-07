@@ -1,11 +1,13 @@
 use comfy_table::{Cell, Table};
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::db::get_connection;
-use crate::error::{NigelError, Result};
+use crate::error::{DeleteBlock, NigelError, Result};
 use crate::settings::get_data_dir;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CategoryRow {
     pub id: i64,
     pub name: String,
@@ -96,35 +98,82 @@ pub fn list_categories(conn: &Connection) -> Result<Vec<CategoryRow>> {
     Ok(categories)
 }
 
+/// Fetch one active category by id.
+pub fn get_category(conn: &Connection, id: i64) -> Result<CategoryRow> {
+    conn.query_row(
+        "SELECT id, name, category_type, tax_line, form_line \
+         FROM categories WHERE id = ?1 AND is_active = 1",
+        [id],
+        |row| {
+            Ok(CategoryRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                category_type: row.get(2)?,
+                tax_line: row.get(3)?,
+                form_line: row.get(4)?,
+            })
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("Category not found: id {id}"))
+        }
+        other => NigelError::Db(other),
+    })
+}
+
+/// Confirm a category id names a category the chart of accounts still offers.
+/// Anything referring to a category by id — a rule, a transaction edit — has to
+/// pass through here first.
+pub fn ensure_category_exists(conn: &Connection, id: i64) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM categories WHERE id = ?1 AND is_active = 1)",
+        [id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        Ok(())
+    } else {
+        Err(NigelError::NotFound(format!("Category not found: id {id}")))
+    }
+}
+
+/// Insert a category and return its id.
 pub fn add_category(
     conn: &Connection,
     name: &str,
     category_type: &str,
     tax_line: Option<&str>,
     form_line: Option<&str>,
-) -> Result<()> {
-    if name.trim().is_empty() {
-        return Err(NigelError::Other("Name is required".into()));
-    }
-    if category_type != "income" && category_type != "expense" {
-        return Err(NigelError::Other(format!(
-            "Invalid category type: {category_type} (must be 'income' or 'expense')"
-        )));
-    }
+) -> Result<i64> {
+    validate_fields(name, category_type)?;
     let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM categories WHERE name = ?1 AND is_active = 1)",
         [name],
         |row| row.get(0),
     )?;
     if exists {
-        return Err(NigelError::Other(format!(
-            "Category name already exists: {name}"
-        )));
+        return Err(NigelError::DuplicateName {
+            kind: "Category",
+            name: name.to_string(),
+        });
     }
     conn.execute(
         "INSERT INTO categories (name, category_type, tax_line, form_line) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![name, category_type, tax_line, form_line],
     )?;
+    Ok(conn.last_insert_rowid())
+}
+
+fn validate_fields(name: &str, category_type: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(NigelError::Invalid("Name is required".into()));
+    }
+    if category_type != "income" && category_type != "expense" {
+        return Err(NigelError::Invalid(format!(
+            "Invalid category type: {category_type} (must be 'income' or 'expense')"
+        )));
+    }
     Ok(())
 }
 
@@ -138,7 +187,7 @@ pub fn rename_category(conn: &Connection, id: i64, new_name: &str) -> Result<()>
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => {
-                NigelError::Other(format!("Category not found: id {id}"))
+                NigelError::NotFound(format!("Category not found: id {id}"))
             }
             other => NigelError::Db(other),
         })?;
@@ -160,67 +209,56 @@ pub fn update_category(
     tax_line: Option<&str>,
     form_line: Option<&str>,
 ) -> Result<()> {
-    if name.trim().is_empty() {
-        return Err(NigelError::Other("Name is required".into()));
-    }
-    if category_type != "income" && category_type != "expense" {
-        return Err(NigelError::Other(format!(
-            "Invalid category type: {category_type} (must be 'income' or 'expense')"
-        )));
-    }
+    validate_fields(name, category_type)?;
     let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM categories WHERE name = ?1 AND is_active = 1 AND id != ?2)",
         rusqlite::params![name, id],
         |row| row.get(0),
     )?;
     if exists {
-        return Err(NigelError::Other(format!(
-            "Category name already exists: {name}"
-        )));
+        return Err(NigelError::DuplicateName {
+            kind: "Category",
+            name: name.to_string(),
+        });
     }
     let updated = conn.execute(
         "UPDATE categories SET name = ?1, category_type = ?2, tax_line = ?3, form_line = ?4 WHERE id = ?5 AND is_active = 1",
         rusqlite::params![name, category_type, tax_line, form_line, id],
     )?;
     if updated == 0 {
-        return Err(NigelError::Other(format!("Category not found: id {id}")));
+        return Err(NigelError::NotFound(format!("Category not found: id {id}")));
     }
     Ok(())
 }
 
-/// Returns a human-readable reason why a category cannot be deleted, or None if
-/// deletion is safe. Used by both the TUI (pre-check) and `delete_category` (guard).
-pub fn blocking_reason(conn: &Connection, id: i64) -> Result<Option<String>> {
+/// Why this category cannot be deleted, or None when it can be. Transactions
+/// outrank rules: a category with both reports the transactions.
+pub fn delete_blocker(conn: &Connection, id: i64) -> Result<Option<DeleteBlock>> {
     let (txn_count, rule_count) = usage_count(conn, id)?;
     if txn_count > 0 {
-        let noun = if txn_count == 1 {
-            "transaction"
-        } else {
-            "transactions"
-        };
-        return Ok(Some(format!(
-            "Cannot delete: category has {txn_count} {noun}"
-        )));
+        return Ok(Some(DeleteBlock::transactions("category", txn_count)));
     }
     if rule_count > 0 {
-        let noun = if rule_count == 1 { "rule" } else { "rules" };
-        return Ok(Some(format!(
-            "Cannot delete: category has {rule_count} active {noun}"
-        )));
+        return Ok(Some(DeleteBlock::active_rules("category", rule_count)));
     }
     Ok(None)
 }
 
+/// The blocking reason as a sentence, for the TUI status line.
+pub fn blocking_reason(conn: &Connection, id: i64) -> Result<Option<String>> {
+    Ok(delete_blocker(conn, id)?.map(|block| block.to_string()))
+}
+
 pub fn delete_category(conn: &Connection, id: i64) -> Result<()> {
-    if let Some(reason) = blocking_reason(conn, id)? {
-        return Err(NigelError::Other(reason));
+    if let Some(block) = delete_blocker(conn, id)? {
+        return Err(NigelError::Blocked(block));
     }
     let updated = conn.execute(
         "UPDATE categories SET is_active = 0 WHERE id = ?1 AND is_active = 1",
         [id],
     )?;
     if updated == 0 {
-        return Err(NigelError::Other(format!("Category not found: id {id}")));
+        return Err(NigelError::NotFound(format!("Category not found: id {id}")));
     }
     Ok(())
 }
@@ -480,6 +518,61 @@ mod tests {
         let err = delete_category(&conn, cat_id).unwrap_err();
         assert!(err.to_string().contains("Cannot delete"));
         assert!(err.to_string().contains("1 active rule"));
+    }
+
+    #[test]
+    fn test_get_category_round_trips_and_404s() {
+        let (_dir, conn) = test_conn();
+        let id = add_category(&conn, "Fetched", "expense", Some("Line 8"), None).unwrap();
+
+        let cat = get_category(&conn, id).unwrap();
+        assert_eq!(cat.name, "Fetched");
+        assert_eq!(cat.tax_line.as_deref(), Some("Line 8"));
+
+        delete_category(&conn, id).unwrap();
+        let err = get_category(&conn, id).unwrap_err();
+        assert!(
+            matches!(err, NigelError::NotFound(_)),
+            "a soft-deleted category is gone: {err}"
+        );
+    }
+
+    #[test]
+    fn test_delete_blocker_distinguishes_its_two_reasons() {
+        let (_dir, conn) = test_conn();
+        let cat_id = add_category(&conn, "Blocked", "expense", None, None).unwrap();
+        assert!(delete_blocker(&conn, cat_id).unwrap().is_none());
+
+        conn.execute(
+            "INSERT INTO rules (pattern, category_id, is_active) VALUES ('blocked%', ?1, 1)",
+            [cat_id],
+        )
+        .unwrap();
+        let block = delete_blocker(&conn, cat_id).unwrap().expect("blocked");
+        assert_eq!(block.reason_code(), "has_active_rules");
+        assert_eq!(block.count, 1);
+
+        // Transactions outrank rules when a category has both.
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Acct', 'checking')",
+            [],
+        )
+        .unwrap();
+        let acct_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, '2025-01-01', 'Test', -5.0, ?2)",
+            rusqlite::params![acct_id, cat_id],
+        )
+        .unwrap();
+        let block = delete_blocker(&conn, cat_id).unwrap().expect("blocked");
+        assert_eq!(block.reason_code(), "has_transactions");
+
+        // The TUI's sentence still comes from the same place.
+        assert_eq!(
+            blocking_reason(&conn, cat_id).unwrap().as_deref(),
+            Some("Cannot delete: category has 1 transaction")
+        );
     }
 
     #[test]

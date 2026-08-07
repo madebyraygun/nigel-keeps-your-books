@@ -19,6 +19,10 @@ const INVOICING_ENV_VARS: [&str; 9] = [
     "NIGEL_PUBLIC_BASE_URL",
 ];
 
+/// Bounds any run that could reach the interactive password prompt, so a test
+/// inheriting a tty fails instead of blocking on `rpassword` forever.
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Create an isolated environment: a temp HOME so that `~/.config/nigel/settings.json`
 /// and `~/Documents/nigel/` all live inside the temp dir. Returns the TempDir (must be
 /// kept alive for the duration of the test) and a helper to build `nigel` commands that
@@ -662,4 +666,481 @@ fn completions_skips_the_password_and_migration_preflight() {
         .assert()
         .success()
         .stdout(predicate::str::contains("_nigel"));
+}
+
+/// Read the SQLite magic header to tell an encrypted database from a plaintext one.
+fn is_encrypted_file(path: &std::path::Path) -> bool {
+    let bytes = std::fs::read(path).expect("failed to read database");
+    !bytes.starts_with(b"SQLite format 3\0")
+}
+
+#[test]
+fn backup_unlocks_encrypted_database_from_env() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    let backup_path = env.home.path().join("env-unlocked.db");
+    env.cmd()
+        .args(["backup", "--output", &backup_path.to_string_lossy()])
+        .env("NIGEL_DB_PASSWORD", "hunter2")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup saved to"));
+
+    assert!(backup_path.exists(), "backup file should exist");
+    assert!(
+        is_encrypted_file(&backup_path),
+        "backup of an encrypted database must itself be encrypted"
+    );
+
+    // The snapshot must open with the same password and carry the demo data,
+    // so a backup that merely exists is not mistaken for one that can restore.
+    let conn = rusqlite::Connection::open(&backup_path).unwrap();
+    conn.pragma_update(None, "key", "hunter2").unwrap();
+    let accounts: i64 = conn
+        .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))
+        .expect("backup should be readable with the original password");
+    assert!(accounts > 0, "backup should contain the demo accounts");
+}
+
+#[test]
+fn backup_fails_fast_on_wrong_env_password() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    // The stderr predicate is what catches a regression: reaching the prompt with no
+    // terminal errors with ENXIO, which would satisfy `.failure()` on its own. The
+    // timeout is only a backstop for a run that inherits a tty and blocks.
+    env.cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "wrong-password")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("NIGEL_DB_PASSWORD"));
+}
+
+#[test]
+fn backup_ignores_env_password_on_plain_database() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // No `encrypt()` here: a leftover variable in the operator's shell must not lock
+    // them out of a database that never had a password.
+    env.cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "stale-value-from-another-project")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Backup saved to"));
+}
+
+#[test]
+fn env_password_is_not_echoed_on_failure() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    env.encrypt("hunter2");
+
+    let output = env
+        .cmd()
+        .args(["backup"])
+        .env("NIGEL_DB_PASSWORD", "sup3rs3cret")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .output()
+        .unwrap();
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Assert the run failed and reported before asserting on what it did not print:
+    // a killed or crashed child produces no output, which would satisfy the absence
+    // check while proving nothing.
+    assert!(
+        !output.status.success(),
+        "expected failure, got success:\n{combined}"
+    );
+    assert!(
+        combined.contains("NIGEL_DB_PASSWORD"),
+        "expected the variable to be named in the error:\n{combined}"
+    );
+    assert!(
+        !combined.contains("sup3rs3cret"),
+        "password leaked into output:\n{combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// recategorize
+// ---------------------------------------------------------------------------
+
+/// Pick a transaction ID and its current category name from the demo data.
+fn any_categorized_txn(env: &TestEnv) -> (i64, String) {
+    env.db()
+        .query_row(
+            "SELECT t.id, c.name FROM transactions t JOIN categories c ON t.category_id = c.id \
+             WHERE c.name != 'Travel' LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("demo data has categorized transactions")
+}
+
+#[test]
+fn recategorize_by_id_moves_and_clears_flag() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+    env.db()
+        .execute(
+            "UPDATE transactions SET is_flagged = 1, flag_reason = 'x' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", "Travel"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+
+    let (cat, flagged): (String, i64) = env
+        .db()
+        .query_row(
+            "SELECT c.name, t.is_flagged FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(cat, "Travel");
+    assert_eq!(flagged, 0);
+}
+
+#[test]
+fn recategorize_filter_requires_yes_without_tty() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--yes"));
+}
+
+#[test]
+fn recategorize_filter_with_yes_applies() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized"));
+
+    let remaining: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn recategorize_dry_run_writes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "--category",
+            "Travel",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_unknown_id_changes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "999999",
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("999999"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_malformed_month_fails_and_changes_nothing() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (_, old) = any_categorized_txn(&env);
+    let before: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--from-category",
+            &old,
+            "--month",
+            "April",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("expected YYYY-MM"));
+
+    let after: i64 = env
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM transactions t JOIN categories c ON t.category_id = c.id WHERE c.name = ?1",
+            [&old],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn recategorize_unknown_target_category_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            "--category",
+            "Bogus Category",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Bogus Category"));
+
+    let cat: String = env
+        .db()
+        .query_row(
+            "SELECT c.name FROM transactions t JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, old);
+}
+
+#[test]
+fn recategorize_unknown_account_filter_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--account",
+            "No Such Bank",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No Such Bank"));
+}
+
+#[test]
+fn recategorize_already_in_target_skips_and_preserves_flag() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, old) = any_categorized_txn(&env);
+    env.db()
+        .execute(
+            "UPDATE transactions SET is_flagged = 1, flag_reason = 'check me' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", &old])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Skipping 1 already in {old}"
+        )));
+
+    let (flagged, reason): (i64, Option<String>) = env
+        .db()
+        .query_row(
+            "SELECT is_flagged, flag_reason FROM transactions WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flagged, 1);
+    assert_eq!(reason.as_deref(), Some("check me"));
+}
+
+#[test]
+fn recategorize_duplicate_ids_count_once() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+
+    env.cmd()
+        .args([
+            "recategorize",
+            &id.to_string(),
+            &id.to_string(),
+            "--category",
+            "Travel",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+}
+
+#[test]
+fn recategorize_zero_match_filter_exits_cleanly() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "recategorize",
+            "--pattern",
+            "NO SUCH TRANSACTION DESCRIPTION XYZZY",
+            "--category",
+            "Travel",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No transactions matched."));
+}
+
+#[test]
+fn recategorize_works_on_encrypted_db_via_env_password() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+    let (id, _old) = any_categorized_txn(&env);
+    env.encrypt("hunter2");
+
+    env.cmd()
+        .args(["recategorize", &id.to_string(), "--category", "Travel"])
+        .env("NIGEL_DB_PASSWORD", "hunter2")
+        .write_stdin("")
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recategorized 1 transaction"));
+}
+
+#[test]
+fn serve_help_documents_its_flags() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args(["serve", "--help"])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--port"))
+        .stdout(predicate::str::contains("--no-open"));
+}
+
+#[test]
+fn serve_requires_an_initialized_database() {
+    let env = TestEnv::new();
+    env.cmd()
+        .arg("serve")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Not initialized"));
+}
+
+/// In a build without the `serve` feature the subcommand still parses — the
+/// failure has to name the missing feature, the way the PDF gate does.
+#[cfg(not(feature = "serve"))]
+#[test]
+fn serve_without_the_feature_reports_a_clear_error() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .arg("serve")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires the 'serve' feature"));
 }

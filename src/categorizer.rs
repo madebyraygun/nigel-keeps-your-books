@@ -1,5 +1,6 @@
 use regex::Regex;
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::error::Result;
 
@@ -16,6 +17,8 @@ pub fn matches(description: &str, pattern: &str, match_type: &str) -> bool {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CategorizeResult {
     pub categorized: usize,
     pub still_flagged: usize,

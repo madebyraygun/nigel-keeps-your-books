@@ -8,21 +8,12 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
+use crate::cli::rules::{list_rules, RuleRow};
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
 
 pub enum RulesAction {
     Continue,
     Close,
-}
-
-struct RuleRow {
-    id: i64,
-    pattern: String,
-    match_type: String,
-    vendor: String,
-    category: String,
-    priority: i64,
-    hits: i64,
 }
 
 enum Screen {
@@ -43,7 +34,7 @@ pub struct RulesManager {
 
 impl RulesManager {
     pub fn new(conn: &Connection, greeting: &str) -> Self {
-        let rules = load_rules(conn);
+        let rules = list_rules(conn).unwrap_or_default();
         Self {
             rules,
             selection: 0,
@@ -57,7 +48,10 @@ impl RulesManager {
     }
 
     fn reload(&mut self, conn: &Connection) {
-        self.rules = load_rules(conn);
+        match list_rules(conn) {
+            Ok(rules) => self.rules = rules,
+            Err(e) => self.set_status(format!("Error loading rules: {e}")),
+        }
         if !self.rules.is_empty() {
             self.selection = self.selection.min(self.rules.len() - 1);
         } else {
@@ -125,7 +119,7 @@ impl RulesManager {
                 };
 
                 let pattern_display = truncate(&rule.pattern, 22);
-                let vendor_display = truncate(&rule.vendor, 14);
+                let vendor_display = truncate(rule.vendor.as_deref().unwrap_or(""), 14);
                 let category_display = truncate(&rule.category, 22);
 
                 lines.push(Line::from(Span::styled(
@@ -137,7 +131,7 @@ impl RulesManager {
                         vendor_display,
                         category_display,
                         rule.priority,
-                        rule.hits
+                        rule.hit_count
                     ),
                     style,
                 )));
@@ -235,8 +229,8 @@ impl RulesManager {
                 if let Some(rule) = self.rules.get(self.selection) {
                     let id = rule.id;
                     let pattern = rule.pattern.clone();
-                    match conn.execute("UPDATE rules SET is_active = 0 WHERE id = ?1", [id]) {
-                        Ok(_) => {
+                    match crate::cli::rules::deactivate_rule(conn, id) {
+                        Ok(()) => {
                             self.reload(conn);
                             self.screen = Screen::List;
                             self.set_status(format!("Deleted rule {id}: '{pattern}'"));
@@ -255,31 +249,6 @@ impl RulesManager {
         }
         RulesAction::Continue
     }
-}
-
-fn load_rules(conn: &Connection) -> Vec<RuleRow> {
-    let mut stmt = match conn.prepare(
-        "SELECT r.id, r.pattern, r.match_type, r.vendor, c.name, r.priority, r.hit_count \
-         FROM rules r JOIN categories c ON r.category_id = c.id \
-         WHERE r.is_active = 1 ORDER BY r.priority DESC",
-    ) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-
-    stmt.query_map([], |row| {
-        Ok(RuleRow {
-            id: row.get(0)?,
-            pattern: row.get(1)?,
-            match_type: row.get(2)?,
-            vendor: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            category: row.get(4)?,
-            priority: row.get(5)?,
-            hits: row.get(6)?,
-        })
-    })
-    .map(|rows| rows.filter_map(|r| r.ok()).collect())
-    .unwrap_or_default()
 }
 
 fn truncate(s: &str, max: usize) -> String {

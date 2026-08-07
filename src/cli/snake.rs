@@ -55,6 +55,12 @@ pub struct SnakeGame {
     phase: f64,
 }
 
+impl Default for SnakeGame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SnakeGame {
     pub fn new() -> Self {
         let board_width: u16 = 40;

@@ -1,4 +1,73 @@
+use std::fmt;
+
 use thiserror::Error;
+
+/// Why a delete was refused. The variants are the vocabulary the API publishes
+/// as `details.reason`, so the client can render its own wording instead of
+/// parsing ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockReason {
+    HasTransactions,
+    HasActiveRules,
+}
+
+/// A refused delete: what was being deleted, why, and how much of it there is.
+///
+/// `Display` is the message the CLI and the TUI have always printed; the parts
+/// stay separately readable so the API can answer with a code and a count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeleteBlock {
+    /// The noun in the message: "account" or "category".
+    pub subject: &'static str,
+    pub reason: BlockReason,
+    pub count: i64,
+}
+
+impl DeleteBlock {
+    pub fn transactions(subject: &'static str, count: i64) -> Self {
+        Self {
+            subject,
+            reason: BlockReason::HasTransactions,
+            count,
+        }
+    }
+
+    pub fn active_rules(subject: &'static str, count: i64) -> Self {
+        Self {
+            subject,
+            reason: BlockReason::HasActiveRules,
+            count,
+        }
+    }
+
+    pub fn reason_code(&self) -> &'static str {
+        match self.reason {
+            BlockReason::HasTransactions => "has_transactions",
+            BlockReason::HasActiveRules => "has_active_rules",
+        }
+    }
+}
+
+impl fmt::Display for DeleteBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let plural = if self.count == 1 { "" } else { "s" };
+        let Self { subject, count, .. } = self;
+        match self.reason {
+            BlockReason::HasTransactions => {
+                write!(
+                    f,
+                    "Cannot delete: {subject} has {count} transaction{plural}"
+                )
+            }
+            BlockReason::HasActiveRules => {
+                write!(
+                    f,
+                    "Cannot delete: {subject} has {count} active rule{plural}"
+                )
+            }
+        }
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum NigelError {
@@ -32,6 +101,29 @@ pub enum NigelError {
     #[error("Settings error: {0}")]
     Settings(String),
 
+    /// A record that was addressed by id or name is not there.
+    #[error("{0}")]
+    NotFound(String),
+
+    /// The caller's input is wrong: an empty name, an unknown type, a pattern
+    /// that will not compile.
+    #[error("{0}")]
+    Invalid(String),
+
+    /// A name that has to be unique is taken. `kind` is capitalized because it
+    /// opens the sentence.
+    #[error("{kind} name already exists: {name}")]
+    DuplicateName { kind: &'static str, name: String },
+
+    /// A delete refused by a guardrail.
+    #[error("{0}")]
+    Blocked(DeleteBlock),
+
+    /// Any other state conflict, carrying the machine-readable reason the API
+    /// publishes alongside the message.
+    #[error("{message}")]
+    Conflict { code: &'static str, message: String },
+
     #[cfg(feature = "pdf")]
     #[error("PDF error: {0}")]
     Pdf(String),
@@ -41,3 +133,64 @@ pub enum NigelError {
 }
 
 pub type Result<T> = std::result::Result<T, NigelError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// These strings are printed by the CLI and the TUI. They are asserted here
+    /// so a future edit to the structured form cannot quietly reword them.
+    #[test]
+    fn delete_blocks_read_exactly_as_they_always_have() {
+        let cases = [
+            (
+                DeleteBlock::transactions("account", 1),
+                "Cannot delete: account has 1 transaction",
+            ),
+            (
+                DeleteBlock::transactions("account", 12),
+                "Cannot delete: account has 12 transactions",
+            ),
+            (
+                DeleteBlock::transactions("category", 1),
+                "Cannot delete: category has 1 transaction",
+            ),
+            (
+                DeleteBlock::active_rules("category", 1),
+                "Cannot delete: category has 1 active rule",
+            ),
+            (
+                DeleteBlock::active_rules("category", 3),
+                "Cannot delete: category has 3 active rules",
+            ),
+        ];
+        for (block, expected) in cases {
+            assert_eq!(block.to_string(), expected);
+            assert_eq!(NigelError::Blocked(block).to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn block_reasons_have_stable_wire_codes() {
+        assert_eq!(
+            DeleteBlock::transactions("account", 1).reason_code(),
+            "has_transactions"
+        );
+        assert_eq!(
+            DeleteBlock::active_rules("category", 1).reason_code(),
+            "has_active_rules"
+        );
+    }
+
+    #[test]
+    fn duplicate_name_opens_with_the_kind() {
+        let err = NigelError::DuplicateName {
+            kind: "Account",
+            name: "BofA Checking".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Account name already exists: BofA Checking"
+        );
+    }
+}

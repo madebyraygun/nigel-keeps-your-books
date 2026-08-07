@@ -2,6 +2,7 @@ use std::io::BufRead;
 use std::path::Path;
 
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{NigelError, Result};
@@ -93,7 +94,6 @@ impl ImporterKind {
         }
     }
 
-    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             Self::BofaChecking => "Bank of America Checking",
@@ -104,7 +104,7 @@ impl ImporterKind {
         }
     }
 
-    pub fn account_types(&self) -> &[&str] {
+    pub fn account_types(&self) -> &'static [&'static str] {
         match self {
             Self::BofaChecking => &["checking"],
             Self::BofaCreditCard => &["credit_card"],
@@ -170,6 +170,29 @@ pub fn get_by_key(key: &str) -> Option<ImporterKind> {
     ALL_IMPORTERS.iter().find(|i| i.key() == key).copied()
 }
 
+/// One built-in importer, as the API publishes it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImporterFormat {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub account_types: Vec<&'static str>,
+}
+
+/// The built-in importers this build has. Gusto is absent without its feature,
+/// which is what makes the list worth asking the server for rather than
+/// hardcoding in the client.
+pub fn built_in_formats() -> Vec<ImporterFormat> {
+    ALL_IMPORTERS
+        .iter()
+        .map(|kind| ImporterFormat {
+            key: kind.key(),
+            name: kind.name(),
+            account_types: kind.account_types().to_vec(),
+        })
+        .collect()
+}
+
 pub fn get_for_file(account_type: &str, file_path: &Path) -> Option<ImporterKind> {
     let candidates: Vec<_> = ALL_IMPORTERS
         .iter()
@@ -189,7 +212,8 @@ pub fn get_for_file(account_type: &str, file_path: &Path) -> Option<ImporterKind
 // Generic CSV config + helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenericCsvConfig {
     pub date_col: usize,
     pub desc_col: usize,
@@ -220,6 +244,36 @@ pub fn save_csv_profile(conn: &Connection, name: &str, config: &GenericCsvConfig
         ],
     )?;
     Ok(())
+}
+
+/// A saved generic-CSV column mapping, addressed by the name `--format` takes.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CsvProfile {
+    pub name: String,
+    pub config: GenericCsvConfig,
+}
+
+/// Every saved CSV profile, alphabetically.
+pub fn list_csv_profiles(conn: &Connection) -> Result<Vec<CsvProfile>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, date_col, desc_col, amount_col, date_format \
+         FROM csv_profiles ORDER BY name",
+    )?;
+    let profiles = stmt
+        .query_map([], |row| {
+            Ok(CsvProfile {
+                name: row.get(0)?,
+                config: GenericCsvConfig {
+                    date_col: row.get::<_, i64>(1)? as usize,
+                    desc_col: row.get::<_, i64>(2)? as usize,
+                    amount_col: row.get::<_, i64>(3)? as usize,
+                    date_format: row.get(4)?,
+                },
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(profiles)
 }
 
 pub fn load_csv_profile(conn: &Connection, name: &str) -> Result<Option<GenericCsvConfig>> {
@@ -299,12 +353,23 @@ pub fn parse_generic_csv(
 // import_file
 // ---------------------------------------------------------------------------
 
+/// The format key used for an inline column mapping, which has no saved name.
+pub const GENERIC_FORMAT: &str = "generic";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub imported: usize,
     pub skipped: usize,
     pub malformed: usize,
     pub duplicate_file: bool,
     pub sample: Vec<ParsedRow>,
+    /// Which importer actually ran: a built-in key, a saved profile name, or
+    /// [`GENERIC_FORMAT`]. `None` only for a duplicate file, which is answered
+    /// before a format is resolved.
+    pub format: Option<String>,
+    /// The `imports` row this created. `None` for a dry run or a duplicate file.
+    pub import_id: Option<i64>,
 }
 
 pub fn import_file(
@@ -334,22 +399,26 @@ pub fn import_file(
                 malformed: 0,
                 duplicate_file: true,
                 sample: Vec::new(),
+                format: None,
+                import_id: None,
             });
         }
     }
 
     enum ResolvedImporter {
         BuiltIn(ImporterKind),
-        Generic(GenericCsvConfig),
+        /// A column mapping and the name to report it under: the saved profile
+        /// it came from, or `generic` when the caller supplied it inline.
+        Generic(GenericCsvConfig, String),
     }
 
     let resolved = if let Some(config) = inline_config {
-        ResolvedImporter::Generic(config.clone())
+        ResolvedImporter::Generic(config.clone(), GENERIC_FORMAT.to_string())
     } else if let Some(key) = format_key {
         if let Some(kind) = get_by_key(key) {
             ResolvedImporter::BuiltIn(kind)
         } else if let Some(config) = load_csv_profile(conn, key)? {
-            ResolvedImporter::Generic(config)
+            ResolvedImporter::Generic(config, key.to_string())
         } else {
             return Err(NigelError::UnknownFormat(key.to_string()));
         }
@@ -360,14 +429,20 @@ pub fn import_file(
         )
     };
 
+    let format = match &resolved {
+        ResolvedImporter::BuiltIn(kind) => kind.key().to_string(),
+        ResolvedImporter::Generic(_, name) => name.clone(),
+    };
+
     let (parsed_rows, malformed) = match &resolved {
         ResolvedImporter::BuiltIn(kind) => kind.parse(file_path)?,
-        ResolvedImporter::Generic(config) => parse_generic_csv(file_path, config)?,
+        ResolvedImporter::Generic(config, _) => parse_generic_csv(file_path, config)?,
     };
     let sample: Vec<ParsedRow> = parsed_rows.iter().take(5).cloned().collect();
 
     let mut imported = 0usize;
     let mut skipped = 0usize;
+    let mut created_import: Option<i64> = None;
 
     if !dry_run {
         let dates: Vec<&str> = parsed_rows.iter().map(|r| r.date.as_str()).collect();
@@ -385,6 +460,7 @@ pub fn import_file(
             ],
         )?;
         let import_id = conn.last_insert_rowid();
+        created_import = Some(import_id);
 
         for row in &parsed_rows {
             if is_duplicate_row(conn, account_id, row)? {
@@ -419,6 +495,8 @@ pub fn import_file(
         malformed,
         duplicate_file: false,
         sample,
+        format: Some(format),
+        import_id: created_import,
     })
 }
 
@@ -782,6 +860,24 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         init_db(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn generic_csv_config_round_trips_camel_case() {
+        let json = serde_json::json!({
+            "dateCol": 0,
+            "descCol": 1,
+            "amountCol": 3,
+            "dateFormat": "%m/%d/%Y",
+        });
+
+        let config: GenericCsvConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(config.date_col, 0);
+        assert_eq!(config.desc_col, 1);
+        assert_eq!(config.amount_col, 3);
+        assert_eq!(config.date_format, "%m/%d/%Y");
+
+        assert_eq!(serde_json::to_value(&config).unwrap(), json);
     }
 
     fn add_test_account(conn: &Connection) {
@@ -1404,6 +1500,125 @@ transaction_date,description,amount
         assert_eq!(loaded.desc_col, 2);
         assert_eq!(loaded.amount_col, 4);
         assert_eq!(loaded.date_format, "%d/%m/%Y");
+    }
+
+    #[test]
+    fn import_results_name_the_importer_that_ran() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+
+        // Auto-detected from the account type.
+        let detected = write_bofa_csv(dir.path(), "a.csv", &[("01/15/2025", "COFFEE", "-5.50")]);
+        let result = import_file(&conn, &detected, "Test Checking", None, true, None).unwrap();
+        assert_eq!(result.format.as_deref(), Some("bofa_checking"));
+
+        // An inline mapping has no name of its own.
+        let config = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 1,
+            amount_col: 2,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        let generic = dir.path().join("b.csv");
+        std::fs::write(&generic, "Date,Note,Amount\n01/15/2025,COFFEE,-5.50\n").unwrap();
+        let result =
+            import_file(&conn, &generic, "Test Checking", None, true, Some(&config)).unwrap();
+        assert_eq!(result.format.as_deref(), Some(GENERIC_FORMAT));
+
+        // A saved profile is reported under the name it was saved as.
+        save_csv_profile(&conn, "test_bank", &config).unwrap();
+        let result = import_file(
+            &conn,
+            &generic,
+            "Test Checking",
+            Some("test_bank"),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.format.as_deref(), Some("test_bank"));
+    }
+
+    #[test]
+    fn import_results_carry_the_batch_they_created() {
+        let (dir, conn) = test_db();
+        add_test_account(&conn);
+        let path = write_bofa_csv(
+            dir.path(),
+            "jan.csv",
+            &[
+                ("01/15/2025", "COFFEE", "-5.50"),
+                ("01/16/2025", "TEA", "-3.00"),
+            ],
+        );
+
+        // A dry run creates nothing to point at.
+        let dry = import_file(&conn, &path, "Test Checking", None, true, None).unwrap();
+        assert_eq!(dry.import_id, None);
+
+        let result = import_file(&conn, &path, "Test Checking", None, false, None).unwrap();
+        let import_id = result.import_id.expect("an imports row");
+        let linked: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM transactions WHERE import_id = ?1",
+                [import_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(linked, 2);
+
+        // A file already imported is answered before a format is resolved, so
+        // there is nothing to report on either count.
+        let again = import_file(&conn, &path, "Test Checking", None, false, None).unwrap();
+        assert!(again.duplicate_file);
+        assert_eq!(again.import_id, None);
+        assert_eq!(again.format, None);
+    }
+
+    #[test]
+    fn built_in_formats_describe_every_importer_this_build_has() {
+        let formats = built_in_formats();
+        let keys: Vec<&str> = formats.iter().map(|f| f.key).collect();
+
+        assert!(keys.contains(&"bofa_checking"));
+        assert!(keys.contains(&"bofa_credit_card"));
+        assert_eq!(keys.contains(&"gusto_payroll"), cfg!(feature = "gusto"));
+        assert_eq!(keys.len(), ALL_IMPORTERS.len());
+
+        let checking = formats.iter().find(|f| f.key == "bofa_checking").unwrap();
+        assert_eq!(checking.name, "Bank of America Checking");
+        assert_eq!(checking.account_types, vec!["checking"]);
+    }
+
+    #[test]
+    fn list_csv_profiles_round_trips_alphabetically() {
+        let (_dir, conn) = test_db();
+        assert!(list_csv_profiles(&conn).unwrap().is_empty());
+
+        let chase = GenericCsvConfig {
+            date_col: 0,
+            desc_col: 2,
+            amount_col: 4,
+            date_format: "%d/%m/%Y".to_string(),
+        };
+        let amex = GenericCsvConfig {
+            date_col: 1,
+            desc_col: 3,
+            amount_col: 5,
+            date_format: "%m/%d/%Y".to_string(),
+        };
+        save_csv_profile(&conn, "chase", &chase).unwrap();
+        save_csv_profile(&conn, "amex", &amex).unwrap();
+
+        let profiles = list_csv_profiles(&conn).unwrap();
+        let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["amex", "chase"]);
+        assert_eq!(profiles[0].config.date_col, 1);
+        assert_eq!(profiles[1].config.date_format, "%d/%m/%Y");
+
+        let json = serde_json::to_value(&profiles[0]).unwrap();
+        assert_eq!(json["config"]["dateCol"], 1);
+        assert_eq!(json["config"]["dateFormat"], "%m/%d/%Y");
     }
 
     #[test]

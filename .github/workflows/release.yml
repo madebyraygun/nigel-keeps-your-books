@@ -17,6 +17,17 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      # Without this the released binary embeds the "SPA not built"
+      # placeholder, because web/dist is generated and not tracked by git.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build web UI
+        working-directory: web
+        run: npm ci && npm run build
+
       - name: Build aarch64
         run: cargo build --release --target aarch64-apple-darwin
       - name: Build x86_64
@@ -101,6 +112,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # Same reason as the macOS job: web/dist is generated, so a release built
+      # without node would ship the placeholder instead of the application.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build web UI
+        working-directory: web
+        run: npm ci && npm run build
       - run: cargo build --release --target ${{ matrix.target }}
       - name: Rename binary
         shell: bash

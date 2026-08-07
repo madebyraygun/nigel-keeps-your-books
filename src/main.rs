@@ -1,28 +1,10 @@
-mod browser;
-mod categorizer;
-mod cli;
-mod db;
-mod effects;
-mod error;
-mod fmt;
-mod importer;
-mod invoicing;
-mod migrations;
-mod models;
-#[cfg(feature = "pdf")]
-mod pdf;
-mod reconciler;
-mod reports;
-mod reviewer;
-mod settings;
-mod tui;
-
 use clap::{CommandFactory, Parser};
 
-use cli::{
-    AccountsCommands, BrowseCommands, CategoriesCommands, Cli, ClientCommands, Commands,
+use nigel::cli::{
+    self, AccountsCommands, BrowseCommands, CategoriesCommands, Cli, ClientCommands, Commands,
     InvoiceCommands, PasswordCommand, RulesCommands,
 };
+use nigel::error;
 
 fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
@@ -32,13 +14,13 @@ fn today() -> String {
 /// with no Stripe key configured it does nothing, and any failure prints a
 /// notice instead of failing the command the user actually asked for.
 fn sync_invoice_payments() {
-    let Some(secret_key) = settings::invoicing_config().stripe_secret_key else {
+    let Some(secret_key) = nigel::settings::invoicing_config().stripe_secret_key else {
         return;
     };
-    let gateway = invoicing::stripe::StripeClient { secret_key };
-    let db_path = settings::get_data_dir().join("nigel.db");
-    let result = db::get_connection(&db_path)
-        .and_then(|conn| invoicing::sync::sync_all(&conn, &today(), &gateway));
+    let gateway = nigel::invoicing::stripe::StripeClient { secret_key };
+    let db_path = nigel::settings::get_data_dir().join("nigel.db");
+    let result = nigel::db::get_connection(&db_path)
+        .and_then(|conn| nigel::invoicing::sync::sync_all(&conn, &today(), &gateway));
 
     match result {
         Ok(0) => {}
@@ -87,24 +69,26 @@ fn dispatch(command: Commands) -> error::Result<()> {
     );
 
     // Commands that need the encryption password up front. `password` does its own
-    // prompting as part of set/change/remove, and `completions` never touches the DB.
+    // prompting as part of set/change/remove, `completions` never touches the DB, and
+    // `serve` has no stdin to prompt on — its clients unlock over HTTP instead.
     let needs_password = !matches!(
         command,
         Commands::Init { .. }
             | Commands::Demo
             | Commands::Password { .. }
             | Commands::Completions { .. }
+            | Commands::Serve { .. }
             | Commands::Update
     );
 
-    let db_path = crate::settings::get_data_dir().join("nigel.db");
+    let db_path = nigel::settings::get_data_dir().join("nigel.db");
 
     if needs_existing_db && !db_path.exists() {
         return Err(error::NigelError::NotInitialized);
     }
 
     if needs_password && db_path.exists() {
-        crate::db::prompt_password_if_needed(&db_path)?;
+        nigel::db::prompt_password_if_needed(&db_path)?;
     }
 
     // `restore` overwrites the database file and then migrates the restored copy itself,
@@ -115,15 +99,18 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // Bring the schema up to date before any command reads or writes data. The
     // intersection of the two guards above is exactly the set of commands that open the
     // existing database with a usable password; init/demo/restore migrate via their own
-    // init_db() call, and the dashboard migrates in its own pre-flight.
+    // init_db() call, the dashboard migrates in its own pre-flight, and serve migrates
+    // whatever it can reach without a password.
     if needs_existing_db && needs_password && !replaces_db {
-        let conn = crate::db::get_connection(&db_path)?;
-        crate::db::init_db(&conn)?;
+        let conn = nigel::db::get_connection(&db_path)?;
+        nigel::db::init_db(&conn)?;
     }
 
     // Reconcile Stripe payments for commands that read or write the books.
     // `restore` is excluded because it overwrites the database a sync would
-    // write to, and `invoice sync` because it does the same work itself.
+    // write to, `invoice sync` because it does the same work itself, and
+    // `serve` because its database may still be locked (no stdin to prompt on)
+    // and its startup shouldn't block on a network poll.
     if !matches!(
         command,
         Commands::Init { .. }
@@ -133,6 +120,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Completions { .. }
             | Commands::Password { .. }
             | Commands::Restore { .. }
+            | Commands::Serve { .. }
             | Commands::Invoice {
                 command: InvoiceCommands::Sync
             }
@@ -240,6 +228,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             },
         ),
         Commands::Categorize => cli::categorize::run(),
+        Commands::Recategorize { args } => cli::recategorize::run(args),
         Commands::Demo => cli::demo::run(),
         Commands::Rules { command } => match command {
             RulesCommands::Add {
@@ -289,6 +278,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
         Commands::Restore { path } => cli::restore::run(&path),
+        Commands::Serve { port, no_open } => cli::serve::run(port, no_open),
         Commands::Undo => cli::undo::run(),
         Commands::Update => cli::update::run(),
         Commands::Status => cli::status::run(),
