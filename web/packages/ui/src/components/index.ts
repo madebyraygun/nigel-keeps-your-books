@@ -144,3 +144,25 @@ export {
   type RuleFormErrors,
   type RuleFormValue,
 } from './wc-rule-form.js';
+export {
+  WcReconcileForm,
+  EMPTY_RECONCILE_FORM,
+  formatStatementBalance,
+  parseStatementBalance,
+  validateReconcileForm,
+  type NcReconcileChangeDetail,
+  type NcReconcileSubmitDetail,
+  type ReconcileFormErrors,
+  type ReconcileFormValue,
+} from './wc-reconcile-form.js';
+export { WcReconcileResult } from './wc-reconcile-result.js';
+export {
+  WcImportHistory,
+  transactionCountLabel,
+  type ImportHistoryRow,
+  type NcImportUndoDetail,
+} from './wc-import-history.js';
+export {
+  WcReconciliationHistory,
+  type ReconciliationHistoryRow,
+} from './wc-reconciliation-history.js';
