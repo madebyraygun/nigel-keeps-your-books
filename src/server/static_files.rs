@@ -2,7 +2,9 @@
 //!
 //! `web/dist` is compiled into the binary (in debug builds too, via the
 //! `debug-embed` feature) so a released `nigel` has no filesystem dependency.
-//! Until the real SPA lands, `web/dist/index.html` is a committed placeholder.
+//! The directory is built by `npm run build` in `web/` and is not tracked by
+//! git; `build.rs` seeds it from `web/placeholder/index.html` when it is
+//! missing, and is also what tells cargo to re-embed after a fresh SPA build.
 
 use axum::body::Body;
 use axum::http::{header, StatusCode, Uri};

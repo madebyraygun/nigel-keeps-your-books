@@ -1,0 +1,30 @@
+{
+  "name": "@nigel/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The nigel web application",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@awesome.me/webawesome": "^3.1.0",
+    "@lit-labs/signals": "^0.2.0",
+    "@nigel/theme": "*",
+    "@nigel/ui": "*",
+    "lit": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "jsdom": "^27.4.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6",
+    "vitest": "^2.1.8"
+  }
+}

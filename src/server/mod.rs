@@ -289,7 +289,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(content_type(&response).starts_with("text/html"));
-        assert!(body_string(response).await.contains("placeholder-notice"));
+        // The one string both the built SPA and the placeholder carry, so the
+        // suite does not depend on whether `web/` has been built here.
+        assert!(body_string(response).await.contains("<title>Nigel</title>"));
     }
 
     #[tokio::test]

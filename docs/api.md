@@ -59,6 +59,9 @@ An unencrypted database is never locked and needs no unlock call.
 - Every API-visible field is `camelCase`.
 - Date parameters mirror the CLI: `year` (integer), `month` (`YYYY-MM`), `from`
   and `to` (`YYYY-MM-DD`, which must be supplied as a pair), `account` (name).
+- The web UI's TypeScript mirror of these structs lives in
+  `web/apps/app/src/api/types.ts` — one interface per response struct, named
+  after it. Anything added here is added there in the same commit.
 
 ### Error envelope
 

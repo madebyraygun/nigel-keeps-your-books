@@ -1,0 +1,207 @@
+import { signal, type Signal } from '../mixins/signal-watcher.js';
+import {
+  isKnownApiErrorCode,
+  type ApiErrorCode,
+  type ApiErrorEnvelope,
+  type InvalidPasswordDetails,
+  type PingResponse,
+  type StatusResponse,
+  type UnlockResponse,
+} from './types.js';
+
+/**
+ * Transport-level state, kept here because it belongs to the transport rather
+ * than to any one screen.
+ *
+ * `appLocked` — a 423 was seen, so the database needs a password.
+ * `appUnauthorized` — the session cookie is missing or stale. The SPA cannot
+ * mint a token, so all it can do is tell the user to reopen the URL that
+ * `nigel serve` printed.
+ */
+export const appLocked: Signal.State<boolean> = signal(false);
+export const appUnauthorized: Signal.State<boolean> = signal(false);
+
+/** Status codes the server uses, for responses that carry no envelope. */
+const STATUS_CODES: Record<number, ApiErrorCode> = {
+  400: 'bad_request',
+  401: 'unauthorized',
+  403: 'forbidden',
+  404: 'not_found',
+  409: 'conflict',
+  423: 'locked',
+  500: 'internal',
+  501: 'feature_disabled',
+};
+
+/** A failed API call, normalized from the error envelope. */
+export class ApiError extends Error {
+  readonly code: ApiErrorCode;
+  /** The code exactly as the server sent it, including ones we don't know. */
+  readonly rawCode: string;
+  /** 0 when the request never reached the server. */
+  readonly status: number;
+  readonly details?: unknown;
+
+  constructor(init: {
+    code: ApiErrorCode;
+    rawCode: string;
+    message: string;
+    status: number;
+    details?: unknown;
+  }) {
+    super(init.message);
+    this.name = 'ApiError';
+    this.code = init.code;
+    this.rawCode = init.rawCode;
+    this.status = init.status;
+    this.details = init.details;
+  }
+
+  get isLocked(): boolean {
+    return this.status === 423;
+  }
+
+  /**
+   * A stale session — deliberately *not* true for a wrong unlock password,
+   * which is also a 401 but is the unlock form's business, not a sign that the
+   * session went away.
+   */
+  get isUnauthorized(): boolean {
+    return this.status === 401 && this.code !== 'invalid_password';
+  }
+
+  invalidPasswordDetails(): InvalidPasswordDetails | null {
+    if (this.code !== 'invalid_password') return null;
+    const d = this.details as Partial<InvalidPasswordDetails> | undefined;
+    if (typeof d?.attemptsRemaining !== 'number' || typeof d?.retryAfterMs !== 'number') {
+      return null;
+    }
+    return { attemptsRemaining: d.attemptsRemaining, retryAfterMs: d.retryAfterMs };
+  }
+}
+
+/**
+ * The whole surface the app is allowed to reach the server through.
+ *
+ * One method per endpoint, named after it. There is deliberately no generic
+ * `request()` here: exposing one would let screens hand-roll URLs, and a Tauri
+ * or remote-server implementation of this interface has no URLs to give them.
+ * Routes that take more than one parameter take a single typed options object,
+ * so adding parameters stays a non-breaking change.
+ */
+export interface ApiClient {
+  ping(): Promise<PingResponse>;
+  getStatus(): Promise<StatusResponse>;
+  unlock(password: string): Promise<UnlockResponse>;
+}
+
+export interface FetchApiClientOptions {
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+function isEnvelope(body: unknown): body is ApiErrorEnvelope {
+  if (typeof body !== 'object' || body === null) return false;
+  const error = (body as { error?: unknown }).error;
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === 'string' &&
+    typeof (error as { message?: unknown }).message === 'string'
+  );
+}
+
+/** Talks to `nigel serve` over HTTP. */
+export class FetchApiClient implements ApiClient {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: FetchApiClientOptions = {}) {
+    this.baseUrl = options.baseUrl ?? '/api';
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  }
+
+  ping(): Promise<PingResponse> {
+    return this.request<PingResponse>('GET', '/ping');
+  }
+
+  async getStatus(): Promise<StatusResponse> {
+    const status = await this.request<StatusResponse>('GET', '/status');
+    // status is the authority on lockedness; everywhere else the signal is
+    // only ever raised by a 423.
+    appLocked.set(status.locked);
+    return status;
+  }
+
+  unlock(password: string): Promise<UnlockResponse> {
+    return this.request<UnlockResponse>('POST', '/unlock', { password });
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method,
+        // The session cookie is HttpOnly and same-site. Behind the vite dev
+        // proxy the browser's origin is the vite one, where /auth set the
+        // cookie, so same-origin is right in both deployments.
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (cause) {
+      throw new ApiError({
+        code: 'unknown',
+        rawCode: 'network_error',
+        message: 'Could not reach the nigel server.',
+        status: 0,
+      });
+    }
+
+    if (!response.ok) {
+      throw this.toApiError(await this.errorFrom(response));
+    }
+
+    appUnauthorized.set(false);
+    if (response.status === 204) return undefined as T;
+
+    const text = await response.text();
+    if (text.length === 0) return undefined as T;
+    return JSON.parse(text) as T;
+  }
+
+  private async errorFrom(response: Response): Promise<ApiError> {
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = undefined;
+    }
+
+    if (isEnvelope(parsed)) {
+      const rawCode = parsed.error.code;
+      return new ApiError({
+        code: isKnownApiErrorCode(rawCode) ? rawCode : 'unknown',
+        rawCode,
+        message: parsed.error.message,
+        status: response.status,
+        details: parsed.error.details,
+      });
+    }
+
+    const code = STATUS_CODES[response.status] ?? 'unknown';
+    return new ApiError({
+      code,
+      rawCode: code,
+      message: response.statusText || `Request failed with status ${response.status}.`,
+      status: response.status,
+    });
+  }
+
+  /** Raise the transport signals this failure implies, then hand it back. */
+  private toApiError(error: ApiError): ApiError {
+    if (error.isLocked) appLocked.set(true);
+    if (error.isUnauthorized) appUnauthorized.set(true);
+    return error;
+  }
+}
