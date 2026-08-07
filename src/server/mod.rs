@@ -7,6 +7,8 @@
 pub mod auth;
 pub mod error;
 pub mod extract;
+#[cfg(test)]
+mod fixture_capture;
 pub mod routes;
 pub mod secret;
 pub mod state;
