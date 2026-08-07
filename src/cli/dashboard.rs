@@ -719,7 +719,7 @@ impl Dashboard {
     }
 
     fn enter_browse(&mut self, conn: &rusqlite::Connection) -> DashboardScreen {
-        match reports::get_register(conn, None, None, None, None, None) {
+        match reports::get_register(conn, None, None, None, None, &Default::default()) {
             Ok(data) => {
                 let categories = match get_categories(conn) {
                     Ok(c) => c,
@@ -861,7 +861,15 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
             1 => super::export::expenses(month.clone(), year, None)?,
             2 => super::export::tax(year, None)?,
             3 => super::export::cashflow(month.clone(), year, None)?,
-            4 => super::export::register(month.clone(), year, None, None, None, None)?,
+            4 => super::export::register(
+                month.clone(),
+                year,
+                None,
+                None,
+                &Default::default(),
+                "register",
+                None,
+            )?,
             5 => super::export::flagged(None)?,
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
@@ -891,7 +899,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ("cashflow", super::report::text::cashflow(None, year)),
             (
                 "register",
-                super::report::text::register(None, year, None, None, None),
+                super::report::text::register(None, year, None, None, &Default::default()),
             ),
             ("flagged", super::report::text::flagged()),
             ("balance", super::report::text::balance()),
@@ -921,7 +929,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
         1 => super::report::text::expenses(month, year)?,
         2 => super::report::text::tax(year)?,
         3 => super::report::text::cashflow(month, year)?,
-        4 => super::report::text::register(month, year, None, None, None)?,
+        4 => super::report::text::register(month, year, None, None, &Default::default())?,
         5 => super::report::text::flagged()?,
         6 => super::report::text::balance()?,
         7 => super::report::text::k1(year)?,

@@ -1,7 +1,8 @@
 use colored::Colorize;
 use comfy_table::{Cell, Table};
 
-use crate::cli::parse_month_opt;
+use super::{date_range_label, register_subtitle};
+use crate::cli::{parse_month_opt, RegisterFilterArgs};
 use crate::db::{get_connection, get_metadata};
 use crate::error::Result;
 use crate::fmt::money;
@@ -14,6 +15,15 @@ fn with_header(company_name: &str, body: String) -> String {
         body
     } else {
         format!("{company_name}\n\n{body}")
+    }
+}
+
+/// Prepend a line describing the period and filters a report covers.
+fn with_subtitle(subtitle: &str, body: String) -> String {
+    if subtitle.is_empty() {
+        body
+    } else {
+        format!("{subtitle}\n\n{body}")
     }
 }
 
@@ -63,21 +73,26 @@ pub fn register(
     year: Option<i32>,
     from_date: Option<String>,
     to_date: Option<String>,
-    account: Option<String>,
+    filters: &RegisterFilterArgs,
 ) -> Result<String> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let company = get_metadata(&conn, "company_name").unwrap_or_default();
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
+    let filters = filters.resolve(&conn)?;
     let data = reports::get_register(
         &conn,
         y,
         mm,
         from_date.as_deref(),
         to_date.as_deref(),
-        account.as_deref(),
+        &filters,
     )?;
-    Ok(with_header(&company, format_register(&data)))
+    let subtitle = register_subtitle(&date_range_label(&month, &y), &filters);
+    Ok(with_header(
+        &company,
+        with_subtitle(&subtitle, format_register(&data)),
+    ))
 }
 
 pub fn flagged() -> Result<String> {

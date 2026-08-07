@@ -13,16 +13,7 @@ use crate::error::Result;
 use crate::settings::get_data_dir;
 
 #[cfg(feature = "pdf")]
-fn date_range_label(month: &Option<String>, year: &Option<i32>) -> String {
-    if let Some(m) = month {
-        return m.clone();
-    }
-    if let Some(y) = year {
-        return format!("FY {y}");
-    }
-    let y = chrono::Datelike::year(&chrono::Local::now());
-    format!("FY {y}")
-}
+use crate::cli::report::{date_range_label, register_subtitle};
 
 #[cfg(feature = "pdf")]
 fn default_path(name: &str) -> PathBuf {
@@ -59,13 +50,24 @@ pub fn dispatch_pdf(cmd: ReportCommands, output: Option<String>) -> Result<Strin
         ReportCommands::Tax { year, .. } => tax(year, output),
         ReportCommands::Cashflow { month, year, .. } => cashflow(month, year, output),
         ReportCommands::Register {
-            month,
+            ref month,
             year,
-            from_date,
-            to_date,
-            account,
+            ref from_date,
+            ref to_date,
+            ref filters,
             ..
-        } => register(month, year, from_date, to_date, account, output),
+        } => {
+            let basename = cmd.export_basename();
+            register(
+                month.clone(),
+                year,
+                from_date.clone(),
+                to_date.clone(),
+                filters,
+                &basename,
+                output,
+            )
+        }
         ReportCommands::Flagged { .. } => flagged(output),
         ReportCommands::Balance { .. } => balance(output),
         ReportCommands::K1 { year, .. } => k1(year, output),
@@ -151,26 +153,28 @@ pub fn register(
     year: Option<i32>,
     from_date: Option<String>,
     to_date: Option<String>,
-    account: Option<String>,
+    filters: &crate::cli::RegisterFilterArgs,
+    basename: &str,
     output: Option<String>,
 ) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
+    let filters = filters.resolve(&conn)?;
     let report = crate::reports::get_register(
         &conn,
         y,
         mm,
         from_date.as_deref(),
         to_date.as_deref(),
-        account.as_deref(),
+        &filters,
     )?;
     let company = get_metadata(&conn, "company_name").unwrap_or_default();
-    let range = date_range_label(&month, &year.or(my));
-    let bytes = crate::pdf::render_register(&report, &company, &range)?;
+    let subtitle = register_subtitle(&date_range_label(&month, &y), &filters);
+    let bytes = crate::pdf::render_register(&report, &company, &subtitle)?;
     let path = output
         .map(PathBuf::from)
-        .unwrap_or_else(|| default_path("register"));
+        .unwrap_or_else(|| default_path(basename));
     write_pdf(&bytes, &path)
 }
 
@@ -254,7 +258,14 @@ pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<String> {
         &path("cashflow"),
     )?;
 
-    let register = crate::reports::get_register(&conn, year, None, None, None, None)?;
+    let register = crate::reports::get_register(
+        &conn,
+        year,
+        None,
+        None,
+        None,
+        &crate::reports::RegisterFilters::default(),
+    )?;
     write_pdf(
         &crate::pdf::render_register(&register, &company, &range)?,
         &path("register"),

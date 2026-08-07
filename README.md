@@ -23,6 +23,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Bulk recategorization** — `nigel recategorize` moves transactions between categories by ID or by filters (category, date range, pattern, account, amount), with `--dry-run` preview and confirmation for filter-based moves
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
+- **Register filters** — narrow `nigel report register` and `nigel browse register` by `--account`, `--category`, or `--uncategorized`, composed with any date range; active filters appear in the report header and in the default export filename
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
@@ -105,6 +106,9 @@ nigel report cashflow
 nigel report balance
 nigel report flagged
 nigel report register --year 2025   # Transaction register
+nigel report register --year 2025 --account "BofA Checking"
+nigel report register --year 2025 --category "Taxes & Licenses"
+nigel report register --uncategorized                 # Transactions with no category
 
 # Export reports
 nigel report pnl --year 2025 --mode export            # PDF
@@ -116,6 +120,8 @@ nigel report all --year 2025 --output-dir ~/exports/   # Custom directory
 nigel browse register
 nigel browse register --year 2025                     # Filter to a specific year
 nigel browse register --account "BofA Checking"
+nigel browse register --category "Taxes & Licenses"
+nigel browse register --uncategorized
 
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67

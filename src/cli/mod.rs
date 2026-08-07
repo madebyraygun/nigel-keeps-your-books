@@ -339,6 +339,44 @@ pub struct ReportOutputArgs {
     pub output: Option<String>,
 }
 
+/// Shared non-date filters for the register surfaces (report and browse).
+#[derive(Args, Clone, Default)]
+pub struct RegisterFilterArgs {
+    /// Filter by account name
+    #[arg(long)]
+    pub account: Option<String>,
+    /// Filter by category name
+    #[arg(long)]
+    pub category: Option<String>,
+    /// Show only transactions with no category
+    #[arg(long, conflicts_with = "category")]
+    pub uncategorized: bool,
+}
+
+impl RegisterFilterArgs {
+    /// Validate the selection against the database, resolving the category name to an id.
+    pub fn resolve(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> crate::error::Result<crate::reports::RegisterFilters> {
+        crate::reports::RegisterFilters::resolve(
+            conn,
+            self.account.clone(),
+            self.category.clone(),
+            self.uncategorized,
+        )
+    }
+
+    /// Filename-safe fragments describing the selection, for default export paths.
+    pub fn slug_parts(&self) -> Vec<String> {
+        crate::reports::register_slug_parts(
+            self.account.as_deref(),
+            self.category.as_deref(),
+            self.uncategorized,
+        )
+    }
+}
+
 #[derive(Subcommand)]
 pub enum ReportCommands {
     /// Profit & Loss report.
@@ -393,9 +431,8 @@ pub enum ReportCommands {
         from_date: Option<String>,
         #[arg(long = "to")]
         to_date: Option<String>,
-        /// Filter by account name
-        #[arg(long)]
-        account: Option<String>,
+        #[command(flatten)]
+        filters: RegisterFilterArgs,
         #[command(flatten)]
         output: ReportOutputArgs,
     },
@@ -450,6 +487,19 @@ impl ReportCommands {
         }
     }
 
+    /// Base filename for a default export path: the report name followed by
+    /// slugified fragments for any active filters.
+    pub fn export_basename(&self) -> String {
+        let mut name = self.report_name().to_string();
+        if let Self::Register { filters, .. } = self {
+            for part in filters.slug_parts() {
+                name.push('-');
+                name.push_str(&part);
+            }
+        }
+        name
+    }
+
     pub fn report_name(&self) -> &'static str {
         match self {
             Self::Pnl { .. } => "pnl",
@@ -477,8 +527,7 @@ pub enum BrowseCommands {
         from_date: Option<String>,
         #[arg(long = "to")]
         to_date: Option<String>,
-        /// Filter by account name
-        #[arg(long)]
-        account: Option<String>,
+        #[command(flatten)]
+        filters: RegisterFilterArgs,
     },
 }

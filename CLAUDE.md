@@ -20,7 +20,7 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 - **Undo Screen:** `cli/undo_manager.rs` — inline TUI screen for undoing the last import; shows import details (filename, account, date, transaction count) and confirms before deleting; data layer in `cli/undo.rs`
 - **Reconcile Screen:** `cli/reconcile_manager.rs` — inline TUI form for account reconciliation; account selector + month/balance input; shows reconciled/discrepancy result
 - **Load Screen:** `cli/load_manager.rs` — inline TUI form for switching data directories; validates path and triggers dashboard reload
-- **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout. `TableReportView` supports interactive date navigation: Left/Right arrows page between periods, `m` toggles month/year granularity; each report declares its `DateGranularity` (MonthAndYear, YearOnly, or None)
+- **Reports:** `cli/report/` — unified report command with `--mode view|export`, `--format pdf|text`, and `--output` flags; `mod.rs` dispatches to `view.rs` (interactive ratatui views), `text.rs` (comfy_table formatting), or `export.rs` (PDF export); non-TTY automatically falls back to plain text stdout. `mod.rs` also owns `date_range_label()` (period label: `2025-03`, `FY 2025`, or `All dates` when no date filter is given) and `register_subtitle()`, which appends active register filters to that label for text and PDF headers. `TableReportView` supports interactive date navigation: Left/Right arrows page between periods, `m` toggles month/year granularity; each report declares its `DateGranularity` (MonthAndYear, YearOnly, or None)
 - **K-1 worksheet mapping:** `reports::resolve_k1_mapping()` maps each category to a 1120-S worksheet slot from its `form_line`. Vocabulary: `1120S-1a` (gross receipts), `1120S-2` (cost of goods sold), `1120S-5` (other income), `1120S-N` (deduction lines 7-19), `K-N` (Schedule K items), `excluded` (intentionally outside the worksheet, e.g. transfers). Income categories with no `form_line` fall back to gross receipts and are listed in the report's `auto_mapped` note; expense categories with no `form_line` are collected in `unmapped` and surfaced in a "Needs mapping" section, excluded from all totals. The worksheet reports Gross Receipts, Cost of Goods Sold, and Gross Profit; `total_deductions` is the sum of deductible amounts (meals limited to 50%).
 - **Effects:** `effects.rs` — shared pastel rainbow gradient palette, `gradient_color()` interpolation, `Particle` struct with `new()`/`seeded()`/`tick()`/`is_dead()`, `pre_seed_particles()`, and `tick_particles()` helpers; used by splash, goodbye, onboarding, and snake screens
 - **Splash:** `cli/splash.rs` — 1.5-second splash screen shown on app launch (skipped during first-run onboarding); displays Nigel ASCII logo with rainbow gradient text and pre-seeded floating particle background; dismissable by any keypress. For encrypted databases, the splash holds indefinitely (no auto-fade) and displays an inline masked password input below the logo; supports up to 3 attempts with error feedback; `run()` for unencrypted, `run_with_password(db_path)` for encrypted
@@ -80,6 +80,8 @@ nigel report cashflow                             # Cash flow
 nigel report balance                              # Cash position
 nigel report register --year 2025                 # Interactive register browser
 nigel report register --account "BofA Checking"   # Filter by account
+nigel report register --category "Taxes & Licenses"  # Filter by category
+nigel report register --uncategorized             # Only transactions with no category
 nigel report flagged                              # Flagged transactions
 nigel report k1 --year 2025                       # K-1 prep worksheet (1120-S)
 nigel report pnl --year 2025 --mode export        # Export as PDF
@@ -91,6 +93,8 @@ nigel report all --year 2025 --output-dir ~/exports/  # Custom output directory
 nigel browse register                            # All transactions, starts at today
 nigel browse register --year 2025                 # Filter to a specific year
 nigel browse register --account "BofA Checking"   # Browse filtered by account
+nigel browse register --category "Taxes & Licenses"  # Browse filtered by category
+nigel browse register --uncategorized             # Browse transactions with no category
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
 nigel status                                      # Show active DB and summary stats
 nigel load ~/other-books                          # Switch to a different data directory
@@ -127,6 +131,8 @@ Do not merge or mark work complete if docs are stale.
 - Cash amounts are plain `f64` — negative = expense, positive = income. This is a known precision limitation: `f64` is not suitable for sub-cent accuracy, but is acceptable for the cash-basis bookkeeping use case where all amounts are rounded to cents on import
 - Date filters `--from`/`--to` must be supplied as a pair; providing only one is a hard error
 - Browse register and reports with no date flags show all transactions (no implicit year filter); the browse view scrolls to today on load
+- Register filters (`--account`, `--category`, `--uncategorized`) are shared by `report register` and `browse register` via the `RegisterFilterArgs` clap struct in `cli/mod.rs`; `--category` and `--uncategorized` are mutually exclusive (enforced by clap). `RegisterFilters::resolve()` in `reports.rs` validates the category name against the database before any query runs — an unknown name is `NigelError::UnknownCategory`, and other rusqlite errors propagate unchanged. Account names are not validated: an account with no transactions yields an empty selection, matching the pre-existing `--account` behavior
+- Active register filters are surfaced everywhere the report is: the browser footer, the text/PDF report header (via `register_subtitle()`), and the default export filename, which appends slugified filter fragments (`register-bofa-checking-taxes-licenses-<date>.txt`). An explicit `--output` always takes precedence
 - Database row deserialization errors are propagated, never silently discarded
 - Database password is never persisted to disk — stored only in runtime `Mutex<Option<String>>`; for the dashboard, password is collected inline on the splash screen (TUI masked input); for CLI subcommands, prompted via rpassword
 - Demo databases are always unencrypted; `init` and `demo` subcommands skip password detection
@@ -188,7 +194,7 @@ src/
   importer.rs           # ImporterKind enum, format detection, CSV/XLSX parsing
   categorizer.rs        # Rules engine (categorize_transactions)
   reviewer.rs           # Interactive review flow
-  reports.rs            # Report data functions (pnl, expenses, tax, cashflow, balance, flagged, k1_prep)
+  reports.rs            # Report data functions (pnl, expenses, tax, cashflow, balance, flagged, k1_prep) + RegisterFilters
   browser.rs            # Interactive register browser (ratatui, row selection, inline editing, flag toggle, scroll navigation)
   effects.rs            # Shared gradient/particle effects (used by splash, onboarding, snake)
   tui.rs                # Shared ratatui helpers (styles, money_span, wrap_text, ReportView trait, run_report_view)

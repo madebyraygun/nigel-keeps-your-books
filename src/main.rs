@@ -207,8 +207,8 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 year,
                 from_date,
                 to_date,
-                account,
-            } => cli::browse::register(month, year, from_date, to_date, account),
+                filters,
+            } => cli::browse::register(month, year, from_date, to_date, &filters),
         },
         Commands::Reconcile {
             account,
