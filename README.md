@@ -20,6 +20,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Auto-snapshot** — automatic database snapshot before every import for easy rollback
 - **Undo imports** — `nigel undo` rolls back the last import, removing its transactions after confirmation
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
+- **Bulk recategorization** — `nigel recategorize` moves transactions between categories by ID or by filters (category, date range, pattern, account, amount), with `--dry-run` preview and confirmation for filter-based moves
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
@@ -92,6 +93,11 @@ nigel categorize
 nigel review
 nigel review --id 185                 # Re-review a specific transaction by ID
 
+# Recategorize transactions non-interactively (by ID, or in bulk by filters)
+nigel recategorize 185 212 --category "Software & Subscriptions"
+nigel recategorize --from-category "Cost of Goods Sold" --year 2025 --category "Supplies" --dry-run
+nigel recategorize --from-category "Cost of Goods Sold" --year 2025 --category "Supplies" --yes
+
 # View reports (interactive ratatui views)
 nigel report pnl --year 2025
 nigel report expenses --month 2025-03
@@ -143,6 +149,25 @@ nigel update
 # Shell completions
 nigel completions bash                            # Also: zsh, fish, powershell
 ```
+
+## Automated backups
+
+`nigel backup` uses SQLite's online-backup API, so it produces a consistent snapshot even while Nigel is running, and an encrypted database yields an encrypted backup. Copying `nigel.db` with `cp` or a file-sync tool does **not** give you this — such a copy can catch the database mid-write, along with an out-of-step `-wal` file, and may not restore.
+
+On an encrypted database, `nigel` normally prompts for the password on the terminal. Scheduled jobs have no terminal, so set `NIGEL_DB_PASSWORD` instead:
+
+```bash
+NIGEL_DB_PASSWORD="$(security find-generic-password -s nigel-db -w)" \
+  nigel backup --output ~/Documents/nigel/backups/nigel-$(date +%F).db
+```
+
+`NIGEL_DB_PASSWORD` is fatal when unusable — wrong, empty, or not valid UTF-8 — rather than falling back to a prompt no scheduled job could answer. An empty value reports itself as empty, since the usual cause is the secret lookup failing rather than a bad password. Leave the variable unset for normal interactive use; while it is set, it takes precedence over the prompt even in a terminal.
+
+A plaintext database ignores the variable entirely, so a value left over in your shell cannot lock you out of a database that never had a password.
+
+Put this in a wrapper script rather than directly in a launchd plist: `ProgramArguments` execs without a shell, so command substitution, `~`, and `VAR=value` prefixes are all inert there. Launch agents also start with a minimal `PATH` that excludes `~/.cargo/bin`, so call `nigel` by absolute path.
+
+Read the password from a secret store, as above, rather than writing it into a script or a plist. Note that an environment variable is visible to other processes running as you (`ps -E` on macOS), so on a shared account prefer running the backup interactively.
 
 ## Configuration
 

@@ -87,7 +87,7 @@ fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
 // Date filter helper
 // ---------------------------------------------------------------------------
 
-fn date_filter(
+pub(crate) fn date_filter(
     year: Option<i32>,
     month: Option<u32>,
     from_date: Option<&str>,

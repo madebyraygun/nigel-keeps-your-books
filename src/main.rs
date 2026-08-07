@@ -154,6 +154,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             },
         ),
         Commands::Categorize => cli::categorize::run(),
+        Commands::Recategorize { args } => cli::recategorize::run(args),
         Commands::Demo => cli::demo::run(),
         Commands::Rules { command } => match command {
             RulesCommands::Add {

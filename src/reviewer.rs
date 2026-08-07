@@ -189,6 +189,184 @@ pub fn toggle_transaction_flag(conn: &Connection, transaction_id: i64) -> Result
     Ok(new_state)
 }
 
+/// Filter for selecting transactions to recategorize. All set fields are ANDed.
+/// Amount bounds compare against the absolute transaction amount.
+pub struct RecategorizeFilter {
+    pub from_category_id: Option<i64>,
+    pub uncategorized: bool,
+    pub year: Option<i32>,
+    pub month: Option<u32>,
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+    pub pattern: Option<String>,
+    pub match_type: String,
+    pub account_id: Option<i64>,
+    pub min_amount: Option<f64>,
+    pub max_amount: Option<f64>,
+}
+
+// Manual impl so `..Default::default()` yields a usable match_type — the derived
+// empty string would make any pattern silently match nothing.
+impl Default for RecategorizeFilter {
+    fn default() -> Self {
+        Self {
+            from_category_id: None,
+            uncategorized: false,
+            year: None,
+            month: None,
+            from_date: None,
+            to_date: None,
+            pattern: None,
+            match_type: "contains".to_string(),
+            account_id: None,
+            min_amount: None,
+            max_amount: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RecategorizeCandidate {
+    pub id: i64,
+    pub date: String,
+    pub description: String,
+    pub amount: f64,
+    pub category_id: Option<i64>,
+    pub category: Option<String>,
+}
+
+fn candidate_from_row(row: &rusqlite::Row) -> rusqlite::Result<RecategorizeCandidate> {
+    Ok(RecategorizeCandidate {
+        id: row.get(0)?,
+        date: row.get(1)?,
+        description: row.get(2)?,
+        amount: row.get(3)?,
+        category_id: row.get(4)?,
+        category: row.get(5)?,
+    })
+}
+
+pub fn find_transactions_for_recategorize(
+    conn: &Connection,
+    filter: &RecategorizeFilter,
+) -> Result<Vec<RecategorizeCandidate>> {
+    // date_filter's clause numbers its placeholders from ?1, so it must come first
+    // and its params must lead the params vec.
+    let (date_clause, date_params) = crate::reports::date_filter(
+        filter.year,
+        filter.month,
+        filter.from_date.as_deref(),
+        filter.to_date.as_deref(),
+    )?;
+    let mut clauses = vec![date_clause];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = date_params
+        .into_iter()
+        .map(|p| Box::new(p) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+
+    if let Some(cat_id) = filter.from_category_id {
+        params.push(Box::new(cat_id));
+        clauses.push(format!("t.category_id = ?{}", params.len()));
+    }
+    if filter.uncategorized {
+        clauses.push("t.category_id IS NULL".to_string());
+    }
+    if let Some(acct_id) = filter.account_id {
+        params.push(Box::new(acct_id));
+        clauses.push(format!("t.account_id = ?{}", params.len()));
+    }
+    if let Some(min) = filter.min_amount {
+        params.push(Box::new(min));
+        clauses.push(format!("ABS(t.amount) >= ?{}", params.len()));
+    }
+    if let Some(max) = filter.max_amount {
+        params.push(Box::new(max));
+        clauses.push(format!("ABS(t.amount) <= ?{}", params.len()));
+    }
+
+    let sql = format!(
+        "SELECT t.id, t.date, t.description, t.amount, t.category_id, c.name \
+         FROM transactions t LEFT JOIN categories c ON t.category_id = c.id \
+         WHERE {} ORDER BY t.date, t.id",
+        clauses.join(" AND ")
+    );
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows: Vec<RecategorizeCandidate> = stmt
+        .query_map(param_refs.as_slice(), candidate_from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Regex (and the other match types) filter in Rust via the categorizer, so the
+    // semantics match rules exactly; SQLite has no regex function loaded. The
+    // categorizer treats a bad match type or regex as "matches nothing", which
+    // here would silently select zero rows — reject both up front instead.
+    if let Some(ref pattern) = filter.pattern {
+        let valid_types = ["contains", "starts_with", "regex"];
+        if !valid_types.contains(&filter.match_type.as_str()) {
+            return Err(NigelError::Other(format!(
+                "Invalid match type: {}. Must be one of: {}",
+                filter.match_type,
+                valid_types.join(", ")
+            )));
+        }
+        if filter.match_type == "regex" {
+            regex::Regex::new(pattern)
+                .map_err(|e| NigelError::Other(format!("Invalid regex: {e}")))?;
+        }
+        rows.retain(|r| crate::categorizer::matches(&r.description, pattern, &filter.match_type));
+    }
+    Ok(rows)
+}
+
+pub fn get_transactions_by_ids(
+    conn: &Connection,
+    ids: &[i64],
+) -> Result<Vec<RecategorizeCandidate>> {
+    let mut out = Vec::with_capacity(ids.len());
+    let mut missing = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.date, t.description, t.amount, t.category_id, c.name \
+         FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE t.id = ?1",
+    )?;
+    for &id in ids {
+        match stmt.query_row([id], candidate_from_row) {
+            Ok(c) => out.push(c),
+            Err(rusqlite::Error::QueryReturnedNoRows) => missing.push(id.to_string()),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(NigelError::Other(format!(
+            "No transaction found with ID{} {}. Nothing was changed.",
+            if missing.len() == 1 { "" } else { "s" },
+            missing.join(", ")
+        )));
+    }
+    Ok(out)
+}
+
+/// Batch-move transactions to a category, clearing `is_flagged`/`flag_reason` the
+/// same way a review does. Vendor is left untouched. All rows update in one
+/// transaction — all or nothing.
+pub fn recategorize_transactions(
+    conn: &Connection,
+    ids: &[i64],
+    category_id: i64,
+) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let mut updated = 0;
+    {
+        let mut stmt = tx.prepare(
+            "UPDATE transactions SET category_id = ?1, is_flagged = 0, flag_reason = NULL WHERE id = ?2",
+        )?;
+        for &id in ids {
+            updated += stmt.execute(rusqlite::params![category_id, id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(updated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +392,204 @@ mod tests {
             rusqlite::params![acct],
         ).unwrap();
         conn.last_insert_rowid()
+    }
+
+    fn ensure_account(conn: &Connection) -> i64 {
+        conn.execute(
+            "INSERT OR IGNORE INTO accounts (id, name, account_type) VALUES (1, 'Test', 'checking')",
+            [],
+        )
+        .unwrap();
+        1
+    }
+
+    fn add_categorized_txn(
+        conn: &Connection,
+        date: &str,
+        desc: &str,
+        amount: f64,
+        category: &str,
+    ) -> i64 {
+        let acct = ensure_account(conn);
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = ?1",
+                [category],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id, is_flagged) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            rusqlite::params![acct, date, desc, amount, cat_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    fn category_id(conn: &Connection, name: &str) -> i64 {
+        conn.query_row("SELECT id FROM categories WHERE name = ?1", [name], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_find_for_recategorize_by_category_and_year() {
+        let (_dir, conn) = test_db();
+        let a = add_categorized_txn(
+            &conn,
+            "2025-04-14",
+            "MIXAM.COM",
+            -667.10,
+            "Cost of Goods Sold",
+        );
+        add_categorized_txn(
+            &conn,
+            "2024-11-01",
+            "MIXAM.COM",
+            -300.0,
+            "Cost of Goods Sold",
+        );
+        add_categorized_txn(&conn, "2025-05-01", "DELTA AIR", -400.0, "Travel");
+
+        let filter = RecategorizeFilter {
+            from_category_id: Some(category_id(&conn, "Cost of Goods Sold")),
+            year: Some(2025),
+            ..Default::default()
+        };
+        let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, a);
+        assert_eq!(found[0].category.as_deref(), Some("Cost of Goods Sold"));
+    }
+
+    #[test]
+    fn test_find_for_recategorize_pattern_and_amount() {
+        let (_dir, conn) = test_db();
+        add_categorized_txn(
+            &conn,
+            "2025-01-21",
+            "ISTOCKPHOTO",
+            -45.0,
+            "Cost of Goods Sold",
+        );
+        let m = add_categorized_txn(
+            &conn,
+            "2025-04-14",
+            "MIXAM.COM",
+            -667.10,
+            "Cost of Goods Sold",
+        );
+
+        let filter = RecategorizeFilter {
+            pattern: Some("istock".to_string()),
+            ..Default::default()
+        };
+        let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].description, "ISTOCKPHOTO");
+
+        let filter = RecategorizeFilter {
+            min_amount: Some(100.0),
+            ..Default::default()
+        };
+        let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, m);
+    }
+
+    #[test]
+    fn test_find_for_recategorize_uncategorized() {
+        let (_dir, conn) = test_db();
+        let flagged = add_flagged_txn(&conn);
+        add_categorized_txn(&conn, "2025-05-01", "DELTA AIR", -400.0, "Travel");
+
+        let filter = RecategorizeFilter {
+            uncategorized: true,
+            ..Default::default()
+        };
+        let found = find_transactions_for_recategorize(&conn, &filter).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, flagged);
+        assert!(found[0].category.is_none());
+    }
+
+    #[test]
+    fn test_find_for_recategorize_rejects_bad_pattern_config() {
+        let (_dir, conn) = test_db();
+        add_categorized_txn(
+            &conn,
+            "2025-01-21",
+            "ISTOCKPHOTO",
+            -45.0,
+            "Cost of Goods Sold",
+        );
+
+        let err = find_transactions_for_recategorize(
+            &conn,
+            &RecategorizeFilter {
+                pattern: Some("(".to_string()),
+                match_type: "regex".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid regex"), "got: {err}");
+
+        let err = find_transactions_for_recategorize(
+            &conn,
+            &RecategorizeFilter {
+                pattern: Some("ISTOCK".to_string()),
+                match_type: "fuzzy".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid match type"), "got: {err}");
+    }
+
+    #[test]
+    fn test_get_transactions_by_ids_unknown_id_errors() {
+        let (_dir, conn) = test_db();
+        let real = add_categorized_txn(&conn, "2025-05-01", "DELTA AIR", -400.0, "Travel");
+
+        let err = get_transactions_by_ids(&conn, &[real, 99999]).unwrap_err();
+        assert!(err.to_string().contains("99999"));
+
+        let found = get_transactions_by_ids(&conn, &[real]).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, real);
+    }
+
+    #[test]
+    fn test_recategorize_transactions_updates_and_clears_flags() {
+        let (_dir, conn) = test_db();
+        let flagged = add_flagged_txn(&conn);
+        let cat = add_categorized_txn(
+            &conn,
+            "2025-04-14",
+            "MIXAM.COM",
+            -667.10,
+            "Cost of Goods Sold",
+        );
+        let travel = category_id(&conn, "Travel");
+
+        let updated = recategorize_transactions(&conn, &[flagged, cat], travel).unwrap();
+        assert_eq!(updated, 2);
+
+        for id in [flagged, cat] {
+            let (cat_id, is_flagged, reason): (i64, i64, Option<String>) = conn
+                .query_row(
+                    "SELECT category_id, is_flagged, flag_reason FROM transactions WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(cat_id, travel);
+            assert_eq!(is_flagged, 0);
+            assert!(reason.is_none());
+        }
     }
 
     #[test]
