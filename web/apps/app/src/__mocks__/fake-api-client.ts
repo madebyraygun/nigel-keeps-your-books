@@ -26,6 +26,7 @@ export const UNLOCKED_STATUS: StatusResponse = {
   version: '0.0.0-test',
   dataDir: '/tmp/nigel',
   pdfExport: true,
+  updateAvailable: null,
 };
 
 export const LOCKED_STATUS: StatusResponse = {

@@ -97,6 +97,13 @@ pub struct AppState {
     /// and any handler that opens a connection itself); those two operations
     /// and the data-directory switch take the write side.
     pub db_gate: Arc<TokioRwLock<()>>,
+    /// The version of a newer release, once the startup check has found one.
+    ///
+    /// A slot rather than a value because the check runs in the background:
+    /// requests are answered immediately and this fills in when GitHub replies,
+    /// so an early `/api/status` reports nothing rather than waiting on the
+    /// network.
+    update_available: Arc<RwLock<Option<String>>>,
 }
 
 impl AppState {
@@ -107,7 +114,20 @@ impl AppState {
             features: Features::detect(),
             unlock: Arc::new(UnlockGate::default()),
             db_gate: Arc::new(TokioRwLock::new(())),
+            update_available: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// The version of the newer release the startup check found, if any.
+    pub fn update_available(&self) -> Option<String> {
+        // unwrap: poisoned lock means a thread panicked — unrecoverable
+        self.update_available.read().unwrap().clone()
+    }
+
+    /// Record what the startup update check found.
+    pub fn set_update_available(&self, version: Option<String>) {
+        // unwrap: poisoned lock means a thread panicked — unrecoverable
+        *self.update_available.write().unwrap() = version;
     }
 
     /// The database this server is currently serving.

@@ -61,6 +61,7 @@ pub(crate) struct StatusResponse {
     version: &'static str,
     data_dir: String,
     pdf_export: bool,
+    update_available: Option<String>,
 }
 
 /// Everything `GET /api/status` reports, computed fresh.
@@ -104,6 +105,10 @@ pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse
         // clicks: a build without the feature would otherwise save the `501`
         // envelope to a file called something.pdf.
         pdf_export: state.features.pdf,
+        // Filled in by the background check `serve` starts, so this is `None`
+        // until GitHub answers — and stays `None` when the user has opted out
+        // or the 24-hour cooldown has not elapsed.
+        update_available: state.update_available(),
     })
 }
 

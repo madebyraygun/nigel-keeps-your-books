@@ -114,7 +114,8 @@ uninitialized, so the SPA can decide which screen to show before it has data.
   "companyName": "Raygun LLC",
   "version": "1.0.1",
   "dataDir": "/home/you/Documents/nigel",
-  "pdfExport": true
+  "pdfExport": true,
+  "updateAvailable": "1.0.2"
 }
 ```
 
@@ -125,6 +126,15 @@ a key, and `locked` whether this process still lacks that key. `companyName` is
 `pdfExport` is whether this binary was built with the `pdf` feature; a client
 uses it to decide whether to offer a PDF download at all (see
 [Exporting reports](#exporting-reports)).
+
+`updateAvailable` is the version of a newer release, or `null`. It is the check
+`nigel` already runs at launch, under the same rules: the `update_check` setting
+turns it off, and GitHub is asked at most once every 24 hours. It runs in a
+background task started with the server rather than inside the handler, so it is
+`null` on the first status calls of a run and fills in once GitHub answers — a
+client that wants to catch it re-reads status rather than expecting it on the
+first fetch. A platform with no release asset reports `null`, matching what
+`nigel update` could actually install.
 
 ### `POST /api/unlock`
 

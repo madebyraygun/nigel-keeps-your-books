@@ -26,6 +26,13 @@ export interface StatusResponse {
   dataDir: string;
   /** Whether this build can render PDFs. False means offer text export only. */
   pdfExport: boolean;
+  /**
+   * The version of a newer release, or null.
+   *
+   * Filled in by a background check on the server, so it is null on the first
+   * status of a run even when an update does exist.
+   */
+  updateAvailable: string | null;
 }
 
 /** `POST /api/unlock` */

@@ -158,8 +158,12 @@ pub fn run() -> Result<()> {
 }
 
 /// Non-blocking check on launch: respects cooldown and opt-out setting.
-/// Returns a notification message if an update is available, or None.
-pub fn check_and_notify() -> Option<String> {
+/// Returns the available update, or None.
+///
+/// The data-only half of `check_and_notify`. `nigel serve` needs the version
+/// number rather than a sentence — it reports it as a JSON field and lets the
+/// web UI write its own words — and must not bypass the cooldown to get it.
+pub fn check_with_cooldown() -> Option<UpdateInfo> {
     let mut settings = load_settings();
 
     if !settings.update_check {
@@ -185,11 +189,18 @@ pub fn check_and_notify() -> Option<String> {
     }
 
     // Attempt the check, silently returning None on any error
-    let info = check_for_update().ok()??;
-    Some(format!(
-        "A new version of Nigel is available: v{}. Run `nigel update` to install.",
-        info.version
-    ))
+    check_for_update().ok()?
+}
+
+/// How the terminal announces an available update.
+pub fn update_notice(version: &str) -> String {
+    format!("A new version of Nigel is available: v{version}. Run `nigel update` to install.")
+}
+
+/// Non-blocking check on launch: respects cooldown and opt-out setting.
+/// Returns a notification message if an update is available, or None.
+pub fn check_and_notify() -> Option<String> {
+    check_with_cooldown().map(|info| update_notice(&info.version))
 }
 
 /// Compare two semver strings. Returns true if `remote` is newer than `current`.
@@ -216,6 +227,13 @@ mod tests {
         );
         let name = name.unwrap();
         assert!(name.starts_with("nigel-"));
+    }
+
+    #[test]
+    fn test_update_notice_names_the_version_and_the_command() {
+        let notice = update_notice("1.2.3");
+        assert!(notice.contains("v1.2.3"), "got {notice}");
+        assert!(notice.contains("nigel update"), "got {notice}");
     }
 
     #[test]

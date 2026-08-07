@@ -55,6 +55,8 @@ async fn serve(db_path: PathBuf, port: u16, no_open: bool) -> Result<()> {
     // A previous run may have been killed between an upload and its import.
     uploads::purge_stale(&uploads::uploads_dir(&state.db_path()), uploads::MAX_AGE);
 
+    spawn_update_check(state.clone());
+
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
     let addr = listener.local_addr()?;
     let url = format!(
@@ -77,6 +79,24 @@ async fn serve(db_path: PathBuf, port: u16, no_open: bool) -> Result<()> {
     serve_with_shutdown(listener, state, shutdown_signal()).await?;
     println!("Server stopped.");
     Ok(())
+}
+
+/// Ask GitHub whether there is a newer release, off the request path.
+///
+/// One shot rather than a ticker: `check_with_cooldown` will not ask again for
+/// 24 hours, so a repeating task in a foreground server would only ever find
+/// its own cooldown. It is started from `serve` alone — `serve_with_shutdown`
+/// and `build_router` stay free of it, which is what keeps the test suite off
+/// the network.
+fn spawn_update_check(state: AppState) {
+    tokio::spawn(async move {
+        // The check is blocking (`reqwest::blocking`) and reads settings.json.
+        if let Ok(found) =
+            tokio::task::spawn_blocking(crate::cli::update::check_with_cooldown).await
+        {
+            state.set_update_available(found.map(|info| info.version));
+        }
+    });
 }
 
 async fn serve_with_shutdown(
@@ -380,6 +400,30 @@ mod tests {
         // The SPA's export links are anchors: they cannot read a response
         // before saving it, so the capability has to be advertised up front.
         assert_eq!(json["pdfExport"], cfg!(feature = "pdf"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_no_update_until_the_background_check_finds_one() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        // The check runs off the request path, so a status served before it
+        // answers says nothing rather than blocking on the network.
+        assert_eq!(json["updateAvailable"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_version_the_update_check_found() {
+        let (_dir, db_path) = temp_db();
+        let token = auth::generate_token();
+        let state = AppState::new(db_path, token.clone());
+        // Seeded directly: the real check talks to GitHub, which a test must not.
+        state.set_update_available(Some("9.9.9".into()));
+
+        let json = status_json(&build_router(state), &token).await;
+
+        assert_eq!(json["updateAvailable"], "9.9.9");
     }
 
     #[tokio::test]
