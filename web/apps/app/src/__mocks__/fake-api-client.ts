@@ -13,6 +13,7 @@ import type {
   ChangePasswordRequest,
   CompanyNameResponse,
   FlaggedTransaction,
+  FlaggedTxn,
   PasswordStateResponse,
   PingResponse,
   PnlReport,
@@ -20,6 +21,11 @@ import type {
   RegisterRow,
   RemovePasswordRequest,
   ReportEnvelope,
+  ReviewApplyRequest,
+  ReviewApplyResponse,
+  ReviewUndoRequest,
+  RuleTestRequest,
+  RuleTestResult,
   SetPasswordRequest,
   StatusResponse,
   TransactionPatch,
@@ -206,6 +212,82 @@ export class FakeApiClient implements ApiClient {
     if (changes.flag !== undefined) row.isFlagged = changes.flag;
 
     return { ...row };
+  }
+
+  // -- review ---------------------------------------------------------------
+  //
+  // `applyReview` and `undoReview` really move the fixture between flagged and
+  // categorized, because the round trip the Back button makes is the whole
+  // point of the feature: a fake that only logged its calls would pass even if
+  // undo were wired to the wrong transaction.
+
+  reviewQueue: FlaggedTxn[] = [];
+  /** Full rows by id — what re-review by id reads and what undo answers with. */
+  reviewRows = new Map<number, RegisterRow>();
+  ruleTest: RuleTestResult = { total: 0, matches: [] };
+
+  queueError: Error | null = null;
+  reviewTransactionError: Error | null = null;
+  applyError: Error | null = null;
+  undoError: Error | null = null;
+  ruleTestError: Error | null = null;
+
+  /** Rule ids are handed out in order so a test can name the one undo must take. */
+  private nextRuleId = 100;
+
+  async getReviewQueue(): Promise<FlaggedTxn[]> {
+    this.calls.push('getReviewQueue');
+    if (this.queueError) throw this.queueError;
+    return this.reviewQueue;
+  }
+
+  async getReviewTransaction(id: number): Promise<RegisterRow> {
+    this.calls.push(`getReviewTransaction:${id}`);
+    if (this.reviewTransactionError) throw this.reviewTransactionError;
+
+    const row = this.reviewRows.get(id);
+    if (!row) throw new Error(`no transaction ${id} in the fixture`);
+    return { ...row };
+  }
+
+  async applyReview(
+    id: number,
+    input: ReviewApplyRequest,
+  ): Promise<ReviewApplyResponse> {
+    this.calls.push(`applyReview:${id}:${JSON.stringify(input)}`);
+    if (this.applyError) throw this.applyError;
+
+    const row = this.reviewRows.get(id);
+    if (row) {
+      row.categoryId = input.categoryId;
+      row.category =
+        this.categories.find((c) => c.id === input.categoryId)?.name ?? row.category;
+      row.vendor = input.vendor ?? null;
+      row.isFlagged = false;
+    }
+
+    return { transactionId: id, ruleId: input.createRule ? this.nextRuleId++ : null };
+  }
+
+  async undoReview(id: number, input: ReviewUndoRequest): Promise<RegisterRow> {
+    this.calls.push(`undoReview:${id}:${JSON.stringify(input)}`);
+    if (this.undoError) throw this.undoError;
+
+    const row = this.reviewRows.get(id);
+    if (!row) throw new Error(`no transaction ${id} in the fixture`);
+
+    // What `undo_review` does: re-flag the row and clear both fields.
+    row.categoryId = null;
+    row.category = null;
+    row.vendor = null;
+    row.isFlagged = true;
+    return { ...row };
+  }
+
+  async testRule(input: RuleTestRequest): Promise<RuleTestResult> {
+    this.calls.push(`testRule:${JSON.stringify(input)}`);
+    if (this.ruleTestError) throw this.ruleTestError;
+    return this.ruleTest;
   }
 
   // -- settings -------------------------------------------------------------

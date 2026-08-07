@@ -11,6 +11,7 @@ import {
   type ChangePasswordRequest,
   type CompanyNameResponse,
   type FlaggedTransaction,
+  type FlaggedTxn,
   type InvalidPasswordDetails,
   type PasswordStateResponse,
   type PingResponse,
@@ -19,6 +20,11 @@ import {
   type RegisterRow,
   type RemovePasswordRequest,
   type ReportEnvelope,
+  type ReviewApplyRequest,
+  type ReviewApplyResponse,
+  type ReviewUndoRequest,
+  type RuleTestRequest,
+  type RuleTestResult,
   type SetPasswordRequest,
   type StatusResponse,
   type TransactionPatch,
@@ -140,6 +146,15 @@ export interface ApiClient {
   getCategories(): Promise<CategoryRow[]>;
   /** Partial update; answers with the row as it now stands. */
   patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow>;
+
+  getReviewQueue(): Promise<FlaggedTxn[]>;
+  /** One transaction to re-review, as a full register row. */
+  getReviewTransaction(id: number): Promise<RegisterRow>;
+  applyReview(id: number, input: ReviewApplyRequest): Promise<ReviewApplyResponse>;
+  /** Takes a decision back; answers with the restored row. */
+  undoReview(id: number, input: ReviewUndoRequest): Promise<RegisterRow>;
+  /** A dry run against real descriptions; writes nothing. */
+  testRule(input: RuleTestRequest): Promise<RuleTestResult>;
 
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings>;
@@ -280,6 +295,26 @@ export class FetchApiClient implements ApiClient {
 
   patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow> {
     return this.request<RegisterRow>('PATCH', `/transactions/${id}`, changes);
+  }
+
+  getReviewQueue(): Promise<FlaggedTxn[]> {
+    return this.request<FlaggedTxn[]>('GET', '/review/queue');
+  }
+
+  getReviewTransaction(id: number): Promise<RegisterRow> {
+    return this.request<RegisterRow>('GET', `/review/${id}`);
+  }
+
+  applyReview(id: number, input: ReviewApplyRequest): Promise<ReviewApplyResponse> {
+    return this.request<ReviewApplyResponse>('POST', `/review/${id}/apply`, input);
+  }
+
+  undoReview(id: number, input: ReviewUndoRequest): Promise<RegisterRow> {
+    return this.request<RegisterRow>('POST', `/review/${id}/undo`, input);
+  }
+
+  testRule(input: RuleTestRequest): Promise<RuleTestResult> {
+    return this.request<RuleTestResult>('POST', '/rules/test', input);
   }
 
   setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse> {

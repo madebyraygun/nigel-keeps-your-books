@@ -227,6 +227,81 @@ export interface PasswordStateResponse {
 }
 
 /**
+ * `GET /api/review/queue` — one transaction waiting to be reviewed, oldest
+ * first.
+ *
+ * Mirrors `reviewer::FlaggedTxn`, which is a different struct from
+ * `reports::FlaggedTransaction` above even though the fields line up today:
+ * that one is the flagged *report*, this one is the review *queue*. They are
+ * kept apart because the two routes are free to diverge, and folding them into
+ * one interface would make the next field either route adds a lie about the
+ * other.
+ */
+export interface FlaggedTxn {
+  id: number;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  description: string;
+  amount: number;
+  accountName: string;
+}
+
+/**
+ * `POST /api/review/:id/apply`
+ *
+ * `createRule` without a `rulePattern` is a 400 rather than a quietly rule-less
+ * success. There is no match type: the data layer writes `contains`, which is
+ * also the only kind of rule the interactive reviewer has ever made.
+ */
+export interface ReviewApplyRequest {
+  categoryId: number;
+  vendor?: string;
+  createRule?: boolean;
+  rulePattern?: string;
+}
+
+export interface ReviewApplyResponse {
+  transactionId: number;
+  /** The rule this decision created; null when it created none. */
+  ruleId: number | null;
+}
+
+/**
+ * `POST /api/review/:id/undo`
+ *
+ * The body is required but `{}` is valid, and means "just put the transaction
+ * back". Passing the `ruleId` an apply answered with deletes that rule too —
+ * which is what makes the review screen's Back button leave no trace.
+ */
+export interface ReviewUndoRequest {
+  ruleId?: number;
+}
+
+/** The match types the categorizer understands. */
+export type RuleMatchType = 'contains' | 'starts_with' | 'regex';
+
+/** `POST /api/rules/test` — a dry run; nothing is written. */
+export interface RuleTestRequest {
+  pattern: string;
+  matchType?: RuleMatchType;
+}
+
+/** One description a pattern would match, and how many transactions carry it. */
+export interface RuleTestMatch {
+  description: string;
+  count: number;
+}
+
+/**
+ * What a pattern would match today. Identical descriptions collapse into one
+ * entry with a count, busiest first; matching nothing is a 200 with `total: 0`.
+ */
+export interface RuleTestResult {
+  total: number;
+  matches: RuleTestMatch[];
+}
+
+/**
  * Every error code the server can currently emit. New codes appear as the API
  * grows (31.7 adds `payload_too_large`), so the client normalizes anything it
  * does not recognize to `unknown` rather than lying about the type — the raw
