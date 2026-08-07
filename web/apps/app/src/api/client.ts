@@ -1,11 +1,13 @@
 import { signal, type Signal } from '../mixins/signal-watcher.js';
 import {
   isKnownApiErrorCode,
+  type Account,
   type ApiErrorCode,
   type ApiErrorEnvelope,
   type AppSettings,
   type BalanceReport,
   type CashflowReport,
+  type CategoryRow,
   type ChangePasswordRequest,
   type CompanyNameResponse,
   type FlaggedTransaction,
@@ -13,10 +15,13 @@ import {
   type PasswordStateResponse,
   type PingResponse,
   type PnlReport,
+  type RegisterReport,
+  type RegisterRow,
   type RemovePasswordRequest,
   type ReportEnvelope,
   type SetPasswordRequest,
   type StatusResponse,
+  type TransactionPatch,
   type UnlockResponse,
   type UpdateAppSettingsRequest,
 } from './types.js';
@@ -115,6 +120,11 @@ export interface ReportDateParams {
 /** Cash flow takes no `from`/`to` — it is grouped by month either way. */
 export type CashflowParams = Pick<ReportDateParams, 'year' | 'month'>;
 
+/** The register is the one report that also filters by account, by name. */
+export interface RegisterParams extends ReportDateParams {
+  account?: string;
+}
+
 export interface ApiClient {
   ping(): Promise<PingResponse>;
   getStatus(): Promise<StatusResponse>;
@@ -124,6 +134,12 @@ export interface ApiClient {
   getBalance(): Promise<ReportEnvelope<BalanceReport>>;
   getCashflow(params?: CashflowParams): Promise<ReportEnvelope<CashflowReport>>;
   getFlagged(): Promise<ReportEnvelope<FlaggedTransaction[]>>;
+  getRegister(params?: RegisterParams): Promise<ReportEnvelope<RegisterReport>>;
+
+  getAccounts(): Promise<Account[]>;
+  getCategories(): Promise<CategoryRow[]>;
+  /** Partial update; answers with the row as it now stands. */
+  patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow>;
 
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings>;
@@ -245,6 +261,25 @@ export class FetchApiClient implements ApiClient {
       'GET',
       '/reports/flagged',
     );
+  }
+
+  getRegister(params: RegisterParams = {}): Promise<ReportEnvelope<RegisterReport>> {
+    return this.request<ReportEnvelope<RegisterReport>>(
+      'GET',
+      `/reports/register${query(params)}`,
+    );
+  }
+
+  getAccounts(): Promise<Account[]> {
+    return this.request<Account[]>('GET', '/accounts');
+  }
+
+  getCategories(): Promise<CategoryRow[]> {
+    return this.request<CategoryRow[]>('GET', '/categories');
+  }
+
+  patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow> {
+    return this.request<RegisterRow>('PATCH', `/transactions/${id}`, changes);
   }
 
   setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse> {

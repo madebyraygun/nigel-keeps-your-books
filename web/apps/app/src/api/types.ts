@@ -108,6 +108,64 @@ export interface FlaggedTransaction {
   accountName: string;
 }
 
+/** One transaction in the register, and what a transaction edit answers with. */
+export interface RegisterRow {
+  id: number;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  description: string;
+  /** Negative is an expense, positive is income. */
+  amount: number;
+  category: string | null;
+  categoryId: number | null;
+  vendor: string | null;
+  accountName: string;
+  isFlagged: boolean;
+}
+
+/**
+ * `GET /api/reports/register`
+ *
+ * Rows come back date ascending, and `total` is the net of the whole result
+ * set — not of whatever a client shows after a client-side search.
+ */
+export interface RegisterReport {
+  rows: RegisterRow[];
+  total: number;
+}
+
+/** `GET /api/accounts` */
+export interface Account {
+  id: number;
+  name: string;
+  accountType: string;
+  institution: string | null;
+  lastFour: string | null;
+}
+
+/** `GET /api/categories` — the active chart of accounts. */
+export interface CategoryRow {
+  id: number;
+  name: string;
+  categoryType: string;
+  taxLine: string | null;
+  formLine: string | null;
+}
+
+/**
+ * `PATCH /api/transactions/:id` — a true partial update.
+ *
+ * An omitted field is left alone. `vendor: null` clears the vendor; there is
+ * no `categoryId: null`, because uncategorizing is what the review undo route
+ * is for. `flag` is a state rather than a toggle, so retrying a request whose
+ * response was lost cannot land the opposite of what was asked for.
+ */
+export interface TransactionPatch {
+  categoryId?: number;
+  vendor?: string | null;
+  flag?: boolean;
+}
+
 /** `POST /api/unlock` */
 export interface UnlockRequest {
   password: string;

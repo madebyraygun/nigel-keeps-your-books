@@ -1,25 +1,44 @@
 import type {
   ApiClient,
   CashflowParams,
+  RegisterParams,
   ReportDateParams,
 } from '../api/client.js';
 import type {
+  Account,
   AppSettings,
   BalanceReport,
   CashflowReport,
+  CategoryRow,
   ChangePasswordRequest,
   CompanyNameResponse,
   FlaggedTransaction,
   PasswordStateResponse,
   PingResponse,
   PnlReport,
+  RegisterReport,
+  RegisterRow,
   RemovePasswordRequest,
   ReportEnvelope,
   SetPasswordRequest,
   StatusResponse,
+  TransactionPatch,
   UnlockResponse,
   UpdateAppSettingsRequest,
 } from '../api/types.js';
+
+/**
+ * The query a register request would carry, in a stable key order so a test
+ * can assert on the whole thing rather than field by field.
+ */
+function registerQuery(params: RegisterParams): string {
+  const search = new URLSearchParams();
+  for (const key of ['year', 'month', 'from', 'to', 'account'] as const) {
+    const value = params[key];
+    if (value !== undefined) search.set(key, String(value));
+  }
+  return search.toString();
+}
 
 /** A database with nothing in it — the state a fresh `nigel init` leaves. */
 export const EMPTY_PNL: PnlReport = {
@@ -132,6 +151,61 @@ export class FakeApiClient implements ApiClient {
     this.calls.push('getFlagged');
     if (this.flaggedError) throw this.flaggedError;
     return { granularity: 'none', report: this.flagged };
+  }
+
+  // -- register -------------------------------------------------------------
+  //
+  // `patchTransaction` really applies the patch to the fixture and answers
+  // with the updated row, because the screen swaps the response in rather than
+  // keeping its optimistic copy — a fake that echoed the request back would
+  // never catch that.
+
+  register: RegisterReport = { rows: [], total: 0 };
+  accounts: Account[] = [];
+  categories: CategoryRow[] = [];
+
+  registerError: Error | null = null;
+  accountsError: Error | null = null;
+  categoriesError: Error | null = null;
+  patchError: Error | null = null;
+
+  async getRegister(
+    params: RegisterParams = {},
+  ): Promise<ReportEnvelope<RegisterReport>> {
+    // The whole query, not just the year: the deep-link tests assert on it.
+    this.calls.push(`getRegister:${registerQuery(params)}`);
+    if (this.registerError) throw this.registerError;
+    return { granularity: 'monthAndYear', report: this.register };
+  }
+
+  async getAccounts(): Promise<Account[]> {
+    this.calls.push('getAccounts');
+    if (this.accountsError) throw this.accountsError;
+    return this.accounts;
+  }
+
+  async getCategories(): Promise<CategoryRow[]> {
+    this.calls.push('getCategories');
+    if (this.categoriesError) throw this.categoriesError;
+    return this.categories;
+  }
+
+  async patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow> {
+    this.calls.push(`patchTransaction:${id}:${JSON.stringify(changes)}`);
+    if (this.patchError) throw this.patchError;
+
+    const row = this.register.rows.find((candidate) => candidate.id === id);
+    if (!row) throw new Error(`no transaction ${id} in the fixture`);
+
+    if (changes.categoryId !== undefined) {
+      row.categoryId = changes.categoryId;
+      row.category =
+        this.categories.find((c) => c.id === changes.categoryId)?.name ?? row.category;
+    }
+    if (changes.vendor !== undefined) row.vendor = changes.vendor;
+    if (changes.flag !== undefined) row.isFlagged = changes.flag;
+
+    return { ...row };
   }
 
   // -- settings -------------------------------------------------------------

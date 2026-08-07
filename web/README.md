@@ -120,6 +120,47 @@ rather than importing a singleton, which is what lets a test drive a whole
 screen with `FakeApiClient` and what will let a Tauri client take the same
 place. Keep it small — anything added to it is added for every screen at once.
 
+## The register
+
+`#/register` is the biggest screen, and the one whose behaviour is pinned to the
+TUI's (`src/browser.rs`).
+
+**Search is client-side.** `/api/reports/register` has no search parameter and
+gains none. `rowMatches` in `screens/register-data.ts` is the TUI's
+`recompute_search_matches`, field for field: case-insensitive substring over
+description, vendor and category name, with a missing vendor or category
+treated as empty so it can never match. Date, amount and account are not
+searched. One deliberate difference: the web filters the table down to matching
+rows and reports "N of M", where the terminal keeps every row and jumps between
+matches. The footer total stays the whole result set's `RegisterReport.total`
+either way, so it never silently becomes the total of a search.
+
+**Where it opens.** With no date filter the register lands on the last row dated
+on or before today — `scroll_to_today`, relying on the date-ascending order the
+endpoint returns. A dated register stays at the top, because a March register
+has no today to find. `#/register?id=185` beats both, which is how the dashboard
+and the review screen link to a transaction.
+
+**Filters are the route.** Account and period changes call `navigate`, so a
+filtered register is a link and the back button walks the filters. The search
+box is the exception: it is read from `?q=` on load but not written back per
+keystroke, which would put one history entry between the user and the previous
+screen for every character typed.
+
+**Edits are optimistic with rollback.** `buildPatch` sends only what changed —
+an empty `PATCH` is a `400` by design — and the row is replaced by the one the
+server answers with rather than by the optimistic copy. A failure puts the
+original row back and toasts. Flags are sent as a state, never a toggle, so a
+retry cannot land the opposite of what was asked for.
+
+`wc-register-table` keeps rows cheap: a row that is not being edited renders
+text, one `wc-money` and one icon button, and no `wa-*` component at all. A test
+asserts that, because an unfiltered register is thousands of rows and every
+custom element in a row is paid for thousands of times. `wc-period-nav` is
+shared with the report screens — driven by the `granularity` the server reports,
+with `allowAll` the flag that lets the register offer an unfiltered view reports
+do not have.
+
 ## Boot sequence
 
 `nigel-app` fetches `/api/status` and nothing else until it knows where it

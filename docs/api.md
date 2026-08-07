@@ -185,16 +185,20 @@ Every endpoint below reads the database, so all of them answer `423 locked`
 until an encrypted database has been unlocked. All are `GET`, and all are
 read-only.
 
+Every `/api/reports/*` route answers with the `{ "granularity": …, "report": … }`
+envelope described under [Report responses](#report-responses); the type in the
+table is what `report` holds. The list routes below it answer with a bare array.
+
 | Route | Parameters | Response |
 |---|---|---|
-| `/api/reports/pnl` | `year`, `month`, `from`+`to` | `PnlReport` |
-| `/api/reports/expenses` | `year`, `month` | `ExpenseBreakdown` |
-| `/api/reports/tax` | `year` | `TaxSummary` |
-| `/api/reports/cashflow` | `year`, `month` | `CashflowReport` |
-| `/api/reports/balance` | — | `BalanceReport` |
-| `/api/reports/flagged` | — | `FlaggedTransaction[]` |
-| `/api/reports/register` | `year`, `month`, `from`+`to`, `account` | `RegisterReport` |
-| `/api/reports/k1` | `year` | `K1PrepReport` |
+| `/api/reports/pnl` | `year`, `month`, `from`+`to` | `ReportEnvelope<PnlReport>` |
+| `/api/reports/expenses` | `year`, `month` | `ReportEnvelope<ExpenseBreakdown>` |
+| `/api/reports/tax` | `year` | `ReportEnvelope<TaxSummary>` |
+| `/api/reports/cashflow` | `year`, `month` | `ReportEnvelope<CashflowReport>` |
+| `/api/reports/balance` | — | `ReportEnvelope<BalanceReport>` |
+| `/api/reports/flagged` | — | `ReportEnvelope<FlaggedTransaction[]>` |
+| `/api/reports/register` | `year`, `month`, `from`+`to`, `account` | `ReportEnvelope<RegisterReport>` |
+| `/api/reports/k1` | `year` | `ReportEnvelope<K1PrepReport>` |
 | `/api/accounts` | — | `Account[]` |
 | `/api/categories` | — | `CategoryRow[]` |
 | `/api/rules` | — | `RuleRow[]` |
