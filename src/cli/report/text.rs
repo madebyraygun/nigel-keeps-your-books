@@ -9,7 +9,7 @@ use crate::reports;
 use crate::settings::get_data_dir;
 
 /// Prepend company name as a header line if non-empty.
-fn with_header(company_name: &str, body: String) -> String {
+pub fn with_header(company_name: &str, body: String) -> String {
     if company_name.is_empty() {
         body
     } else {

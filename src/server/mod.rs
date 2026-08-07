@@ -28,9 +28,7 @@ use state::AppState;
 
 /// Start the server and block until shutdown.
 pub fn run(port: u16, no_open: bool) -> Result<()> {
-    // Shared text formatters are reused for API responses; ANSI escapes have no
-    // place in an HTTP body.
-    colored::control::set_override(false);
+    disable_ansi_output();
 
     let db_path = crate::settings::get_data_dir().join("nigel.db");
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -39,6 +37,16 @@ pub fn run(port: u16, no_open: bool) -> Result<()> {
         .map_err(|e| NigelError::Other(format!("Couldn't start the async runtime: {e}")))?;
 
     runtime.block_on(serve(db_path, port, no_open))
+}
+
+/// Turn off `colored`'s escape sequences for the whole process.
+///
+/// The text report formatters are shared with the terminal, where colour is the
+/// point; served over HTTP the same bytes would reach a text export as
+/// gibberish. `colored` decides globally, so this is a process-wide switch —
+/// which is fine, because a process that is serving is not also drawing a TUI.
+pub(crate) fn disable_ansi_output() {
+    colored::control::set_override(false);
 }
 
 async fn serve(db_path: PathBuf, port: u16, no_open: bool) -> Result<()> {
@@ -361,6 +369,17 @@ mod tests {
         assert_eq!(json["companyName"], "Raygun LLC");
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(json["dataDir"], dir.path().display().to_string());
+    }
+
+    #[tokio::test]
+    async fn status_reports_whether_this_build_can_export_pdfs() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        // The SPA's export links are anchors: they cannot read a response
+        // before saving it, so the capability has to be advertised up front.
+        assert_eq!(json["pdfExport"], cfg!(feature = "pdf"));
     }
 
     #[tokio::test]

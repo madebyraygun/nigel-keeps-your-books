@@ -60,6 +60,7 @@ struct StatusResponse {
     company_name: Option<String>,
     version: &'static str,
     data_dir: String,
+    pdf_export: bool,
 }
 
 async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>> {
@@ -93,6 +94,10 @@ async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>
             .parent()
             .map(|dir| dir.display().to_string())
             .unwrap_or_default(),
+        // The export links are plain anchors, so the SPA has to know before it
+        // clicks: a build without the feature would otherwise save the `501`
+        // envelope to a file called something.pdf.
+        pdf_export: state.features.pdf,
     }))
 }
 

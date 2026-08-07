@@ -31,11 +31,34 @@ pub fn get_request(uri: &str) -> axum::http::request::Builder {
     Request::builder().uri(uri).header(header::HOST, HOST)
 }
 
-pub async fn body_string(response: Response) -> String {
-    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+pub async fn body_bytes(response: Response) -> Vec<u8> {
+    axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
         .await
-        .expect("body");
-    String::from_utf8(bytes.to_vec()).expect("utf-8 body")
+        .expect("body")
+        .to_vec()
+}
+
+pub async fn body_string(response: Response) -> String {
+    String::from_utf8(body_bytes(response).await).expect("utf-8 body")
+}
+
+/// One response header as a string, empty when it is absent.
+pub fn header_str(response: &Response, name: header::HeaderName) -> String {
+    response
+        .headers()
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Fetch a route with a valid session and keep the whole response: an export
+/// answers with bytes and headers, which `get_json` would throw away.
+pub async fn get_response(app: &Router, uri: &str, token: &str) -> Response {
+    app.clone()
+        .oneshot(session_get(uri, token))
+        .await
+        .expect("response")
 }
 
 pub fn content_type(response: &Response) -> String {
@@ -242,6 +265,20 @@ pub const DATA_ROUTES: [&str; 17] = [
     "/api/review/queue",
     "/api/review/1",
     "/api/reconciliations",
+];
+
+/// Every export route, named without the `format` each of them requires. They
+/// are kept out of [`DATA_ROUTES`] because a successful export is bytes, not
+/// JSON — only the failure cases share a shape with the rest of the API.
+pub const EXPORT_ROUTES: [&str; 8] = [
+    "/api/exports/pnl",
+    "/api/exports/expenses",
+    "/api/exports/tax",
+    "/api/exports/cashflow",
+    "/api/exports/balance",
+    "/api/exports/flagged",
+    "/api/exports/register",
+    "/api/exports/k1",
 ];
 
 /// Every route that writes, as method, path, and a body good enough to reach

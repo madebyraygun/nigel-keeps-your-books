@@ -1,11 +1,11 @@
 ---
 id: TASK-31.8
 title: 'JSON API: report export downloads (PDF and text)'
-status: In Progress
+status: Done
 assignee:
   - '@agent-31.8'
 created_date: '2026-08-06 16:26'
-updated_date: '2026-08-06 20:45'
+updated_date: '2026-08-07 12:08'
 labels:
   - web
   - backend
@@ -26,9 +26,9 @@ Wire the existing export machinery (cli/export.rs, pdf.rs, report/text.rs) to do
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every report downloads as PDF and text with content matching the CLI export output
-- [ ] #2 Responses set correct content-type and filename headers
-- [ ] #3 Builds without the pdf feature keep text export and return a clear error for PDF requests
+- [x] #1 Every report downloads as PDF and text with content matching the CLI export output
+- [x] #2 Responses set correct content-type and filename headers
+- [x] #3 Builds without the pdf feature keep text export and return a clear error for PDF requests
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -327,3 +327,41 @@ exercised.
    says PDF, `out.txt` is ANSI-free, and that the .txt matches
    `nigel report <r> --mode export --format text` byte for byte.
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Every report now downloads from the browser as a PDF or a plain-text file, with the same bytes the CLI writes for the same export.
+
+## What changed
+
+**New endpoints.** `GET /api/exports/{pnl,expenses,tax,cashflow,balance,flagged,register,k1}` with a required `format=pdf|text` plus the same date/account parameters as the matching `/api/reports` route. Eight explicit routes rather than one `{report}` path parameter, so the slugs match the report routes literally and an unknown one falls through to the existing JSON 404.
+
+**No second validator.** The export handlers hand their query string to the parser `routes/reports.rs` already owns. `ParamSpec::for_kind()` is new there — it reads the per-report parameter matrix off `ReportKind` — and the eight report handlers now build their spec through it too, so the two route families cannot drift apart. A test asserts the export and report routes answer a bad parameter with the identical body, not merely the same status.
+
+**One place answers for the `pdf` feature.** Fetched reports reach the renderers as a `ReportPayload` enum, so the `cfg` lives in a single pair of `render_pdf` definitions instead of once per handler; no handler contains a `cfg` attribute or an `unreachable!`. Without the feature, `format=pdf` is `501 feature_disabled` carrying `cli::report::PDF_DISABLED_MESSAGE` — the exact sentence the CLI prints, now a shared constant rather than two string literals — and `format=text` is unaffected.
+
+**Status advertises the capability.** `GET /api/status` gained `pdfExport` (`cfg!(feature = "pdf")`). The SPA's export links are plain `<a download>` anchors that cannot inspect a response, so without this probe a build without the feature would save the JSON error envelope to a file called `.pdf`.
+
+**Extractions rather than copies.** `date_range_label` moved from `cli/export.rs` (where it was `cfg(pdf)`) to `reports.rs`, ungated, taking `Option<&str>` / `Option<i32>`; the CLI's call sites pass the same values, so PDF output is unchanged. `cli::report::export_file_stem()` is now the single definition of the `<report>-<date>` naming used by `default_path`, `default_text_path`, and the `Content-Disposition` header. `cli::report::text::with_header` became public so the server composes a text export exactly as the CLI does. `server::disable_ansi_output()` names the startup call that turns `colored` off, so the ANSI regression test exercises the production statement.
+
+## Filename scheme
+
+`<report-slug>-<today>.<ext>` — `pnl-2026-08-07.pdf`, `k1-prep-2026-08-07.txt` — matching what `nigel report ... --mode export` writes. A deliberate departure from the spec's literal `nigel-<report>-<range>.<ext>`, which contradicted the same sentence's instruction to match the CLI; the ruling was to follow the CLI. Nothing from the database reaches the header (fixed slug, digits), so there is no quoting or RFC 5987 encoding to get wrong.
+
+## Out of scope, deliberately
+
+Bulk `report all` (a browser downloads one file at a time — a test asserts `/api/exports/all` is a 404), server-side file writing (`--output` stays CLI semantics), and print stylesheets (31.15).
+
+## Tests
+
+Ten new tests in `routes/exports.rs`, plus one in `server/mod.rs` for `pdfExport`:
+
+- Text export equals `with_header(company, format_x(report))` for all eight reports on a seeded database — the composition the CLI's text wrappers perform. Calling those wrappers directly would repoint `settings::get_data_dir()` at the developer's real config, so the end-to-end byte compare lives in the manual smoke instead, where it passed for all eight.
+- No `0x1b` in any text body, with a presence check on the strings that carry colour in the terminal so the assertion cannot pass vacuously.
+- PDFs start with `%PDF`, exceed 1 kB, and carry `application/pdf`.
+- Without the feature: `501 feature_disabled` with the CLI's message, and `200` for text — reached only by `cargo test --no-default-features --features serve`.
+- Parameter failures byte-equal the report routes'; register tells an unknown account (404) from an empty one; `format` missing or misspelt is 400; a locked database refuses all eight; date parameters demonstrably narrow the output.
+
+Verified: `cargo fmt --check`; `cargo build`; `cargo test` (474 + 25); `cargo test --no-default-features` (337 + 26); `cargo test --no-default-features --features serve` (464 + 25); `cargo clippy --all-targets -- -D warnings` clean; `cargo clippy --no-default-features --all-targets` showing only the two known task-34 `needless_return` lints; `npm run lint` and `npm test` (99) green; and a manual curl pass over all eight reports in both formats against a demo database in an isolated HOME — headers correct, `file` reports PDF, and every `.txt` byte-identical to the corresponding `nigel report ... --mode export --format text`.
+<!-- SECTION:FINAL_SUMMARY:END -->

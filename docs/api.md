@@ -113,7 +113,8 @@ uninitialized, so the SPA can decide which screen to show before it has data.
   "locked": false,
   "companyName": "Raygun LLC",
   "version": "1.0.1",
-  "dataDir": "/home/you/Documents/nigel"
+  "dataDir": "/home/you/Documents/nigel",
+  "pdfExport": true
 }
 ```
 
@@ -121,6 +122,9 @@ uninitialized, so the SPA can decide which screen to show before it has data.
 a key, and `locked` whether this process still lacks that key. `companyName` is
 `null` while locked or uninitialized — reading it requires the key — and
 `dataDir` names the directory of the database the server actually opened.
+`pdfExport` is whether this binary was built with the `pdf` feature; a client
+uses it to decide whether to offer a PDF download at all (see
+[Exporting reports](#exporting-reports)).
 
 ### `POST /api/unlock`
 
@@ -548,6 +552,77 @@ its own words instead of parsing ours:
   }
 }
 ```
+
+## Exporting reports
+
+Every report downloads as a PDF or as plain text. These are the only endpoints
+that answer with something other than JSON — on success. Errors keep the usual
+envelope, so a client that decodes the body on a non-`200` is never surprised.
+
+| Route | Report | Parameters |
+|---|---|---|
+| `/api/exports/pnl` | `pnl` | `format`, `year`, `month`, `from`+`to` |
+| `/api/exports/expenses` | `expenses` | `format`, `year`, `month` |
+| `/api/exports/tax` | `tax` | `format`, `year` |
+| `/api/exports/cashflow` | `cashflow` | `format`, `year`, `month` |
+| `/api/exports/balance` | `balance` | `format` |
+| `/api/exports/flagged` | `flagged` | `format` |
+| `/api/exports/register` | `register` | `format`, `year`, `month`, `from`+`to`, `account` |
+| `/api/exports/k1` | `k1` | `format`, `year` |
+
+The date and account parameters are the ones the matching `/api/reports` route
+takes, validated by the same code and rejected with the same message — an
+export of a report is the report, in a different wrapper.
+
+`format` is the one parameter of their own, and it is **required**: either `pdf`
+or `text`, lowercase. Omitting it is `400`, as is any other value. There is no
+default, because guessing one would either hand a text file to something that
+asked for a PDF or answer `501` to a caller who never mentioned PDFs.
+
+### Response
+
+```
+200 OK
+Content-Type: application/pdf                     (format=pdf)
+Content-Type: text/plain; charset=utf-8           (format=text)
+Content-Disposition: attachment; filename="pnl-2026-08-07.pdf"
+```
+
+The filename is the report's slug and today's date — the same name
+`nigel report pnl --mode export` writes into `<data_dir>/exports/`, so a file
+saved from the browser and one written by the CLI are named alike. The K-1
+worksheet is `k1` in the URL and `k1-prep` in the filename, matching the CLI
+there too. Nothing from the database appears in the header.
+
+The text body is byte-for-byte what the CLI's `--format text` export writes:
+the company name, a blank line, then the report. Terminal colouring is off for
+the whole process while serving, so no escape sequences reach the file.
+
+### Without the `pdf` feature
+
+`format=text` is unaffected. `format=pdf` is `501 feature_disabled`, carrying
+the same sentence the CLI prints:
+
+```json
+{
+  "error": {
+    "code": "feature_disabled",
+    "message": "PDF export requires the 'pdf' feature — build with `cargo build --features pdf`"
+  }
+}
+```
+
+Since browsers download an anchor's target without inspecting it, a client
+should read `pdfExport` from `GET /api/status` and not offer the link at all in
+such a build — otherwise the saved `.pdf` file is that JSON.
+
+### Not on the API
+
+- **Bulk export.** `nigel report all` writes eight files into a directory; a
+  browser downloads one file at a time. There is no `/api/exports/all`.
+- **Writing files.** The CLI's `--output` and `--output-dir` choose a path on
+  disk. The server only streams bytes back; where they land is the browser's
+  business.
 
 ## Static assets
 

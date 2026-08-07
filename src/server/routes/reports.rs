@@ -63,7 +63,7 @@ impl<T> ReportEnvelope<T> {
 /// `?year=abc` an axum `Query` rejection, which answers in plain text and would
 /// be the one response on the whole API that skips the error envelope.
 #[derive(Debug, Default, Deserialize)]
-struct RawQuery {
+pub(super) struct RawQuery {
     year: Option<String>,
     month: Option<String>,
     from: Option<String>,
@@ -75,7 +75,7 @@ struct RawQuery {
 /// matching `nigel report` subcommand. Year and month support is read off
 /// `ReportKind::granularity()` so the two cannot drift; `ranges` and `account`
 /// are the two axes granularity does not describe.
-struct ParamSpec {
+pub(super) struct ParamSpec {
     kind: ReportKind,
     ranges: bool,
     account: bool,
@@ -99,20 +99,32 @@ impl ParamSpec {
         self.account = true;
         self
     }
+
+    /// The parameter matrix for a report. Reading it off the kind is what keeps
+    /// `/api/reports/pnl` and `/api/exports/pnl` from disagreeing about which
+    /// parameters a report will answer to.
+    pub(super) fn for_kind(kind: ReportKind) -> Self {
+        let spec = Self::new(kind);
+        match kind {
+            ReportKind::Pnl => spec.ranges(),
+            ReportKind::Register => spec.ranges().account(),
+            _ => spec,
+        }
+    }
 }
 
 /// A validated query string, in the shape the `reports::get_*` functions take.
 #[derive(Debug, Default, PartialEq)]
-struct ReportParams {
-    year: Option<i32>,
-    month: Option<u32>,
-    from: Option<String>,
-    to: Option<String>,
-    account: Option<String>,
+pub(super) struct ReportParams {
+    pub(super) year: Option<i32>,
+    pub(super) month: Option<u32>,
+    pub(super) from: Option<String>,
+    pub(super) to: Option<String>,
+    pub(super) account: Option<String>,
 }
 
 impl ReportParams {
-    fn parse(raw: RawQuery, spec: ParamSpec) -> ApiResult<Self> {
+    pub(super) fn parse(raw: RawQuery, spec: ParamSpec) -> ApiResult<Self> {
         let granularity = spec.kind.granularity();
         let report = spec.kind.as_str();
 
@@ -229,7 +241,7 @@ async fn pnl(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::PnlReport>>> {
     let kind = ReportKind::Pnl;
-    let params = ReportParams::parse(raw, ParamSpec::new(kind).ranges())?;
+    let params = ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, move |conn| {
         reports::get_pnl(
             conn,
@@ -248,7 +260,7 @@ async fn expenses(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::ExpenseBreakdown>>> {
     let kind = ReportKind::Expenses;
-    let params = ReportParams::parse(raw, ParamSpec::new(kind))?;
+    let params = ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, move |conn| {
         reports::get_expense_breakdown(conn, params.year, params.month)
     })
@@ -261,7 +273,7 @@ async fn tax(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::TaxSummary>>> {
     let kind = ReportKind::Tax;
-    let params = ReportParams::parse(raw, ParamSpec::new(kind))?;
+    let params = ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, move |conn| {
         reports::get_tax_summary(conn, params.year)
     })
@@ -274,7 +286,7 @@ async fn cashflow(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::CashflowReport>>> {
     let kind = ReportKind::Cashflow;
-    let params = ReportParams::parse(raw, ParamSpec::new(kind))?;
+    let params = ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, move |conn| {
         reports::get_cashflow(conn, params.year, params.month)
     })
@@ -287,7 +299,7 @@ async fn balance(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::BalanceReport>>> {
     let kind = ReportKind::Balance;
-    ReportParams::parse(raw, ParamSpec::new(kind))?;
+    ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, reports::get_balance).await?;
     Ok(ReportEnvelope::new(kind, report))
 }
@@ -297,7 +309,7 @@ async fn flagged(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<Vec<reports::FlaggedTransaction>>>> {
     let kind = ReportKind::Flagged;
-    ReportParams::parse(raw, ParamSpec::new(kind))?;
+    ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, reports::get_flagged).await?;
     Ok(ReportEnvelope::new(kind, report))
 }
@@ -307,7 +319,7 @@ async fn register(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::RegisterReport>>> {
     let kind = ReportKind::Register;
-    let params = ReportParams::parse(raw, ParamSpec::new(kind).ranges().account())?;
+    let params = ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, move |conn| {
         if let Some(account) = params.account.as_deref() {
             ensure_account_exists(conn, account)?;
@@ -330,7 +342,7 @@ async fn k1(
     Query(raw): Query<RawQuery>,
 ) -> ApiResult<Json<ReportEnvelope<reports::K1PrepReport>>> {
     let kind = ReportKind::K1;
-    let params = ReportParams::parse(raw, ParamSpec::new(kind))?;
+    let params = ReportParams::parse(raw, ParamSpec::for_kind(kind))?;
     let report = with_conn(&state, move |conn| reports::get_k1_prep(conn, params.year)).await?;
     Ok(ReportEnvelope::new(kind, report))
 }

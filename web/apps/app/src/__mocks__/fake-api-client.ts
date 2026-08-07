@@ -8,6 +8,7 @@ export const UNLOCKED_STATUS: StatusResponse = {
   companyName: 'Test Consultancy',
   version: '0.0.0-test',
   dataDir: '/tmp/nigel',
+  pdfExport: true,
 };
 
 export const LOCKED_STATUS: StatusResponse = {

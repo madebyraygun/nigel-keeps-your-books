@@ -62,6 +62,20 @@ impl ReportKind {
     }
 }
 
+/// The period label printed under a report's title: the month itself when one
+/// was asked for, otherwise the fiscal year, otherwise the current one.
+///
+/// `month` is the raw `YYYY-MM` string rather than a parsed month so the label
+/// reads the way the caller asked for it, and `year` is the effective year —
+/// an explicit year already resolved against the one inside `month`.
+pub fn date_range_label(month: Option<&str>, year: Option<i32>) -> String {
+    if let Some(month) = month {
+        return month.to_string();
+    }
+    let year = year.unwrap_or_else(|| Datelike::year(&chrono::Local::now()));
+    format!("FY {year}")
+}
+
 fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
     params
         .iter()
@@ -791,6 +805,23 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         init_db(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn a_month_labels_itself_and_outranks_the_year() {
+        assert_eq!(date_range_label(Some("2025-03"), None), "2025-03");
+        assert_eq!(date_range_label(Some("2025-03"), Some(2024)), "2025-03");
+    }
+
+    #[test]
+    fn a_year_alone_labels_a_fiscal_year() {
+        assert_eq!(date_range_label(None, Some(2025)), "FY 2025");
+    }
+
+    #[test]
+    fn an_unfiltered_report_is_labelled_with_the_current_year() {
+        let this_year = Datelike::year(&chrono::Local::now());
+        assert_eq!(date_range_label(None, None), format!("FY {this_year}"));
     }
 
     #[test]

@@ -8,6 +8,7 @@
 
 pub mod accounts;
 pub mod categories;
+pub mod exports;
 pub mod imports;
 pub mod reconcile;
 pub mod reports;
@@ -41,6 +42,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
 fn data_router() -> Router<AppState> {
     let router = Router::new()
         .merge(reports::routes())
+        .merge(exports::routes())
         .merge(accounts::routes())
         .merge(categories::routes())
         .merge(rules::routes())
@@ -78,14 +80,24 @@ where
     F: FnOnce(&Connection) -> crate::error::Result<T> + Send + 'static,
     T: Send + 'static,
 {
+    with_conn_api(state, move |conn| work(conn).map_err(ApiError::from)).await
+}
+
+/// [`with_conn`] for work that already speaks in API errors — an export asked
+/// for a format this build cannot render owes the caller a `501`, which is a
+/// distinction `NigelError` has no way to carry.
+pub(super) async fn with_conn_api<T, F>(state: &AppState, work: F) -> ApiResult<T>
+where
+    F: FnOnce(&Connection) -> ApiResult<T> + Send + 'static,
+    T: Send + 'static,
+{
     let db_path = state.db_path.clone();
-    tokio::task::spawn_blocking(move || -> crate::error::Result<T> {
+    tokio::task::spawn_blocking(move || -> ApiResult<T> {
         let conn = crate::db::get_connection(&db_path)?;
         work(&conn)
     })
     .await
     .map_err(ApiError::internal)?
-    .map_err(ApiError::from)
 }
 
 /// Filtering by an account name that does not exist is a wrong question, not an

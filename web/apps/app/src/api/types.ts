@@ -23,6 +23,8 @@ export interface StatusResponse {
   companyName: string | null;
   version: string;
   dataDir: string;
+  /** Whether this build can render PDFs. False means offer text export only. */
+  pdfExport: boolean;
 }
 
 /** `POST /api/unlock` */
