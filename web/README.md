@@ -161,6 +161,50 @@ shared with the report screens — driven by the `granularity` the server report
 with `allowAll` the flag that lets the register offer an unfiltered view reports
 do not have.
 
+## The review flow
+
+`#/review` steps through flagged transactions one at a time, the web
+counterpart of `src/reviewer.rs`. `#/review?id=185` re-reviews a single
+transaction, which is `nigel review --id`; the router has no path segments, so
+the id is a query parameter like every other deep link.
+
+**Back undoes, it does not merely re-show.** Every applied decision is pushed
+onto a stack of `{ transactionId, ruleId }`, and Back pops one and calls
+`POST /api/review/:id/undo` with that `ruleId`, which re-flags the transaction
+and deletes the rule outright. A skip pushes `null` instead — the same
+`Option<ReviewDecision>` the TUI stacks — so stepping back over a skipped
+transaction issues no request at all, rather than clearing a category some
+earlier session set. An undo that fails puts its decision back on the stack, so
+the stack can never claim a decision the server still holds. The summary counts
+are derived from the stack rather than tallied, which is why a Back corrects
+them for free.
+
+**Two departures from the TUI, both forced by the browser.** Tab does not skip:
+on the web it is the key that moves between the form's controls, and rebinding
+it would strand anyone not using a mouse — Skip is a button, and the keys the
+screen really binds are Enter to apply and Esc to go back. And there is no
+match-type choice, because `reviewer::apply_review` writes `contains` and the
+apply route carries no field for anything else; the form says so in words
+rather than offering a control the server could not honour.
+
+**A missing transaction is not a wedged queue.** Another tab, or an undone
+import, can take a transaction out from under an open review. A `404` on apply
+advances with a toast and records a skip, so a later Back does not try to undo
+a decision that was never made.
+
+The rule pattern is prefilled with the first two words of the description,
+which is the TUI's default — a bank line ends in a transaction id that will
+never repeat, so the whole description would match nothing ever again. Typing
+in it drives a debounced `POST /api/rules/test` whose answer lands in
+`wc-rule-test-preview`; a rejected pattern renders inline and still leaves the
+decision applicable, because a bad preview is not a bad decision.
+
+`wc-category-picker` is the searchable chart-of-accounts combobox, sharing
+`categoryLabel` with the register's inline editor. It is hand-built because
+this Web Awesome build ships no searchable select, and the ARIA wiring
+(`aria-activedescendant` into the option list) needs a real input underneath.
+Options are grouped income then expense, the order `/api/categories` returns.
+
 ## Boot sequence
 
 `nigel-app` fetches `/api/status` and nothing else until it knows where it
