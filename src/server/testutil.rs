@@ -65,6 +65,36 @@ pub fn encrypt(db_path: &Path) {
     crate::cli::password::encrypt_database(db_path, PASSWORD).expect("encrypt db");
 }
 
+/// Redirect `~/.config/nigel` at a temporary directory for the life of the
+/// guard.
+///
+/// Any test that reaches `settings::save_settings` — the whole settings-screen
+/// surface — would otherwise rewrite the developer's real settings.json and
+/// repoint their data directory at a tempdir that is about to be deleted.
+pub struct TempConfig {
+    _dir: tempfile::TempDir,
+}
+
+impl TempConfig {
+    pub fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::settings::set_config_dir_for_tests(Some(dir.path().to_path_buf()));
+        Self { _dir: dir }
+    }
+}
+
+impl Default for TempConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TempConfig {
+    fn drop(&mut self) {
+        crate::settings::set_config_dir_for_tests(None);
+    }
+}
+
 pub fn app_for(db_path: &Path) -> (Router, String) {
     let token = auth::generate_token();
     let state = AppState::new(db_path.to_path_buf(), token.clone());
@@ -126,6 +156,20 @@ pub async fn post_json(
     send(
         app,
         session_request("POST", uri, token, Some(&body.to_string())),
+    )
+    .await
+}
+
+/// PUT a JSON body with a valid session.
+pub async fn put_json(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    send(
+        app,
+        session_request("PUT", uri, token, Some(&body.to_string())),
     )
     .await
 }
@@ -224,7 +268,8 @@ pub async fn ok_json(app: &Router, uri: &str, token: &str) -> serde_json::Value 
 /// Every route that reads the database, for tests that must hold across all of
 /// them — the locked guard especially, where a route mounted in the wrong place
 /// would silently answer while the database is still encrypted.
-pub const DATA_ROUTES: [&str; 17] = [
+pub const DATA_ROUTES: [&str; 18] = [
+    "/api/settings/app",
     "/api/reports/pnl",
     "/api/reports/expenses",
     "/api/reports/tax",
@@ -247,8 +292,26 @@ pub const DATA_ROUTES: [&str; 17] = [
 /// Every route that writes, as method, path, and a body good enough to reach
 /// the handler. The locked guard has to refuse all of them: a mutation that
 /// slipped past it would be changing a database nobody has unlocked.
-pub const WRITE_ROUTES: [(&str, &str, &str); 16] = [
+pub const WRITE_ROUTES: [(&str, &str, &str); 22] = [
     ("PATCH", "/api/transactions/1", r#"{"flag":true}"#),
+    ("PUT", "/api/settings/app", r#"{"updateCheck":true}"#),
+    ("PUT", "/api/settings/company-name", r#"{"name":"X"}"#),
+    ("POST", "/api/settings/data-dir", r#"{"path":"/tmp"}"#),
+    (
+        "POST",
+        "/api/settings/password/set",
+        r#"{"newPassword":"x"}"#,
+    ),
+    (
+        "POST",
+        "/api/settings/password/change",
+        r#"{"currentPassword":"x","newPassword":"y"}"#,
+    ),
+    (
+        "POST",
+        "/api/settings/password/remove",
+        r#"{"currentPassword":"x"}"#,
+    ),
     ("POST", "/api/categorize", "{}"),
     ("POST", "/api/review/1/apply", r#"{"categoryId":1}"#),
     ("POST", "/api/review/1/undo", "{}"),

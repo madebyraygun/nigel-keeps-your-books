@@ -13,6 +13,7 @@ pub mod reconcile;
 pub mod reports;
 pub mod review;
 pub mod rules;
+pub mod settings;
 pub mod status;
 pub mod transactions;
 
@@ -47,7 +48,8 @@ fn data_router() -> Router<AppState> {
         .merge(imports::routes())
         .merge(transactions::routes())
         .merge(review::routes())
-        .merge(reconcile::routes());
+        .merge(reconcile::routes())
+        .merge(settings::routes());
 
     // A route that exists only to prove `api_router` — the assembly every
     // endpoint is mounted into — actually applies the guard, without pinning
@@ -73,12 +75,19 @@ struct GuardProbe {
 ///
 /// `db::get_connection` reads the process-global password itself, so an
 /// unlocked database needs no plumbing through here.
+///
+/// The `db_gate` read guard is held for the life of the connection. Encrypting,
+/// decrypting and switching data directories take the write side, so none of
+/// them can rewrite the file underneath a live connection. **A handler that
+/// opens a connection without coming through here must take
+/// `state.db_gate.read().await` itself** — see `routes::imports`, which does.
 pub(super) async fn with_conn<T, F>(state: &AppState, work: F) -> ApiResult<T>
 where
     F: FnOnce(&Connection) -> crate::error::Result<T> + Send + 'static,
     T: Send + 'static,
 {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path();
+    let _gate = state.db_gate.read().await;
     tokio::task::spawn_blocking(move || -> crate::error::Result<T> {
         let conn = crate::db::get_connection(&db_path)?;
         work(&conn)
