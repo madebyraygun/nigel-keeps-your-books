@@ -17,3 +17,10 @@ export {
 export { WcMoney, type WcMoneyAlign } from './wc-money.js';
 export { WcEmptyState } from './wc-empty-state.js';
 export { WcSpinner, type WcSpinnerSize } from './wc-spinner.js';
+export { WcPanel } from './wc-panel.js';
+export { WcUnlockCard, type NcUnlockDetail } from './wc-unlock-card.js';
+export {
+  WcPasswordForm,
+  type NcPasswordSubmitDetail,
+  type WcPasswordMode,
+} from './wc-password-form.js';

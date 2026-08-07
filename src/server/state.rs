@@ -1,8 +1,10 @@
 //! Shared server state.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+
+use tokio::sync::RwLock as TokioRwLock;
 
 use super::error::ApiError;
 
@@ -71,27 +73,66 @@ impl Features {
 }
 
 /// State cloned into every request. Handlers open their own `rusqlite`
-/// connection from `db_path` inside `spawn_blocking`; there is no pool.
+/// connection from `db_path()` inside `spawn_blocking`; there is no pool.
 ///
 /// The database password is deliberately absent: it lives in the process-global
 /// `db::set_db_password` mutex that every CLI subcommand already uses, so
 /// `nigel serve` inherits the CLI's one-database-per-process assumption.
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub db_path: Arc<PathBuf>,
+    /// Which database this server is serving. Behind a lock because the web
+    /// settings screen can switch data directories while the server runs: a
+    /// path fixed at startup would leave every later request reading the old
+    /// books under the new directory's name.
+    db_path: Arc<RwLock<PathBuf>>,
     pub session_token: Arc<str>,
     pub features: Features,
     pub unlock: Arc<UnlockGate>,
+    /// Guards the database *file* rather than its contents.
+    ///
+    /// `cli::password::encrypt_database` and `decrypt_database` rewrite the
+    /// file by rename and delete the `-wal`/`-shm` sidecars. A connection
+    /// another request holds across that moment is reading a file that is no
+    /// longer the database. Readers take the read side (`routes::with_conn`,
+    /// and any handler that opens a connection itself); those two operations
+    /// and the data-directory switch take the write side.
+    pub db_gate: Arc<TokioRwLock<()>>,
 }
 
 impl AppState {
     pub fn new(db_path: PathBuf, session_token: String) -> Self {
         Self {
-            db_path: Arc::new(db_path),
+            db_path: Arc::new(RwLock::new(db_path)),
             session_token: Arc::from(session_token.as_str()),
             features: Features::detect(),
             unlock: Arc::new(UnlockGate::default()),
+            db_gate: Arc::new(TokioRwLock::new(())),
         }
+    }
+
+    /// The database this server is currently serving.
+    ///
+    /// Hands back an owned path rather than a guard, so no lock is ever held
+    /// across an await point.
+    pub fn db_path(&self) -> PathBuf {
+        // unwrap: poisoned lock means a thread panicked — unrecoverable
+        self.db_path.read().unwrap().clone()
+    }
+
+    /// The directory the database lives in — where snapshots, backups and
+    /// upload spools go.
+    pub fn data_dir(&self) -> PathBuf {
+        self.db_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf()
+    }
+
+    /// Point this server at a different database. Only the data-directory
+    /// switch calls this, and only while holding `db_gate` for writing.
+    pub fn set_db_path(&self, path: PathBuf) {
+        // unwrap: poisoned lock means a thread panicked — unrecoverable
+        *self.db_path.write().unwrap() = path;
     }
 
     /// True when the database is encrypted and this process has not been given
@@ -106,7 +147,7 @@ impl AppState {
         if crate::db::get_db_password().is_some() {
             return Ok(false);
         }
-        crate::db::is_encrypted(&self.db_path).map_err(ApiError::from)
+        crate::db::is_encrypted(&self.db_path()).map_err(ApiError::from)
     }
 }
 

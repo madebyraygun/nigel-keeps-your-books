@@ -7,8 +7,6 @@
 //! everything and writes nothing; confirm repeats the TUI's sequence exactly —
 //! snapshot, import, categorize — against the same spooled file.
 
-use std::path::PathBuf;
-
 use axum::extract::multipart::{MultipartError, MultipartRejection};
 use axum::extract::{DefaultBodyLimit, Multipart, State};
 use axum::http::StatusCode;
@@ -127,8 +125,8 @@ async fn upload(
     };
     let filename = uploads::sanitize_filename(&raw_name).map_err(ApiError::bad_request)?;
 
-    let dir = uploads::uploads_dir(&state.db_path);
-    let stored = blocking(move || {
+    let dir = uploads::uploads_dir(&state.db_path());
+    let stored = blocking(&state, move || {
         // Every upload is also a chance to collect the ones nobody came back
         // for, so an abandoned statement never lingers past its hour.
         uploads::purge_stale(&dir, uploads::MAX_AGE);
@@ -170,8 +168,8 @@ async fn preview(
         request.mapping,
     )?;
 
-    let db_path = state.db_path.clone();
-    let result = blocking(move || plan.run(&db_path, true)).await?;
+    let db_path = state.db_path();
+    let result = blocking(&state, move || plan.run(&db_path, true)).await?;
 
     Ok(Json(result))
 }
@@ -216,13 +214,15 @@ async fn confirm(
     let profile = SaveProfile::build(request.save_profile, plan.mapping.as_ref())?;
 
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let snapshot = data_dir(&state).join(format!("snapshots/pre-import-{stamp}.db"));
+    let snapshot = state
+        .data_dir()
+        .join(format!("snapshots/pre-import-{stamp}.db"));
 
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path();
     let upload_id = plan.upload.id.clone();
     let snapshot_path = snapshot.clone();
 
-    let response = blocking(move || {
+    let response = blocking(&state, move || {
         let conn = crate::db::get_connection(&db_path)?;
         // Checked before the snapshot: `import_file` would catch it a moment
         // later, but only after writing a snapshot for an import that was never
@@ -257,8 +257,8 @@ async fn confirm(
 
     // The file has done its job. A failed confirm keeps it, so the same
     // uploadId can be retried once the caller fixes the request.
-    let dir = uploads::uploads_dir(&state.db_path);
-    blocking(move || {
+    let dir = uploads::uploads_dir(&state.db_path());
+    blocking(&state, move || {
         uploads::delete(&dir, &upload_id);
         Ok(())
     })
@@ -293,7 +293,7 @@ impl ImportPlan {
             ensure_format_is_available(state, key)?;
         }
 
-        let dir = uploads::uploads_dir(&state.db_path);
+        let dir = uploads::uploads_dir(&state.db_path());
         let upload = uploads::resolve(&dir, upload_id).ok_or_else(upload_not_found)?;
 
         Ok(Self {
@@ -362,22 +362,19 @@ impl SaveProfile {
 }
 
 /// Run blocking database and filesystem work off the async runtime.
-async fn blocking<T, F>(work: F) -> ApiResult<T>
+///
+/// Takes the `db_gate` read guard for the duration: these routes open their own
+/// connections rather than going through `with_conn`, and encrypt, decrypt and
+/// the data-directory switch rewrite the database file itself.
+async fn blocking<T, F>(state: &AppState, work: F) -> ApiResult<T>
 where
     F: FnOnce() -> ApiResult<T> + Send + 'static,
     T: Send + 'static,
 {
+    let _gate = state.db_gate.read().await;
     tokio::task::spawn_blocking(work)
         .await
         .map_err(ApiError::internal)?
-}
-
-fn data_dir(state: &AppState) -> PathBuf {
-    state
-        .db_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_path_buf()
 }
 
 /// A format key the caller named that this build cannot honour.

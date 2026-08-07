@@ -108,6 +108,46 @@ Routing is `location.hash`, format `#/<screen>?<params>`. Navigation writes the
 hash and nothing else; the `hashchange` listener is the only thing that updates
 route state. Unknown hashes fall back to the dashboard.
 
+A screen that only draws markup is a `render(ctx)` function. A screen that holds
+state is a custom element declared in the same file, with the render function
+reduced to one tag — `nigel-settings-screen` is the worked example. Screen
+elements live in `screens/`; `apps/app/src/components/` stays the root container
+alone, and every visual primitive still comes from `@nigel/ui`.
+
+`render` is handed a `ScreenContext` (`screens/context.ts`): the api client, the
+route's query parameters, and `navigate`. Screens take their client from there
+rather than importing a singleton, which is what lets a test drive a whole
+screen with `FakeApiClient` and what will let a Tauri client take the same
+place. Keep it small — anything added to it is added for every screen at once.
+
+## Boot sequence
+
+`nigel-app` fetches `/api/status` and nothing else until it knows where it
+stands. `AppStore.boot` derives one of four phases from that answer:
+
+| Phase | What renders |
+|---|---|
+| `starting` | A spinner. Status has not answered yet. |
+| `locked` | The unlock gate, and nothing else — no shell, no sidebar. |
+| `failed` | The retry banner. |
+| `ready` | The app. |
+
+The `locked` phase replaces the shell rather than disabling it, and that is the
+point: with no shell there is no screen element, so nothing exists that *could*
+fetch data before the password arrives. The phase is derived rather than stored,
+so a `423` from any later call sends the app back to the gate on its own.
+
+The unlock backoff is served by the server, which holds the response back before
+answering — so the gate counts down *during* the request rather than locking the
+form afterwards. A client-side cooldown on top would charge the same penalty
+twice.
+
+Switching data directory goes through `AppStore.switchDataDir`, which reloads
+the page on success. The reload is injectable
+(`initializeAppStore(client, { reload })`) because jsdom cannot implement
+`location.reload`, and because "did it reload?" is exactly what a test needs to
+assert.
+
 ## How the build reaches the binary
 
 `npm run build` writes to `web/dist`, which `rust-embed` bakes into the binary.

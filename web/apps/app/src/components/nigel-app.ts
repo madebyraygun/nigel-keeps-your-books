@@ -11,7 +11,8 @@ import {
   type AppStore,
 } from '../state/app-store.js';
 import { parseHash, screenToHash, type Route } from '../screens/hash-route.js';
-import { DEFAULT_SCREEN, navItems, screenDef } from '../screens/registry.js';
+import { DEFAULT_SCREEN, navItems, screenDef, type ScreenId } from '../screens/registry.js';
+import type { ScreenContext } from '../screens/context.js';
 
 /**
  * Root container: owns the api client, the store, and the route.
@@ -34,6 +35,11 @@ export class NigelApp extends SignalWatcher(LitElement) {
       place-items: center;
       height: 100vh;
       background: var(--wa-color-bg);
+    }
+
+    .gate {
+      height: 100vh;
+      overflow: auto;
     }
 
     .banner {
@@ -88,6 +94,20 @@ export class NigelApp extends SignalWatcher(LitElement) {
     window.location.hash = `#/${event.detail.id}`;
   };
 
+  /** Navigation for screens: the same one-directional path the sidebar takes. */
+  private navigate = (screen: ScreenId, params?: URLSearchParams): void => {
+    const query = params?.toString();
+    window.location.hash = query ? `#/${screen}?${query}` : `#/${screen}`;
+  };
+
+  private screenContext(): ScreenContext {
+    return {
+      client: this.client,
+      params: this.route.params,
+      navigate: this.navigate,
+    };
+  }
+
   private handleRetry = (): void => {
     this.reportedError = null;
     void this.store?.refreshStatus();
@@ -102,12 +122,14 @@ export class NigelApp extends SignalWatcher(LitElement) {
 
   render() {
     const store = this.store ?? getAppStore();
-    const status = store.status.get();
     const error = store.statusError.get();
 
     if (error) this.announceError(error.message);
 
-    if (!status && !error) {
+    const boot = store.boot.get();
+    const ctx = this.screenContext();
+
+    if (boot === 'starting') {
       return html`
         <div class="boot">
           <wc-spinner size="l" show-label label="Connecting to nigel"></wc-spinner>
@@ -115,23 +137,29 @@ export class NigelApp extends SignalWatcher(LitElement) {
       `;
     }
 
-    const locked = store.locked.get();
-    // While locked the unlock screen is the only reachable one, but the hash
-    // is left alone so unlocking returns the user to where they were headed.
-    const screen = screenDef(locked ? 'unlock' : this.route.screen);
+    // The gate replaces the shell rather than sitting inside it: with no
+    // sidebar and no screen rendered, nothing exists that could fetch data
+    // before the password arrives. The hash is left alone, so unlocking returns
+    // the user to wherever they were headed.
+    if (boot === 'locked') {
+      const gate = screenDef('unlock');
+      document.title = `${gate.title} · ${store.companyName.get()}`;
+      return html`<div class="gate">${gate.render(ctx)}</div>`;
+    }
 
+    const screen = screenDef(this.route.screen);
     document.title = `${screen.title} · ${store.companyName.get()}`;
 
     return html`
       <wc-app-shell screen-title=${screen.title}>
         <wc-nav-sidebar
           slot="sidebar"
-          .items=${navItems({ disabled: locked })}
+          .items=${navItems()}
           active=${screen.id}
           app-name=${store.companyName.get()}
           @nc-navigate=${this.handleNavigate}
         ></wc-nav-sidebar>
-        ${this.renderBanner(error?.message ?? null)} ${screen.render()}
+        ${this.renderBanner(error?.message ?? null)} ${screen.render(ctx)}
       </wc-app-shell>
     `;
   }

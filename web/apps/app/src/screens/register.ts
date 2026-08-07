@@ -1,7 +1,9 @@
 import { html, type TemplateResult } from 'lit';
 import '@nigel/ui';
 
-export function renderRegister(): TemplateResult {
+import type { ScreenContext } from './context.js';
+
+export function renderRegister(_ctx: ScreenContext): TemplateResult {
   return html`
     <wc-empty-state
       icon="wc-icon-register"

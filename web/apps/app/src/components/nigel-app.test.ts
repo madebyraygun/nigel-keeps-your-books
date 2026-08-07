@@ -100,28 +100,69 @@ describe('nigel-app', () => {
   });
 
   describe('locked', () => {
-    it('forces the unlock screen', async () => {
+    const lockedClient = () => {
       const client = new FakeApiClient();
       client.status = LOCKED_STATUS;
-      const el = await mount(client);
-      expect(shell(el)?.getAttribute('screen-title')).toBe('Unlock');
+      return client;
+    };
+
+    it('shows the unlock gate instead of the app', async () => {
+      const el = await mount(lockedClient());
+      expect(el.shadowRoot?.querySelector('nigel-unlock-screen')).toBeTruthy();
+    });
+
+    it('renders no shell and no sidebar while locked', async () => {
+      // Structural, not cosmetic: with no shell there is no screen element, so
+      // there is nothing that could fetch data before the password arrives.
+      const el = await mount(lockedClient());
+      expect(shell(el)).toBeNull();
+      expect(sidebar(el)).toBeNull();
     });
 
     it('leaves the hash alone so unlocking returns the user where they were', async () => {
       window.location.hash = '#/reports';
-      const client = new FakeApiClient();
-      client.status = LOCKED_STATUS;
-      await mount(client);
+      await mount(lockedClient());
       expect(window.location.hash).toBe('#/reports');
     });
 
-    it('disables every nav item', async () => {
-      const client = new FakeApiClient();
-      client.status = LOCKED_STATUS;
+    it('fetches nothing but status before the database is unlocked', async () => {
+      // The whole acceptance criterion in one assertion: the only call the app
+      // makes while locked is the one that told it it was locked.
+      const client = lockedClient();
+      await mount(client);
+      expect(client.calls).toEqual(['getStatus']);
+    });
+
+    it('enters the app once the password lands', async () => {
+      const client = lockedClient();
       const el = await mount(client);
-      const items = (sidebar(el) as HTMLElement & { items: { disabled?: boolean }[] })
-        .items;
-      expect(items.every((i) => i.disabled)).toBe(true);
+
+      el.shadowRoot
+        ?.querySelector('nigel-unlock-screen')
+        ?.shadowRoot?.querySelector('wc-unlock-card')
+        ?.dispatchEvent(
+          new CustomEvent('nc-unlock', {
+            detail: { password: 'hunter2' },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      await new Promise((r) => setTimeout(r, 0));
+      await el.updateComplete;
+
+      expect(client.calls).toEqual(['getStatus', 'unlock:hunter2', 'getStatus']);
+      expect(shell(el)).toBeTruthy();
+    });
+
+    it('returns to the gate when any later call reports a locked database', async () => {
+      const el = await mount();
+      expect(shell(el)).toBeTruthy();
+
+      appLocked.set(true);
+      await el.updateComplete;
+
+      expect(shell(el)).toBeNull();
+      expect(el.shadowRoot?.querySelector('nigel-unlock-screen')).toBeTruthy();
     });
   });
 

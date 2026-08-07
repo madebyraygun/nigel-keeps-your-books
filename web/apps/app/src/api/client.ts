@@ -3,10 +3,17 @@ import {
   isKnownApiErrorCode,
   type ApiErrorCode,
   type ApiErrorEnvelope,
+  type AppSettings,
+  type ChangePasswordRequest,
+  type CompanyNameResponse,
   type InvalidPasswordDetails,
+  type PasswordStateResponse,
   type PingResponse,
+  type RemovePasswordRequest,
+  type SetPasswordRequest,
   type StatusResponse,
   type UnlockResponse,
+  type UpdateAppSettingsRequest,
 } from './types.js';
 
 /**
@@ -93,6 +100,15 @@ export interface ApiClient {
   ping(): Promise<PingResponse>;
   getStatus(): Promise<StatusResponse>;
   unlock(password: string): Promise<UnlockResponse>;
+
+  getAppSettings(): Promise<AppSettings>;
+  updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings>;
+  setCompanyName(name: string): Promise<CompanyNameResponse>;
+  /** Answers with the status of the database it switched to. */
+  setDataDir(path: string): Promise<StatusResponse>;
+  setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse>;
+  changePassword(input: ChangePasswordRequest): Promise<PasswordStateResponse>;
+  removePassword(input: RemovePasswordRequest): Promise<PasswordStateResponse>;
 }
 
 export interface FetchApiClientOptions {
@@ -135,6 +151,50 @@ export class FetchApiClient implements ApiClient {
 
   unlock(password: string): Promise<UnlockResponse> {
     return this.request<UnlockResponse>('POST', '/unlock', { password });
+  }
+
+  getAppSettings(): Promise<AppSettings> {
+    return this.request<AppSettings>('GET', '/settings/app');
+  }
+
+  updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings> {
+    return this.request<AppSettings>('PUT', '/settings/app', input);
+  }
+
+  setCompanyName(name: string): Promise<CompanyNameResponse> {
+    return this.request<CompanyNameResponse>('PUT', '/settings/company-name', {
+      name,
+    });
+  }
+
+  async setDataDir(path: string): Promise<StatusResponse> {
+    const status = await this.request<StatusResponse>('POST', '/settings/data-dir', {
+      path,
+    });
+    // The switch can land on an encrypted database, so this answer moves the
+    // lock signal the same way getStatus does.
+    appLocked.set(status.locked);
+    return status;
+  }
+
+  setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse> {
+    return this.request<PasswordStateResponse>('POST', '/settings/password/set', input);
+  }
+
+  changePassword(input: ChangePasswordRequest): Promise<PasswordStateResponse> {
+    return this.request<PasswordStateResponse>(
+      'POST',
+      '/settings/password/change',
+      input,
+    );
+  }
+
+  removePassword(input: RemovePasswordRequest): Promise<PasswordStateResponse> {
+    return this.request<PasswordStateResponse>(
+      'POST',
+      '/settings/password/remove',
+      input,
+    );
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

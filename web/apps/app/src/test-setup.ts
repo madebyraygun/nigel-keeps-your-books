@@ -17,6 +17,38 @@ if (typeof window !== 'undefined') {
     ]) {
       if (typeof proto[method] !== 'function') proto[method] = noop;
     }
+
+    // Web Awesome's form controls read `internals.validity` during their first
+    // update. jsdom does not define it, and the resulting throw escapes as an
+    // unhandled rejection rather than a failing assertion.
+    if (!('validity' in proto)) {
+      Object.defineProperty(proto, 'validity', {
+        get() {
+          return {
+            valid: true,
+            valueMissing: false,
+            typeMismatch: false,
+            patternMismatch: false,
+            tooLong: false,
+            tooShort: false,
+            rangeUnderflow: false,
+            rangeOverflow: false,
+            stepMismatch: false,
+            badInput: false,
+            customError: false,
+          };
+        },
+        configurable: true,
+      });
+    }
+    if (!('validationMessage' in proto)) {
+      Object.defineProperty(proto, 'validationMessage', {
+        get() {
+          return '';
+        },
+        configurable: true,
+      });
+    }
   }
 
   if (window.HTMLDialogElement) {

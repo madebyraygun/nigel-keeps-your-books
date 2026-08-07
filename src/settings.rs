@@ -30,7 +30,29 @@ impl Default for Settings {
     }
 }
 
+/// Test-only redirection of the config directory.
+///
+/// Without it, any test that calls [`save_settings`] rewrites the developer's
+/// real `~/.config/nigel/settings.json` and repoints their data directory. An
+/// in-crate override is used rather than `$HOME`: `dirs::home_dir` does not
+/// consult the environment on every platform, and mutating the environment is
+/// process-global and unsafe in newer editions.
+#[cfg(test)]
+static CONFIG_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub fn set_config_dir_for_tests(dir: Option<PathBuf>) {
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
+    *CONFIG_DIR_OVERRIDE.lock().unwrap() = dir;
+}
+
 fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.lock().unwrap().clone() {
+        return dir;
+    }
+
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config")

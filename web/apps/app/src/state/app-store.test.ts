@@ -139,3 +139,102 @@ describe('app store', () => {
     });
   });
 });
+
+describe('app store boot phase', () => {
+  beforeEach(() => {
+    resetAppStore();
+    appLocked.set(false);
+  });
+
+  it('starts before status has answered', () => {
+    const store = initializeAppStore(new FakeApiClient());
+    expect(store.boot.get()).toBe('starting');
+  });
+
+  it('is ready once an unlocked status arrives', async () => {
+    const store = initializeAppStore(new FakeApiClient());
+    await store.refreshStatus();
+    expect(store.boot.get()).toBe('ready');
+  });
+
+  it('is locked when the database is encrypted', async () => {
+    const client = new FakeApiClient();
+    client.status = LOCKED_STATUS;
+    const store = initializeAppStore(client);
+    await store.refreshStatus();
+    expect(store.boot.get()).toBe('locked');
+  });
+
+  it('is locked when any later call reports a locked database', async () => {
+    // A 423 from anywhere sends the app back to the gate; no bespoke path.
+    const store = initializeAppStore(new FakeApiClient());
+    await store.refreshStatus();
+    appLocked.set(true);
+    expect(store.boot.get()).toBe('locked');
+  });
+
+  it('fails when status could not be read', async () => {
+    const client = new FakeApiClient();
+    client.statusError = new ApiError({
+      code: 'internal',
+      rawCode: 'internal',
+      message: 'boom',
+      status: 500,
+    });
+    const store = initializeAppStore(client);
+    await store.refreshStatus();
+    expect(store.boot.get()).toBe('failed');
+  });
+
+  it('becomes ready after a successful unlock', async () => {
+    const client = new FakeApiClient();
+    client.status = LOCKED_STATUS;
+    const store = initializeAppStore(client);
+    await store.refreshStatus();
+
+    const outcome = await store.unlock('hunter2');
+
+    expect(outcome).toEqual({ ok: true });
+    expect(store.boot.get()).toBe('ready');
+  });
+});
+
+describe('switching data directory', () => {
+  beforeEach(() => {
+    resetAppStore();
+    appLocked.set(false);
+  });
+
+  it('reloads the app once the server has switched', async () => {
+    let reloads = 0;
+    const client = new FakeApiClient();
+    const store = initializeAppStore(client, { reload: () => (reloads += 1) });
+
+    const outcome = await store.switchDataDir('/tmp/other');
+
+    expect(outcome).toEqual({ ok: true });
+    expect(client.calls).toContain('setDataDir');
+    expect(reloads).toBe(1);
+  });
+
+  it('does not reload when the switch was refused', async () => {
+    // A bad path leaves the current books on screen, which is the honest state.
+    let reloads = 0;
+    const client = new FakeApiClient();
+    client.settingsError = new ApiError({
+      code: 'bad_request',
+      rawCode: 'bad_request',
+      message: 'No database found at /nope/nigel.db',
+      status: 400,
+    });
+    const store = initializeAppStore(client, { reload: () => (reloads += 1) });
+
+    const outcome = await store.switchDataDir('/nope');
+
+    expect(outcome).toEqual({
+      ok: false,
+      message: 'No database found at /nope/nigel.db',
+    });
+    expect(reloads).toBe(0);
+  });
+});

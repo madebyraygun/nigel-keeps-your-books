@@ -542,6 +542,8 @@ its own words instead of parsing ours:
 | `duplicate_name` | `name` | Creating or renaming to a name already taken |
 | `already_inactive` | — | Editing or deleting an already soft-deleted rule |
 | `no_transactions` | `account`, `month` | Reconciling a month with nothing in it |
+| `already_encrypted` | — | Setting a password on an encrypted database |
+| `not_encrypted` | — | Changing or removing the password on a plaintext one |
 
 ```json
 {
@@ -623,6 +625,103 @@ such a build — otherwise the saved `.pdf` file is that JSON.
 - **Writing files.** The CLI's `--output` and `--output-dir` choose a path on
   disk. The server only streams bytes back; where they land is the browser's
   business.
+## Settings
+
+What the TUI's settings screen covers, plus switching data directories. Every
+route here is behind the locked guard, including the two that never touch the
+database — see below.
+
+| Route | Method | Body | Response |
+|---|---|---|---|
+| `/api/settings/app` | `GET` | — | `AppSettings` |
+| `/api/settings/app` | `PUT` | `updateCheck` | `AppSettings` |
+| `/api/settings/company-name` | `PUT` | `name` | `{ companyName }` |
+| `/api/settings/data-dir` | `POST` | `path` | `StatusResponse` |
+| `/api/settings/password/set` | `POST` | `newPassword` | `{ encrypted, locked }` |
+| `/api/settings/password/change` | `POST` | `currentPassword`, `newPassword` | `{ encrypted, locked }` |
+| `/api/settings/password/remove` | `POST` | `currentPassword` | `{ encrypted, locked }` |
+
+### Application settings
+
+`AppSettings` is the part of `settings.json` the web UI shows:
+
+```json
+{ "userName": "Dalton", "updateCheck": true, "lastUpdateCheck": "2026-08-06T09:12:00Z" }
+```
+
+`updateCheck` is the only field a `PUT` may change. The user name is collected
+during onboarding and the timestamp is the updater's bookkeeping; both are
+display-only here, and sending them is ignored rather than refused. There is no
+`dataDir` field: `/api/status` already reports the directory the server actually
+opened, and one value with two sources is one value that will disagree with
+itself.
+
+### Business name
+
+`PUT /api/settings/company-name` writes the `company_name` metadata key — the
+name `/api/status` reports and the SPA puts in the sidebar. The name is trimmed,
+and an empty one is allowed: clearing the business name is what the TUI does
+with a blank field.
+
+### Switching data directory
+
+`POST /api/settings/data-dir` is `nigel load` plus the three things a *running*
+server has to do. It validates that the target holds a `nigel.db` (`400` if not,
+with the same message the CLI prints), rewrites `settings.json`, and then:
+
+- **rebinds this process** to the new database, so every later request reads it.
+  Rewriting `settings.json` alone would leave the server serving the old books
+  under the new directory's name.
+- **clears the password**, so an encrypted target comes up locked rather than
+  inheriting the previous database's key.
+- **resets the failed-attempt budget**, which belongs to a database rather than
+  to a process.
+- **runs pending migrations** when the target is unencrypted, the same
+  pre-flight `nigel serve` does at startup. An encrypted target is migrated by
+  the unlock that follows.
+
+The response is a full `StatusResponse` describing the database just moved to,
+so a client that does not reload still knows where it stands. The SPA does
+reload, which is the simplest way to make every screen re-derive from scratch.
+
+### Password management
+
+The three password routes wrap the same functions `nigel password` uses, and the
+new password is trimmed exactly as the terminal prompt trims it — so a password
+set from the browser can always be typed back in at the terminal.
+
+- **set** requires a plaintext database; on an encrypted one it is `409`
+  `already_encrypted`. On success the process adopts the new key, so the session
+  continues without an unlock.
+- **change** and **remove** require an encrypted one; on a plaintext database
+  they are `409` `not_encrypted`. Both take the current password and verify it
+  before touching the file.
+- A wrong `currentPassword` is `401 invalid_password` with the same
+  `attemptsRemaining` / `retryAfterMs` details `POST /api/unlock` returns, and it
+  draws down the *same* budget. Guessing a password through the change endpoint
+  costs exactly what guessing it through unlock costs, or the throttle would be
+  decoration.
+- An empty new password is `400`. Removing encryption is what `remove` is for.
+
+Encrypting and decrypting rewrite the database file itself — a rename, and the
+`-wal`/`-shm` sidecars deleted — so the server holds an exclusive lock across
+them. In-flight reads finish first, and reads that arrive during the operation
+wait rather than opening a file that is about to stop being the database.
+
+### Why none of these is exempt from the locked guard
+
+`company-name` needs the key, so it could not work while locked in any case. The
+other five could:
+
+- `settings/app` reads only `settings.json`, but nothing on the unlock screen
+  needs it. Exempting a route to serve a screen that does not exist is how a
+  guard rots.
+- `data-dir` would make "switch away from a database whose password I forgot" a
+  browser action. It is still refused, matching the TUI, where the load screen
+  lives behind the same gate. The recovery path is `nigel load` and a restart.
+- `password/change` and `password/remove` carry the current password in the
+  body, so they would function while locked — and would then be an unthrottled
+  password oracle reachable without ever passing the unlock screen.
 
 ## Static assets
 

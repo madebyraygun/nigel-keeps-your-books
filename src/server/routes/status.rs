@@ -53,7 +53,7 @@ pub async fn locked_guard(State(state): State<AppState>, req: Request, next: Nex
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StatusResponse {
+pub(crate) struct StatusResponse {
     initialized: bool,
     encrypted: bool,
     locked: bool,
@@ -63,16 +63,23 @@ struct StatusResponse {
     pdf_export: bool,
 }
 
-async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>> {
-    let initialized = state.db_path.exists();
-    let encrypted = db::is_encrypted(&state.db_path)?;
+/// Everything `GET /api/status` reports, computed fresh.
+///
+/// Shared with the data-directory switch, which answers with the status of the
+/// database it just moved to rather than with a second shape that says the same
+/// thing.
+pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse> {
+    let db_path = state.db_path();
+    let initialized = db_path.exists();
+    let encrypted = db::is_encrypted(&db_path)?;
     let locked = encrypted && db::get_db_password().is_none();
 
     // Reading the company name means reading the database, which needs the key.
     let company_name = if initialized && !locked {
-        let db_path = state.db_path.clone();
+        let path = db_path.clone();
+        let _gate = state.db_gate.read().await;
         tokio::task::spawn_blocking(move || -> ApiResult<Option<String>> {
-            let conn = db::get_connection(&db_path)?;
+            let conn = db::get_connection(&path)?;
             Ok(db::get_metadata(&conn, "company_name"))
         })
         .await
@@ -81,7 +88,7 @@ async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>
         None
     };
 
-    Ok(Json(StatusResponse {
+    Ok(StatusResponse {
         initialized,
         encrypted,
         locked,
@@ -89,8 +96,7 @@ async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>
         version: env!("CARGO_PKG_VERSION"),
         // Named from the database the server actually opened rather than from
         // settings.json, which another process is free to repoint mid-run.
-        data_dir: state
-            .db_path
+        data_dir: db_path
             .parent()
             .map(|dir| dir.display().to_string())
             .unwrap_or_default(),
@@ -98,7 +104,11 @@ async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>
         // clicks: a build without the feature would otherwise save the `501`
         // envelope to a file called something.pdf.
         pdf_export: state.features.pdf,
-    }))
+    })
+}
+
+async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>> {
+    Ok(Json(current_status(&state).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,7 +133,7 @@ async fn unlock(
         ApiError::bad_request("Expected a JSON body of the form {\"password\": \"...\"}.")
     })?;
 
-    if !db::is_encrypted(&state.db_path)? {
+    if !db::is_encrypted(&state.db_path())? {
         return Err(ApiError::bad_request(
             "This database is not encrypted — no password is needed.",
         ));
@@ -135,11 +145,15 @@ async fn unlock(
         return Ok(Json(UnlockResponse { locked: false }));
     }
 
-    let db_path = state.db_path.clone();
-    let unlocked =
+    let db_path = state.db_path();
+    // try_unlock opens a connection and migrates: the file must not be swapped
+    // out from under it.
+    let unlocked = {
+        let _gate = state.db_gate.read().await;
         tokio::task::spawn_blocking(move || try_unlock(&db_path, request.password.expose()))
             .await
-            .map_err(ApiError::internal)??;
+            .map_err(ApiError::internal)??
+    };
 
     if unlocked {
         state.unlock.reset();

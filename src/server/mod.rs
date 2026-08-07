@@ -53,7 +53,7 @@ async fn serve(db_path: PathBuf, port: u16, no_open: bool) -> Result<()> {
     let state = AppState::new(db_path, auth::generate_token());
 
     // A previous run may have been killed between an upload and its import.
-    uploads::purge_stale(&uploads::uploads_dir(&state.db_path), uploads::MAX_AGE);
+    uploads::purge_stale(&uploads::uploads_dir(&state.db_path()), uploads::MAX_AGE);
 
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
     let addr = listener.local_addr()?;
@@ -486,6 +486,8 @@ mod tests {
 
     #[tokio::test]
     async fn unlocking_opens_every_data_route() {
+        // /api/settings/app reads settings.json; keep the suite off the real one.
+        let _config = TempConfig::new();
         let (_dir, db_path) = seeded_db();
         encrypt(&db_path);
         let (app, token) = app_for(&db_path);
