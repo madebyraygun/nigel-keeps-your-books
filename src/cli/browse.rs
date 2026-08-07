@@ -1,4 +1,4 @@
-use super::parse_month_opt;
+use super::{parse_month_opt, RegisterFilterArgs};
 use crate::browser::RegisterBrowser;
 use crate::db::get_connection;
 use crate::error::Result;
@@ -11,43 +11,42 @@ pub fn register(
     year: Option<i32>,
     from_date: Option<String>,
     to_date: Option<String>,
-    account: Option<String>,
+    filters: &RegisterFilterArgs,
 ) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let (my, mm) = parse_month_opt(&month);
     let y = year.or(my);
+    let filters = filters.resolve(&conn)?;
     let data = reports::get_register(
         &conn,
         y,
         mm,
         from_date.as_deref(),
         to_date.as_deref(),
-        account.as_deref(),
+        &filters,
     )?;
 
     // Build filters description — show effective values
-    let mut filters = Vec::new();
+    let mut desc_parts = Vec::new();
     if let Some(ref m) = month {
-        filters.push(format!("month: {m}"));
+        desc_parts.push(format!("month: {m}"));
         // If --year was also passed and differs from the month's year, show it
         if let Some(yr) = year {
             if my != Some(yr) {
-                filters.push(format!("year: {yr}"));
+                desc_parts.push(format!("year: {yr}"));
             }
         }
     } else if let Some(yr) = y {
-        filters.push(format!("year: {yr}"));
+        desc_parts.push(format!("year: {yr}"));
     }
     if let Some(ref from) = from_date {
-        filters.push(format!("from: {from}"));
+        desc_parts.push(format!("from: {from}"));
     }
     if let Some(ref to) = to_date {
-        filters.push(format!("to: {to}"));
+        desc_parts.push(format!("to: {to}"));
     }
-    if let Some(ref acct) = account {
-        filters.push(format!("account: {acct}"));
-    }
-    let filters_desc = filters.join(", ");
+    desc_parts.extend(filters.labels());
+    let filters_desc = desc_parts.join(", ");
 
     let no_date_filters = y.is_none() && mm.is_none() && from_date.is_none() && to_date.is_none();
     let total = data.total;

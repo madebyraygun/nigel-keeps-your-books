@@ -318,6 +318,225 @@ fn report_all_text_export() {
     );
 }
 
+/// Read the register as plain text (non-TTY stdout falls back to text).
+fn register_stdout(env: &TestEnv, extra: &[&str]) -> String {
+    let year = chrono::Local::now().format("%Y").to_string();
+    let mut args = vec!["report", "register", "--year", &year];
+    args.extend_from_slice(extra);
+    let out = env.cmd().args(&args).assert().success();
+    String::from_utf8(out.get_output().stdout.clone()).unwrap()
+}
+
+#[test]
+fn report_register_category_filter_narrows_rows() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    let all = register_stdout(&env, &[]);
+    let filtered = register_stdout(&env, &["--category", "Software & Subscriptions"]);
+
+    let all_rows = all.lines().count();
+    let filtered_rows = filtered.lines().count();
+    assert!(
+        filtered_rows < all_rows,
+        "category filter should drop rows: {filtered_rows} vs {all_rows}"
+    );
+    assert!(
+        filtered.contains("Software & Subscriptions"),
+        "filtered register should still contain the selected category"
+    );
+    assert!(
+        !filtered.contains("Client Services"),
+        "filtered register should not contain other categories:\n{filtered}"
+    );
+    // Active filters are named in the header.
+    assert!(
+        filtered.contains("category: Software & Subscriptions"),
+        "header should name the category filter:\n{filtered}"
+    );
+}
+
+#[test]
+fn report_register_category_filter_composes_with_account() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    let out = register_stdout(
+        &env,
+        &[
+            "--account",
+            "BofA Checking",
+            "--category",
+            "Software & Subscriptions",
+        ],
+    );
+    assert!(out.contains("Software & Subscriptions"));
+    assert!(
+        out.contains("account: BofA Checking, category: Software & Subscriptions"),
+        "header should name both filters:\n{out}"
+    );
+
+    // An account with no transactions yields an empty selection, not an error.
+    let out = register_stdout(
+        &env,
+        &[
+            "--account",
+            "Nonexistent",
+            "--category",
+            "Software & Subscriptions",
+        ],
+    );
+    assert!(
+        !out.contains("Adobe"),
+        "no rows should survive an account with no transactions:\n{out}"
+    );
+}
+
+#[test]
+fn report_register_uncategorized_filter() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    // Demo data is fully categorized; strip one row's category to have something to find.
+    env.db()
+        .execute(
+            "UPDATE transactions SET category_id = NULL \
+             WHERE id = (SELECT MIN(id) FROM transactions)",
+            [],
+        )
+        .expect("failed to uncategorize a transaction");
+
+    let out = register_stdout(&env, &["--uncategorized"]);
+    assert!(
+        out.contains("uncategorized"),
+        "header should mark the uncategorized selection:\n{out}"
+    );
+    assert!(
+        !out.contains("Software & Subscriptions"),
+        "categorized rows must not appear:\n{out}"
+    );
+}
+
+#[test]
+fn report_register_unknown_category_fails() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args(["report", "register", "--category", "No Such Category"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No Such Category"));
+}
+
+#[test]
+fn report_register_category_and_uncategorized_conflict() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args([
+            "report",
+            "register",
+            "--category",
+            "Software & Subscriptions",
+            "--uncategorized",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn report_register_default_export_filename_encodes_filters() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    let year = chrono::Local::now().format("%Y").to_string();
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    env.cmd()
+        .args([
+            "report",
+            "register",
+            "--year",
+            &year,
+            "--account",
+            "BofA Checking",
+            "--category",
+            "Software & Subscriptions",
+            "--mode",
+            "export",
+            "--format",
+            "text",
+        ])
+        .assert()
+        .success();
+
+    let expected = env.data_dir().join("exports").join(format!(
+        "register-bofa-checking-software-subscriptions-{date}.txt"
+    ));
+    assert!(
+        expected.exists(),
+        "expected filtered export at {}",
+        expected.display()
+    );
+    let content = std::fs::read_to_string(&expected).unwrap();
+    assert!(content.contains("account: BofA Checking, category: Software & Subscriptions"));
+
+    // An explicit --output still wins over the derived name.
+    let explicit = env.home.path().join("my-register.txt");
+    env.cmd()
+        .args([
+            "report",
+            "register",
+            "--year",
+            &year,
+            "--category",
+            "Software & Subscriptions",
+            "--format",
+            "text",
+            "--output",
+            &explicit.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+    assert!(explicit.exists());
+}
+
+#[test]
+fn report_register_unfiltered_export_keeps_plain_filename() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    env.cmd()
+        .args(["report", "register", "--mode", "export", "--format", "text"])
+        .assert()
+        .success();
+
+    let expected = env
+        .data_dir()
+        .join("exports")
+        .join(format!("register-{date}.txt"));
+    assert!(
+        expected.exists(),
+        "unfiltered export should keep the bare name, looked for {}",
+        expected.display()
+    );
+}
+
+#[test]
+fn browse_register_rejects_unknown_category() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .args(["browse", "register", "--category", "No Such Category"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No Such Category"));
+}
+
 #[test]
 fn categorize_after_demo() {
     let env = TestEnv::new();

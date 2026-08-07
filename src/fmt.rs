@@ -60,9 +60,32 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Reduce a display string to a filename-safe slug: "BofA Checking" -> "bofa-checking"
+pub fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    for c in value.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_slugify() {
+        assert_eq!(slugify("BofA Checking"), "bofa-checking");
+        assert_eq!(slugify("Taxes & Licenses"), "taxes-licenses");
+        assert_eq!(slugify("  Meals  "), "meals");
+        assert_eq!(slugify("Office/Supplies"), "office-supplies");
+        assert_eq!(slugify("---"), "");
+        assert_eq!(slugify("Café"), "caf");
+    }
 
     #[test]
     fn test_money_formatting() {
