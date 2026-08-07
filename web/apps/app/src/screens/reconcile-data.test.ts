@@ -70,18 +70,23 @@ describe('reconcileFailure', () => {
     expect(failure.message).toBe('No transactions for that account in that month.');
   });
 
-  it('puts an unknown account under the account field, keeping the server’s name for it', () => {
+  it('puts an unknown account under the account field, in words a browser can act on', () => {
+    // The server's sentence says to run `nigel accounts list`, which is good
+    // advice in a terminal and useless beside an account picker.
     const failure = reconcileFailure(
       new ApiError({
         code: 'not_found',
         rawCode: 'not_found',
-        message: 'Unknown account: Nope',
+        message:
+          "Account 'Nope' not found. Run `nigel accounts list` to see available accounts, or `nigel accounts add` to create one.",
         status: 404,
       }),
     );
 
     expect(failure.field).toBe('account');
-    expect(failure.message).toBe('Unknown account: Nope');
+    expect(failure.message).toBe(
+      'That account no longer exists. Reload to see the current list.',
+    );
   });
 
   it('leaves an unplaceable failure above the form with the server’s sentence', () => {

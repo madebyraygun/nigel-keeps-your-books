@@ -441,6 +441,55 @@ Per screen:
   both directions. `#/rules?categoryId=12` filters the list client-side, which is
   where the categories screen's "3 active rules assign this category" points.
 
+## Reconciling and undoing
+
+`#/reconcile` takes an account, a month and a statement balance, and shows the
+verdict with the account's past reconciliations beneath it.
+
+**The history is refetched after every submit, not just a matching one.**
+`POST /api/reconcile` records the attempt whichever way the comparison went —
+that record is precisely how the history knows which months have been checked,
+so a discrepancy has to appear there too.
+
+**The verdict is stored with the request that produced it**, not read back off
+the form. Otherwise editing the month after a check would relabel February's
+figures as March's, which is the kind of wrong that looks right.
+
+A rejected reconcile lands under the field that caused it: a 409
+`no_transactions` under the month, a 404 under the account. Both are worded
+here rather than passed through. The 404 especially: the server's sentence
+tells you to run `nigel accounts list`, which is the right advice in a terminal
+and useless in a browser that is already showing an account picker.
+
+**A failed submit keeps the typed figures.** This is the one screen where the
+number was copied off a paper statement, and making someone retype it is the
+worst thing the screen could do.
+
+`#/undo` supersets the TUI. `undo_manager.rs` can only offer the most recent
+import because a terminal has nothing to point at, but `DELETE /api/imports/:id`
+has always taken an id — so the web lists every import and undoes the one
+chosen. Confirming restates the count and the file. An import that is already
+gone answers 404 and is reported as such, never passed off as a successful undo
+of nothing, and either outcome refetches the list rather than splicing a row
+out: every other row's count is the server's to state.
+
+**Freshness needs no wiring.** There is no global cache and each screen fetches
+in `firstUpdated`, so arriving at a screen is what makes it current. That holds
+only while every screen is a distinct element Lit tears down on a route change —
+put two screens behind one tag and `firstUpdated` would not run again, and the
+register would quietly show transactions an undo had already deleted.
+`src/__tests__/screen-freshness.test.ts` is the guard: it undoes an import and
+then navigates, asserting the refetch lands after the delete.
+
+The statement-balance field is the app's only currency input, and sets the
+pattern for any that follow. It renders its own `$` rather than expecting one to
+be typed, uses `inputmode="decimal"` instead of `type="number"` (a number field
+silently discards the commas a statement figure is copied with), strips those
+commas exactly as `reconcile_manager.rs` does, and tidies itself to two decimals
+on blur. The month field is `wa-input type="month"`, which a spike confirmed
+works under jsdom; the `YYYY-MM` check stays in the component regardless,
+because Safari has never implemented the control and degrades it to a text box.
+
 ## Boot sequence
 
 `nigel-app` fetches `/api/status` and nothing else until it knows where it

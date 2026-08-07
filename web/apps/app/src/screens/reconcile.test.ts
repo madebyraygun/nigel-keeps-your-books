@@ -228,7 +228,9 @@ describe('nigel-reconcile-screen', () => {
 
     await submit(el, { account: 'Nope', month: '2025-02', statementBalance: 1 });
 
-    expect(form(el).errors.account).toBe('Unknown account: Nope');
+    expect(form(el).errors.account).toBe(
+      'That account no longer exists. Reload to see the current list.',
+    );
     expect(result(el)).toBeNull();
   });
 

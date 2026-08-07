@@ -35,9 +35,14 @@ export interface ReconcileFailure {
  *
  * The two the route can raise are worth naming: a 409 `no_transactions` is
  * about the month, and a 404 is about the account. Both are answered in our
- * own words from the reason code, which `docs/api.md` says is the contract.
+ * own words, which `docs/api.md` says is the point of the reason codes.
  * Anything else keeps the server's sentence and sits above the form, since a
  * message we cannot place is worse under a field than beside the whole thing.
+ *
+ * The 404 is worded here rather than passed through for a specific reason: the
+ * server's sentence tells you to run `nigel accounts list`, which is good
+ * advice in a terminal and useless in a browser that is already showing the
+ * account picker. Reaching it at all means the list went stale under the form.
  */
 export function reconcileFailure(error: unknown): ReconcileFailure {
   if (conflictDetailsOf(error)?.reason === 'no_transactions') {
@@ -48,7 +53,10 @@ export function reconcileFailure(error: unknown): ReconcileFailure {
   }
 
   if (error instanceof ApiError && error.status === 404) {
-    return { field: 'account', message: error.message };
+    return {
+      field: 'account',
+      message: 'That account no longer exists. Reload to see the current list.',
+    };
   }
 
   if (error instanceof ApiError) return { message: error.message };
