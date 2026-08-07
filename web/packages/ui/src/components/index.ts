@@ -44,14 +44,27 @@ export {
   type NcPeriodKind,
   type NcPeriodParams,
 } from './wc-period-nav.js';
+export { categoryLabel, type CategoryOption } from './category-option.js';
 export {
   WcRegisterTable,
-  type CategoryOption,
   type NcEditCommitDetail,
   type NcFlagToggleDetail,
   type NcRowEventDetail,
   type RegisterTableRow,
 } from './wc-register-table.js';
+export {
+  WcCategoryPicker,
+  type NcCategoryChangeDetail,
+} from './wc-category-picker.js';
+export { WcReviewCard } from './wc-review-card.js';
+export { WcReviewProgress } from './wc-review-progress.js';
+export { WcRuleTestPreview, type RuleTestMatchRow } from './wc-rule-test-preview.js';
+export {
+  WcReviewForm,
+  patternPrefill,
+  type NcReviewApplyDetail,
+  type NcRulePatternChangeDetail,
+} from './wc-review-form.js';
 export {
   WcRegisterToolbar,
   type AccountOption,

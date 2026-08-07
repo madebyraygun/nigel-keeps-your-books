@@ -4,6 +4,9 @@ import '@awesome.me/webawesome/dist/components/input/input.js';
 import '../icons/icons.js';
 import './wc-money.js';
 import './wc-empty-state.js';
+import { categoryLabel, type CategoryOption } from './category-option.js';
+
+export type { CategoryOption };
 
 /** One transaction, in the shape the register table draws. */
 export interface RegisterTableRow {
@@ -17,13 +20,6 @@ export interface RegisterTableRow {
   vendor: string | null;
   accountName: string;
   isFlagged: boolean;
-}
-
-/** A choice in the inline category editor. */
-export interface CategoryOption {
-  id: number;
-  name: string;
-  categoryType: string;
 }
 
 export interface NcRowEventDetail {
@@ -49,10 +45,6 @@ export interface NcFlagToggleDetail {
  * reports every height as zero. Matches the TUI's `PAGE_SIZE`.
  */
 const DEFAULT_PAGE_ROWS = 20;
-
-function categoryLabel(category: CategoryOption): string {
-  return `${category.name} (${category.categoryType === 'income' ? 'inc' : 'exp'})`;
-}
 
 /**
  * The transaction register — the web counterpart of `browser.rs`.
