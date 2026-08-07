@@ -526,6 +526,9 @@ export interface ConflictDetails {
   reason?: string;
   count?: number;
   name?: string;
+  /** `no_transactions` names the account and month it found nothing in. */
+  account?: string;
+  month?: string;
 }
 
 /**
@@ -659,3 +662,65 @@ export const GENERIC_FORMAT = 'generic';
 
 /** `details.reason` distinguishing an expired upload from any other 404. */
 export const UPLOAD_NOT_FOUND = 'upload_not_found';
+
+// -- reconcile and undo -------------------------------------------------------
+
+/** `POST /api/reconcile` */
+export interface ReconcileRequest {
+  account: string;
+  month: string;
+  statementBalance: number;
+}
+
+/**
+ * `POST /api/reconcile` — the comparison, already made.
+ *
+ * `discrepancy` is the absolute difference rounded to cents, and
+ * `isReconciled` is the server's `< 0.01` verdict on it. Neither is
+ * recomputed here: a client that re-derived the tolerance would eventually
+ * disagree with the record the server just wrote.
+ */
+export interface ReconcileResult {
+  isReconciled: boolean;
+  statementBalance: number;
+  calculatedBalance: number;
+  discrepancy: number;
+}
+
+/**
+ * `GET /api/reconciliations` — one recorded attempt, newest month first.
+ *
+ * Both balances and `reconciledAt` are nullable because the columns are: a
+ * record can predate either figure, and only a reconciled one is stamped.
+ */
+export interface ReconciliationRecord {
+  id: number;
+  accountId: number;
+  accountName: string;
+  month: string;
+  statementBalance: number | null;
+  calculatedBalance: number | null;
+  isReconciled: boolean;
+  reconciledAt: string | null;
+  notes: string | null;
+}
+
+/**
+ * `GET /api/imports` — import history, newest first.
+ *
+ * `transactionCount` is what is still attached to the import, so an import
+ * whose rows were removed some other way lists at zero rather than vanishing.
+ */
+export interface ImportListItem {
+  id: number;
+  filename: string;
+  accountName: string;
+  importDate: string;
+  transactionCount: number;
+}
+
+/** `DELETE /api/imports/:id` — what rolling one back removed. */
+export interface UndoneImport {
+  id: number;
+  deletedTransactions: number;
+}

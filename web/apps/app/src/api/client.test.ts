@@ -457,4 +457,85 @@ describe('FetchApiClient', () => {
       expect(otherStatus.isUploadExpired).toBe(false);
     });
   });
+
+  describe('reconcile and undo', () => {
+    it('posts the three fields the route names', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        jsonResponse({
+          isReconciled: true,
+          statementBalance: 4928.01,
+          calculatedBalance: 4928.01,
+          discrepancy: 0,
+        }),
+      );
+
+      const result = await clientFor(fetchImpl).reconcile({
+        account: 'BofA Checking',
+        month: '2025-02',
+        statementBalance: 4928.01,
+      });
+
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe('/api/reconcile');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({
+        account: 'BofA Checking',
+        month: '2025-02',
+        statementBalance: 4928.01,
+      });
+      expect(result.isReconciled).toBe(true);
+    });
+
+    it('asks for the whole history, or one account by name', async () => {
+      // A fresh Response per call: a body can only be read once.
+      const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse([]));
+      const client = clientFor(fetchImpl);
+
+      await client.getReconciliations();
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reconciliations');
+
+      await client.getReconciliations({ account: 'BofA Checking' });
+      expect(fetchImpl.mock.calls[1][0]).toBe(
+        '/api/reconciliations?account=BofA+Checking',
+      );
+    });
+
+    it('carries the 409 reason through for an empty month', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(
+          envelope(
+            'conflict',
+            'No transactions for BofA Checking in 2025-07',
+            { reason: 'no_transactions', account: 'BofA Checking', month: '2025-07' },
+            409,
+          ),
+        );
+
+      const error = await clientFor(fetchImpl)
+        .reconcile({ account: 'BofA Checking', month: '2025-07', statementBalance: 1 })
+        .catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).status).toBe(409);
+      expect((error as ApiError).details).toMatchObject({ reason: 'no_transactions' });
+    });
+
+    it('lists imports and deletes one by id', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse([]))
+        .mockResolvedValueOnce(jsonResponse({ id: 3, deletedTransactions: 42 }));
+      const client = clientFor(fetchImpl);
+
+      await client.getImports();
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/imports');
+      expect(fetchImpl.mock.calls[0][1].method).toBe('GET');
+
+      const undone = await client.deleteImport(3);
+      expect(fetchImpl.mock.calls[1][0]).toBe('/api/imports/3');
+      expect(fetchImpl.mock.calls[1][1].method).toBe('DELETE');
+      expect(undone).toEqual({ id: 3, deletedTransactions: 42 });
+    });
+  });
 });

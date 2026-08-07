@@ -23,6 +23,7 @@ import {
   type FlaggedTxn,
   type ImportConfirmation,
   type ImporterFormat,
+  type ImportListItem,
   type ImportPreview,
   type ImportRequest,
   type InvalidPasswordDetails,
@@ -33,6 +34,9 @@ import {
   type PasswordStateResponse,
   type PingResponse,
   type PnlReport,
+  type ReconcileRequest,
+  type ReconcileResult,
+  type ReconciliationRecord,
   type RegisterReport,
   type RegisterRow,
   type RemovePasswordRequest,
@@ -49,6 +53,7 @@ import {
   type StatusResponse,
   type TaxSummary,
   type TransactionPatch,
+  type UndoneImport,
   type UnlockResponse,
   type UpdateAppSettingsRequest,
   type UploadResponse,
@@ -171,6 +176,11 @@ export type ExpenseParams = Pick<ReportDateParams, 'year' | 'month'>;
 /** Tax and the K-1 worksheet are annual documents. */
 export type YearParams = Pick<ReportDateParams, 'year'>;
 
+/** Reconciliation history, optionally narrowed to one account by name. */
+export interface ReconciliationParams {
+  account?: string;
+}
+
 export interface ApiClient {
   ping(): Promise<PingResponse>;
   getStatus(): Promise<StatusResponse>;
@@ -243,6 +253,25 @@ export interface ApiClient {
   /** The built-in importers this build has; Gusto depends on a cargo feature. */
   getImportFormats(): Promise<ImporterFormat[]>;
   getCsvProfiles(): Promise<CsvProfile[]>;
+  /** Import history, newest first — what the undo screen offers to roll back. */
+  getImports(): Promise<ImportListItem[]>;
+  /**
+   * Roll one import back: its transactions and its record.
+   *
+   * By id rather than "the last one", which is all `nigel undo` can address
+   * from a terminal. An import that is already gone is a 404, never a
+   * successful undo of nothing.
+   */
+  deleteImport(id: number): Promise<UndoneImport>;
+
+  /**
+   * Compare a statement balance against the calculated one — and record the
+   * attempt, including a mismatch. That record is the point: it is how the
+   * history knows which months have been checked, so this is a POST.
+   */
+  reconcile(input: ReconcileRequest): Promise<ReconcileResult>;
+  /** Recorded attempts, newest month first. An unknown account is a 404. */
+  getReconciliations(options?: ReconciliationParams): Promise<ReconciliationRecord[]>;
 
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings>;
@@ -494,6 +523,27 @@ export class FetchApiClient implements ApiClient {
 
   getCsvProfiles(): Promise<CsvProfile[]> {
     return this.request<CsvProfile[]>('GET', '/csv-profiles');
+  }
+
+  getImports(): Promise<ImportListItem[]> {
+    return this.request<ImportListItem[]>('GET', '/imports');
+  }
+
+  deleteImport(id: number): Promise<UndoneImport> {
+    return this.request<UndoneImport>('DELETE', `/imports/${id}`);
+  }
+
+  reconcile(input: ReconcileRequest): Promise<ReconcileResult> {
+    return this.request<ReconcileResult>('POST', '/reconcile', input);
+  }
+
+  getReconciliations(
+    options: ReconciliationParams = {},
+  ): Promise<ReconciliationRecord[]> {
+    return this.request<ReconciliationRecord[]>(
+      'GET',
+      `/reconciliations${query(options)}`,
+    );
   }
 
   setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse> {

@@ -2,6 +2,7 @@ import type {
   ApiClient,
   CashflowParams,
   ExpenseParams,
+  ReconciliationParams,
   RegisterParams,
   ReportDateParams,
   YearParams,
@@ -17,6 +18,7 @@ import type {
   ChangePasswordRequest,
   CompanyNameResponse,
   ConfirmImportRequest,
+  ConflictDetails,
   CsvProfile,
   Deleted,
   ExpenseBreakdown,
@@ -26,6 +28,7 @@ import type {
   FlaggedTxn,
   ImportConfirmation,
   ImporterFormat,
+  ImportListItem,
   ImportPreview,
   ImportRequest,
   K1PrepReport,
@@ -35,6 +38,9 @@ import type {
   PasswordStateResponse,
   PingResponse,
   PnlReport,
+  ReconcileRequest,
+  ReconcileResult,
+  ReconciliationRecord,
   RegisterReport,
   RegisterRow,
   RemovePasswordRequest,
@@ -51,6 +57,7 @@ import type {
   StatusResponse,
   TaxSummary,
   TransactionPatch,
+  UndoneImport,
   UnlockResponse,
   UpdateAppSettingsRequest,
   UploadResponse,
@@ -170,7 +177,7 @@ function sortRules(rules: RuleRow[]): RuleRow[] {
  */
 export function conflictError(
   reason: string,
-  extra: { count?: number; name?: string; message?: string } = {},
+  extra: Omit<ConflictDetails, 'reason'> & { message?: string } = {},
 ): ApiError {
   const { message, ...details } = extra;
   return new ApiError({
@@ -179,6 +186,16 @@ export function conflictError(
     message: message ?? `Refused: ${reason}`,
     status: 409,
     details: { reason, ...details },
+  });
+}
+
+/** A 404 exactly as the server shapes one, for the missing-row paths. */
+export function notFoundError(message: string): ApiError {
+  return new ApiError({
+    code: 'not_found',
+    rawCode: 'not_found',
+    message,
+    status: 404,
   });
 }
 
@@ -739,5 +756,112 @@ export class FakeApiClient implements ApiClient {
     if (this.settingsError) throw this.settingsError;
     this.status = { ...this.status, encrypted: false, locked: false };
     return { encrypted: false, locked: false };
+  }
+
+  // -- reconcile and undo ---------------------------------------------------
+  //
+  // `reconcile` really appends a record, because the server really does — it
+  // stores the attempt whichever way the comparison went, and that is what the
+  // screen's history refresh is showing. A fake that only returned the verdict
+  // would pass even if the refresh were never wired up.
+
+  imports: ImportListItem[] = [];
+  reconciliations: ReconciliationRecord[] = [];
+
+  /** What the ledger sums to per account name, for `reconcile` to compare against. */
+  calculatedBalances: Record<string, number> = {};
+  /** `account|month` pairs the server would answer with a 409. */
+  readonly emptyMonths = new Set<string>();
+
+  importsError: Error | null = null;
+  deleteImportError: Error | null = null;
+  reconcileError: Error | null = null;
+  reconciliationsError: Error | null = null;
+
+  private nextReconciliationId = 700;
+
+  async getImports(): Promise<ImportListItem[]> {
+    this.calls.push('getImports');
+    if (this.importsError) throw this.importsError;
+    return this.imports;
+  }
+
+  async deleteImport(id: number): Promise<UndoneImport> {
+    this.calls.push(`deleteImport:${id}`);
+    if (this.deleteImportError) throw this.deleteImportError;
+
+    const item = this.imports.find((candidate) => candidate.id === id);
+    if (!item) throw notFoundError(`No import with ID ${id}`);
+
+    this.imports = this.imports.filter((candidate) => candidate.id !== id);
+    return { id, deletedTransactions: item.transactionCount };
+  }
+
+  async reconcile(input: ReconcileRequest): Promise<ReconcileResult> {
+    this.calls.push(`reconcile:${JSON.stringify(input)}`);
+    if (this.reconcileError) throw this.reconcileError;
+    this.assertAccountExists(input.account);
+
+    if (this.emptyMonths.has(`${input.account}|${input.month}`)) {
+      throw conflictError('no_transactions', {
+        message: `No transactions for ${input.account} in ${input.month}`,
+        account: input.account,
+        month: input.month,
+      });
+    }
+
+    const calculatedBalance = this.calculatedBalances[input.account] ?? 0;
+    const difference = Math.abs(calculatedBalance - input.statementBalance);
+    const isReconciled = difference < 0.01;
+    // The server rounds the reported discrepancy to cents; the verdict is
+    // taken on the unrounded difference, which is why both appear here.
+    const discrepancy = Math.round(difference * 100) / 100;
+
+    this.reconciliations = [
+      {
+        id: this.nextReconciliationId++,
+        accountId: this.accounts.find((a) => a.name === input.account)?.id ?? 0,
+        accountName: input.account,
+        month: input.month,
+        statementBalance: input.statementBalance,
+        calculatedBalance,
+        isReconciled,
+        reconciledAt: isReconciled ? '2025-03-01 12:00:00' : null,
+        notes: null,
+      },
+      ...this.reconciliations,
+    ];
+
+    return {
+      isReconciled,
+      statementBalance: input.statementBalance,
+      calculatedBalance,
+      discrepancy,
+    };
+  }
+
+  async getReconciliations(
+    options: ReconciliationParams = {},
+  ): Promise<ReconciliationRecord[]> {
+    const search = new URLSearchParams();
+    if (options.account !== undefined) search.set('account', options.account);
+    this.calls.push(`getReconciliations:${search.toString()}`);
+    if (this.reconciliationsError) throw this.reconciliationsError;
+
+    if (options.account !== undefined) this.assertAccountExists(options.account);
+    const rows =
+      options.account === undefined
+        ? this.reconciliations
+        : this.reconciliations.filter((row) => row.accountName === options.account);
+    return [...rows].sort((a, b) => b.month.localeCompare(a.month) || b.id - a.id);
+  }
+
+  /** The server's `ensure_account_exists`: a wrong question, not an empty answer. */
+  private assertAccountExists(name: string): void {
+    // An empty fixture means the test did not care about accounts, so the
+    // guard stays out of its way rather than 404-ing every call.
+    if (this.accounts.length === 0) return;
+    if (this.accounts.some((account) => account.name === name)) return;
+    throw notFoundError(`Unknown account: ${name}`);
   }
 }
