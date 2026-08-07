@@ -1,7 +1,80 @@
 use chrono::Datelike;
 use rusqlite::Connection;
+use serde::Serialize;
 
-use crate::error::Result;
+use crate::error::{NigelError, Result};
+
+// ---------------------------------------------------------------------------
+// Report identity and date granularity
+// ---------------------------------------------------------------------------
+
+/// What date navigation granularities a report supports.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DateGranularity {
+    /// Supports both month and year navigation (P&L, Expenses, Cash Flow)
+    MonthAndYear,
+    /// Supports only year navigation (Tax, K-1)
+    YearOnly,
+    /// No date navigation (Flagged, Balance)
+    None,
+}
+
+/// The set of reports Nigel can produce, independent of how they are requested.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ReportKind {
+    Pnl,
+    Expenses,
+    Tax,
+    Cashflow,
+    Register,
+    Flagged,
+    Balance,
+    K1,
+    /// Bulk export of every report; not a report in its own right.
+    All,
+}
+
+impl ReportKind {
+    /// Stable slug used for CLI subcommand names and export filenames.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pnl => "pnl",
+            Self::Expenses => "expenses",
+            Self::Tax => "tax",
+            Self::Cashflow => "cashflow",
+            Self::Register => "register",
+            Self::Flagged => "flagged",
+            Self::Balance => "balance",
+            Self::K1 => "k1-prep",
+            Self::All => "all",
+        }
+    }
+
+    pub fn granularity(&self) -> DateGranularity {
+        match self {
+            Self::Pnl | Self::Expenses | Self::Cashflow | Self::Register => {
+                DateGranularity::MonthAndYear
+            }
+            Self::Tax | Self::K1 | Self::All => DateGranularity::YearOnly,
+            Self::Flagged | Self::Balance => DateGranularity::None,
+        }
+    }
+}
+
+/// The period label printed under a report's title: the month itself when one
+/// was asked for, otherwise the fiscal year, otherwise the current one.
+///
+/// `month` is the raw `YYYY-MM` string rather than a parsed month so the label
+/// reads the way the caller asked for it, and `year` is the effective year —
+/// an explicit year already resolved against the one inside `month`.
+pub fn date_range_label(month: Option<&str>, year: Option<i32>) -> String {
+    if let Some(month) = month {
+        return month.to_string();
+    }
+    let year = year.unwrap_or_else(|| Datelike::year(&chrono::Local::now()));
+    format!("FY {year}")
+}
 
 fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
     params
@@ -51,11 +124,15 @@ pub(crate) fn date_filter(
 // P&L
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PnlItem {
     pub name: String,
     pub total: f64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PnlReport {
     pub income: Vec<PnlItem>,
     pub expenses: Vec<PnlItem>,
@@ -116,6 +193,8 @@ fn query_category_totals(
 // Expense Breakdown
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExpenseItem {
     pub name: String,
     pub total: f64,
@@ -123,12 +202,16 @@ pub struct ExpenseItem {
     pub pct: f64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VendorItem {
     pub vendor: String,
     pub total: f64,
     pub count: i64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExpenseBreakdown {
     pub categories: Vec<ExpenseItem>,
     pub total: f64,
@@ -197,6 +280,8 @@ pub fn get_expense_breakdown(
 // Tax Summary
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaxItem {
     pub name: String,
     pub tax_line: Option<String>,
@@ -204,6 +289,8 @@ pub struct TaxItem {
     pub total: f64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaxSummary {
     pub line_items: Vec<TaxItem>,
 }
@@ -238,6 +325,8 @@ pub fn get_tax_summary(conn: &Connection, year: Option<i32>) -> Result<TaxSummar
 // Cash Flow
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CashflowMonth {
     pub month: String,
     pub inflows: f64,
@@ -246,6 +335,8 @@ pub struct CashflowMonth {
     pub running_balance: f64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CashflowReport {
     pub months: Vec<CashflowMonth>,
 }
@@ -311,6 +402,8 @@ pub fn get_cashflow(
 // Register (all transactions)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegisterRow {
     pub id: i64,
     pub date: String,
@@ -323,6 +416,8 @@ pub struct RegisterRow {
     pub is_flagged: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegisterReport {
     pub rows: Vec<RegisterRow>,
     pub total: f64,
@@ -375,10 +470,44 @@ pub fn get_register(
     Ok(RegisterReport { rows, total })
 }
 
+/// One register row by id — the shape an edited transaction answers with, so
+/// the row a client sends back is the row it already knows how to render.
+pub fn get_register_row(conn: &Connection, id: i64) -> Result<RegisterRow> {
+    conn.query_row(
+        "SELECT t.id, t.date, t.description, t.amount, c.name, t.category_id, t.vendor, a.name, t.is_flagged \
+         FROM transactions t \
+         JOIN accounts a ON t.account_id = a.id \
+         LEFT JOIN categories c ON t.category_id = c.id \
+         WHERE t.id = ?1",
+        [id],
+        |row| {
+            Ok(RegisterRow {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                description: row.get(2)?,
+                amount: row.get(3)?,
+                category: row.get(4)?,
+                category_id: row.get(5)?,
+                vendor: row.get(6)?,
+                account_name: row.get(7)?,
+                is_flagged: row.get(8)?,
+            })
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("No transaction found with ID {id}"))
+        }
+        other => NigelError::Db(other),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Flagged
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FlaggedTransaction {
     pub id: i64,
     pub date: String,
@@ -411,12 +540,16 @@ pub fn get_flagged(conn: &Connection) -> Result<Vec<FlaggedTransaction>> {
 // Balance
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountBalance {
     pub name: String,
     pub account_type: String,
     pub balance: f64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BalanceReport {
     pub accounts: Vec<AccountBalance>,
     pub total: f64,
@@ -460,6 +593,8 @@ pub fn get_balance(conn: &Connection) -> Result<BalanceReport> {
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct K1LineItem {
     pub form_line: String,
     pub category_name: String,
@@ -467,6 +602,8 @@ pub struct K1LineItem {
 }
 
 #[allow(dead_code)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct K1OtherDeduction {
     pub category_name: String,
     pub total: f64,
@@ -474,6 +611,8 @@ pub struct K1OtherDeduction {
 }
 
 #[allow(dead_code)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct K1Validation {
     pub uncategorized_count: i64,
     pub officer_comp: f64,
@@ -482,6 +621,8 @@ pub struct K1Validation {
 }
 
 #[allow(dead_code)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct K1PrepReport {
     pub gross_receipts: f64,
     pub cogs: f64,
@@ -664,6 +805,206 @@ mod tests {
         let conn = get_connection(&dir.path().join("test.db")).unwrap();
         init_db(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn a_month_labels_itself_and_outranks_the_year() {
+        assert_eq!(date_range_label(Some("2025-03"), None), "2025-03");
+        assert_eq!(date_range_label(Some("2025-03"), Some(2024)), "2025-03");
+    }
+
+    #[test]
+    fn a_year_alone_labels_a_fiscal_year() {
+        assert_eq!(date_range_label(None, Some(2025)), "FY 2025");
+    }
+
+    #[test]
+    fn an_unfiltered_report_is_labelled_with_the_current_year() {
+        let this_year = Datelike::year(&chrono::Local::now());
+        assert_eq!(date_range_label(None, None), format!("FY {this_year}"));
+    }
+
+    #[test]
+    fn get_register_row_matches_the_full_register() {
+        let (_dir, conn) = test_db();
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Test', 'checking')",
+            [],
+        )
+        .unwrap();
+        let account = conn.last_insert_rowid();
+        let category: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id, vendor, is_flagged) \
+             VALUES (?1, '2025-01-15', 'ADOBE', -50.0, ?2, 'Adobe', 1)",
+            rusqlite::params![account, category],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+
+        let row = get_register_row(&conn, id).unwrap();
+        let from_report = get_register(&conn, None, None, None, None, None).unwrap();
+        let expected = &from_report.rows[0];
+        assert_eq!(row.id, expected.id);
+        assert_eq!(row.category, expected.category);
+        assert_eq!(row.vendor, expected.vendor);
+        assert_eq!(row.account_name, expected.account_name);
+        assert_eq!(row.is_flagged, expected.is_flagged);
+
+        let err = get_register_row(&conn, 4242).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err}");
+    }
+
+    #[test]
+    fn report_kind_slugs_and_granularity() {
+        use DateGranularity::*;
+        use ReportKind::*;
+
+        let expected = [
+            (Pnl, "pnl", MonthAndYear),
+            (Expenses, "expenses", MonthAndYear),
+            (Tax, "tax", YearOnly),
+            (Cashflow, "cashflow", MonthAndYear),
+            (Register, "register", MonthAndYear),
+            (Flagged, "flagged", None),
+            (Balance, "balance", None),
+            (K1, "k1-prep", YearOnly),
+            (All, "all", YearOnly),
+        ];
+
+        for (kind, slug, granularity) in expected {
+            assert_eq!(kind.as_str(), slug);
+            assert_eq!(kind.granularity(), granularity, "granularity for {slug}");
+        }
+    }
+
+    #[test]
+    fn date_granularity_serializes_camel_case() {
+        // 31.5 wraps every report as { granularity, report } and the SPA
+        // switches on these exact strings.
+        assert_eq!(
+            serde_json::to_value(DateGranularity::MonthAndYear).unwrap(),
+            serde_json::json!("monthAndYear")
+        );
+        assert_eq!(
+            serde_json::to_value(DateGranularity::YearOnly).unwrap(),
+            serde_json::json!("yearOnly")
+        );
+        assert_eq!(
+            serde_json::to_value(DateGranularity::None).unwrap(),
+            serde_json::json!("none")
+        );
+    }
+
+    #[test]
+    fn pnl_report_serializes_camel_case() {
+        let report = PnlReport {
+            income: vec![PnlItem {
+                name: "Client Services".to_string(),
+                total: 5000.0,
+            }],
+            expenses: vec![PnlItem {
+                name: "Software".to_string(),
+                total: -250.0,
+            }],
+            total_income: 5000.0,
+            total_expenses: -250.0,
+            net: 4750.0,
+        };
+
+        let value = serde_json::to_value(&report).unwrap();
+        let obj = value.as_object().unwrap();
+
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["expenses", "income", "net", "totalExpenses", "totalIncome"]
+        );
+        assert!(!obj.contains_key("total_income"));
+        assert!(!obj.contains_key("total_expenses"));
+
+        assert_eq!(value["totalIncome"], 5000.0);
+        assert_eq!(value["income"][0]["name"], "Client Services");
+        assert_eq!(value["expenses"][0]["total"], -250.0);
+    }
+
+    #[test]
+    fn k1_prep_report_serializes_camel_case() {
+        let report = K1PrepReport {
+            gross_receipts: 100_000.0,
+            cogs: 10_000.0,
+            gross_profit: 90_000.0,
+            other_income: 500.0,
+            total_deductions: 40_000.0,
+            ordinary_business_income: 50_500.0,
+            deduction_lines: vec![K1LineItem {
+                form_line: "1120S-7".to_string(),
+                category_name: "Officer Compensation".to_string(),
+                total: -30_000.0,
+            }],
+            schedule_k_items: vec![K1LineItem {
+                form_line: "K-16d".to_string(),
+                category_name: "Distributions".to_string(),
+                total: -15_000.0,
+            }],
+            other_deductions: vec![K1OtherDeduction {
+                category_name: "Meals".to_string(),
+                total: -1_000.0,
+                deductible: -500.0,
+            }],
+            other_deductions_total: -500.0,
+            auto_mapped: vec!["Consulting".to_string()],
+            unmapped: vec![K1LineItem {
+                form_line: String::new(),
+                category_name: "Misc".to_string(),
+                total: -25.0,
+            }],
+            validation: K1Validation {
+                uncategorized_count: 3,
+                officer_comp: -30_000.0,
+                distributions: -15_000.0,
+                comp_dist_ratio: Some(2.0),
+            },
+        };
+
+        let value = serde_json::to_value(&report).unwrap();
+
+        assert_eq!(value["grossReceipts"], 100_000.0);
+        assert_eq!(value["grossProfit"], 90_000.0);
+        assert_eq!(value["otherIncome"], 500.0);
+        assert_eq!(value["totalDeductions"], 40_000.0);
+        assert_eq!(value["ordinaryBusinessIncome"], 50_500.0);
+        assert_eq!(value["otherDeductionsTotal"], -500.0);
+        assert_eq!(value["deductionLines"][0]["formLine"], "1120S-7");
+        assert_eq!(
+            value["deductionLines"][0]["categoryName"],
+            "Officer Compensation"
+        );
+        assert_eq!(value["scheduleKItems"][0]["formLine"], "K-16d");
+        assert_eq!(value["otherDeductions"][0]["deductible"], -500.0);
+        assert_eq!(value["autoMapped"][0], "Consulting");
+        assert_eq!(value["unmapped"][0]["categoryName"], "Misc");
+        assert_eq!(value["validation"]["uncategorizedCount"], 3);
+        assert_eq!(value["validation"]["officerComp"], -30_000.0);
+        assert_eq!(value["validation"]["compDistRatio"], 2.0);
+
+        assert!(value.as_object().unwrap().keys().all(|k| !k.contains('_')));
+
+        let unset_ratio = K1Validation {
+            uncategorized_count: 0,
+            officer_comp: 0.0,
+            distributions: 0.0,
+            comp_dist_ratio: None,
+        };
+        let value = serde_json::to_value(unset_ratio).unwrap();
+        assert!(value["compDistRatio"].is_null());
     }
 
     fn seed_transactions(conn: &Connection) {

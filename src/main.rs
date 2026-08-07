@@ -1,27 +1,10 @@
-mod browser;
-mod categorizer;
-mod cli;
-mod db;
-mod effects;
-mod error;
-mod fmt;
-mod importer;
-mod migrations;
-mod models;
-#[cfg(feature = "pdf")]
-mod pdf;
-mod reconciler;
-mod reports;
-mod reviewer;
-mod settings;
-mod tui;
-
 use clap::{CommandFactory, Parser};
 
-use cli::{
-    AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
+use nigel::cli::{
+    self, AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
     RulesCommands,
 };
+use nigel::error;
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -63,24 +46,26 @@ fn dispatch(command: Commands) -> error::Result<()> {
     );
 
     // Commands that need the encryption password up front. `password` does its own
-    // prompting as part of set/change/remove, and `completions` never touches the DB.
+    // prompting as part of set/change/remove, `completions` never touches the DB, and
+    // `serve` has no stdin to prompt on — its clients unlock over HTTP instead.
     let needs_password = !matches!(
         command,
         Commands::Init { .. }
             | Commands::Demo
             | Commands::Password { .. }
             | Commands::Completions { .. }
+            | Commands::Serve { .. }
             | Commands::Update
     );
 
-    let db_path = crate::settings::get_data_dir().join("nigel.db");
+    let db_path = nigel::settings::get_data_dir().join("nigel.db");
 
     if needs_existing_db && !db_path.exists() {
         return Err(error::NigelError::NotInitialized);
     }
 
     if needs_password && db_path.exists() {
-        crate::db::prompt_password_if_needed(&db_path)?;
+        nigel::db::prompt_password_if_needed(&db_path)?;
     }
 
     // `restore` overwrites the database file and then migrates the restored copy itself,
@@ -91,10 +76,11 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // Bring the schema up to date before any command reads or writes data. The
     // intersection of the two guards above is exactly the set of commands that open the
     // existing database with a usable password; init/demo/restore migrate via their own
-    // init_db() call, and the dashboard migrates in its own pre-flight.
+    // init_db() call, the dashboard migrates in its own pre-flight, and serve migrates
+    // whatever it can reach without a password.
     if needs_existing_db && needs_password && !replaces_db {
-        let conn = crate::db::get_connection(&db_path)?;
-        crate::db::init_db(&conn)?;
+        let conn = nigel::db::get_connection(&db_path)?;
+        nigel::db::init_db(&conn)?;
     }
 
     match command {
@@ -218,6 +204,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
         Commands::Load { path } => cli::load::run(&path),
         Commands::Backup { output } => cli::backup::run(output),
         Commands::Restore { path } => cli::restore::run(&path),
+        Commands::Serve { port, no_open } => cli::serve::run(port, no_open),
         Commands::Undo => cli::undo::run(),
         Commands::Update => cli::update::run(),
         Commands::Status => cli::status::run(),

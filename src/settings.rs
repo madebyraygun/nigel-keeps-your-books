@@ -30,7 +30,77 @@ impl Default for Settings {
     }
 }
 
+/// Test-only redirection of the config directory.
+///
+/// Without it, any test that calls [`save_settings`] rewrites the developer's
+/// real `~/.config/nigel/settings.json` and repoints their data directory. An
+/// in-crate override is used rather than `$HOME`: `dirs::home_dir` does not
+/// consult the environment on every platform, and mutating the environment is
+/// process-global and unsafe in newer editions.
+#[cfg(test)]
+static CONFIG_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Point the config directory somewhere else and hand back what it was.
+///
+/// Returning the previous value is what lets a guard put it back rather than
+/// clearing it: clearing exposes the real `~/.config/nigel/settings.json` to
+/// whatever is still running, and the value it writes there is a temporary
+/// directory that is about to be deleted.
+#[cfg(test)]
+pub fn set_config_dir_for_tests(dir: Option<PathBuf>) -> Option<PathBuf> {
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
+    std::mem::replace(&mut *CONFIG_DIR_OVERRIDE.lock().unwrap(), dir)
+}
+
+/// Redirect `~/.config/nigel` at a temporary directory for the life of the
+/// guard.
+///
+/// Lives here rather than in the server's test helpers because the config
+/// directory is this module's, and tests outside the `serve` feature need it
+/// too: anything that reads [`load_settings`] otherwise answers from whatever
+/// the developer's own settings.json happens to say.
+#[cfg(test)]
+pub struct TempConfigDir {
+    _dir: tempfile::TempDir,
+    previous: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl TempConfigDir {
+    pub fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let previous = set_config_dir_for_tests(Some(dir.path().to_path_buf()));
+        Self {
+            _dir: dir,
+            previous,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for TempConfigDir {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempConfigDir {
+    /// Restores what was there rather than clearing, so a guard dropping while
+    /// another is alive cannot hand the real config directory back to a test
+    /// that is still writing.
+    fn drop(&mut self) {
+        set_config_dir_for_tests(self.previous.take());
+    }
+}
+
 fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.lock().unwrap().clone() {
+        return dir;
+    }
+
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config")

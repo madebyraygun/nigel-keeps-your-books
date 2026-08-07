@@ -25,6 +25,7 @@ pub mod restore;
 pub mod review;
 pub mod rules;
 pub mod rules_manager;
+pub mod serve;
 pub mod settings_manager;
 pub mod snake;
 pub mod splash;
@@ -34,6 +35,8 @@ pub mod undo_manager;
 pub mod update;
 
 use clap::{Args, Parser, Subcommand};
+
+use crate::reports::ReportKind;
 
 pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
     if let Some(m) = month {
@@ -160,6 +163,15 @@ pub enum Commands {
     Browse {
         #[command(subcommand)]
         command: BrowseCommands,
+    },
+    /// Serve the web UI and JSON API on localhost.
+    Serve {
+        /// Port to bind on 127.0.0.1 (0 picks an ephemeral port)
+        #[arg(long, default_value_t = 5731)]
+        port: u16,
+        /// Don't open a browser window
+        #[arg(long)]
+        no_open: bool,
     },
     /// Show current database and summary statistics.
     Status,
@@ -450,18 +462,22 @@ impl ReportCommands {
         }
     }
 
-    pub fn report_name(&self) -> &'static str {
+    pub fn kind(&self) -> ReportKind {
         match self {
-            Self::Pnl { .. } => "pnl",
-            Self::Expenses { .. } => "expenses",
-            Self::Tax { .. } => "tax",
-            Self::Cashflow { .. } => "cashflow",
-            Self::Register { .. } => "register",
-            Self::Flagged { .. } => "flagged",
-            Self::Balance { .. } => "balance",
-            Self::K1 { .. } => "k1-prep",
-            Self::All { .. } => "all",
+            Self::Pnl { .. } => ReportKind::Pnl,
+            Self::Expenses { .. } => ReportKind::Expenses,
+            Self::Tax { .. } => ReportKind::Tax,
+            Self::Cashflow { .. } => ReportKind::Cashflow,
+            Self::Register { .. } => ReportKind::Register,
+            Self::Flagged { .. } => ReportKind::Flagged,
+            Self::Balance { .. } => ReportKind::Balance,
+            Self::K1 { .. } => ReportKind::K1,
+            Self::All { .. } => ReportKind::All,
         }
+    }
+
+    pub fn report_name(&self) -> &'static str {
+        self.kind().as_str()
     }
 }
 

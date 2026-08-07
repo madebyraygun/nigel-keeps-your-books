@@ -517,7 +517,7 @@ impl CategoryManager {
                             tax_line.as_deref(),
                             form_line.as_deref(),
                         ) {
-                            Ok(()) => {
+                            Ok(_) => {
                                 self.reload(conn);
                                 self.screen = Screen::List;
                                 self.set_status(format!("Added category: {name}"));

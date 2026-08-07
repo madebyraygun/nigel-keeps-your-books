@@ -523,6 +523,7 @@ mod tests {
 
     #[test]
     fn toggle_update_check() {
+        let _config = crate::settings::TempConfigDir::new();
         let (_dir, conn) = test_db();
         let mut mgr = SettingsManager::new(&conn, "Hello").unwrap();
 
@@ -545,6 +546,7 @@ mod tests {
 
     #[test]
     fn update_check_loads_from_settings() {
+        let _config = crate::settings::TempConfigDir::new();
         let (_dir, conn) = test_db();
         let mgr = SettingsManager::new(&conn, "Hello").unwrap();
         // update_check defaults to true from settings

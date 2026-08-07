@@ -1,0 +1,865 @@
+//! The `nigel serve` HTTP server: an axum app on 127.0.0.1 serving the JSON
+//! API and the embedded SPA from the same binary.
+//!
+//! This is the only async entry point in the crate; `main` stays synchronous
+//! and [`run`] owns the tokio runtime.
+
+pub mod auth;
+pub mod error;
+pub mod extract;
+#[cfg(test)]
+mod fixture_capture;
+pub mod routes;
+pub mod secret;
+pub mod state;
+mod static_files;
+#[cfg(test)]
+pub mod testutil;
+pub mod uploads;
+
+use std::future::Future;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+
+use axum::extract::Request;
+use axum::http::{header, HeaderValue};
+use axum::middleware::Next;
+use axum::response::Response;
+use axum::routing::get;
+use axum::{middleware, Router};
+use tokio::net::TcpListener;
+
+use crate::error::{NigelError, Result};
+use state::AppState;
+
+/// Start the server and block until shutdown.
+pub fn run(port: u16, no_open: bool) -> Result<()> {
+    disable_ansi_output();
+
+    let db_path = crate::settings::get_data_dir().join("nigel.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| NigelError::Other(format!("Couldn't start the async runtime: {e}")))?;
+
+    runtime.block_on(serve(db_path, port, no_open))
+}
+
+/// Turn off `colored`'s escape sequences for the whole process.
+///
+/// The text report formatters are shared with the terminal, where colour is the
+/// point; served over HTTP the same bytes would reach a text export as
+/// gibberish. `colored` decides globally, so this is a process-wide switch —
+/// which is fine, because a process that is serving is not also drawing a TUI.
+pub(crate) fn disable_ansi_output() {
+    colored::control::set_override(false);
+}
+
+async fn serve(db_path: PathBuf, port: u16, no_open: bool) -> Result<()> {
+    let state = AppState::new(db_path, auth::generate_token());
+
+    // A previous run may have been killed between an upload and its import.
+    uploads::purge_stale(&uploads::uploads_dir(&state.db_path()), uploads::MAX_AGE);
+
+    spawn_update_check(state.clone());
+
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
+    let addr = listener.local_addr()?;
+    let url = format!(
+        "http://127.0.0.1:{}/auth?token={}",
+        addr.port(),
+        state.session_token
+    );
+
+    println!("Nigel is serving on http://127.0.0.1:{}", addr.port());
+    println!("Open this URL to start a session:");
+    println!("  {url}");
+    println!("Press Ctrl-C to stop.");
+
+    if !no_open {
+        if let Err(e) = open::that_detached(&url) {
+            eprintln!("notice: couldn't open a browser ({e}) — open the URL above yourself.");
+        }
+    }
+
+    serve_with_shutdown(listener, state, shutdown_signal()).await?;
+    println!("Server stopped.");
+    Ok(())
+}
+
+/// Ask GitHub whether there is a newer release, off the request path.
+///
+/// One shot rather than a ticker: `check_with_cooldown` will not ask again for
+/// 24 hours, so a repeating task in a foreground server would only ever find
+/// its own cooldown. It is started from `serve` alone — `serve_with_shutdown`
+/// and `build_router` stay free of it, which is what keeps the test suite off
+/// the network.
+fn spawn_update_check(state: AppState) {
+    tokio::spawn(async move {
+        // The check is blocking (`reqwest::blocking`) and reads settings.json.
+        if let Ok(found) =
+            tokio::task::spawn_blocking(crate::cli::update::check_with_cooldown).await
+        {
+            state.set_update_available(found.map(|info| info.version));
+        }
+    });
+}
+
+async fn serve_with_shutdown(
+    listener: TcpListener,
+    state: AppState,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<()> {
+    axum::serve(listener, build_router(state))
+        .with_graceful_shutdown(shutdown)
+        .await?;
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
+/// Two headers on everything this server answers, refusals included.
+///
+/// `SameSite=Strict` already keeps the session cookie out of a cross-site
+/// frame, so framing the SPA gets an attacker an unauthenticated shell; denying
+/// it outright costs a header and removes the question. `nosniff` holds the
+/// browser to the content type each response states — the API's `application/
+/// json` error envelopes echo request values, and a sniffed one is HTML.
+async fn security_headers(req: Request, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response
+}
+
+/// Layers run outermost-first: the blanket headers, Host/Origin, then the
+/// session cookie, then the route. The session layer wraps the `/api` router
+/// itself rather than using `route_layer`, so it also covers that router's 404
+/// fallback — otherwise an unauthenticated request to an unknown `/api` path
+/// would skip the check. `/auth` and the static assets sit outside the nest and
+/// need no session.
+fn build_router(state: AppState) -> Router {
+    let api = routes::api_router(&state).layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth::session_guard,
+    ));
+
+    Router::new()
+        .nest("/api", api)
+        .route("/auth", get(auth::auth_redirect))
+        .fallback(static_files::static_handler)
+        .layer(middleware::from_fn(auth::host_guard))
+        .layer(middleware::from_fn(security_headers))
+        .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testutil::*;
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn api_without_session_is_unauthorized() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/api/ping").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(content_type(&response).starts_with("application/json"));
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn non_local_host_is_forbidden_before_the_session_check() {
+        let (app, token) = test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ping")
+                    .header(header::HOST, "evil.com")
+                    .header(header::COOKIE, format!("nigel_session={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn missing_host_header_is_forbidden() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ping")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn cross_origin_request_is_forbidden() {
+        let (app, token) = test_app();
+        let response = app
+            .oneshot(
+                get_request("/api/ping")
+                    .header(header::ORIGIN, "http://evil.com")
+                    .header(header::COOKIE, format!("nigel_session={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn auth_sets_cookie_and_redirects() {
+        let (app, token) = test_app();
+        let response = app
+            .oneshot(
+                get_request(&format!("/auth?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(response.headers()[header::LOCATION], "/");
+
+        let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cookie.contains(&format!("nigel_session={token}")));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(cookie.contains("Path=/"));
+    }
+
+    #[tokio::test]
+    async fn auth_with_wrong_token_is_unauthorized_and_sets_no_cookie() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(
+                get_request("/auth?token=deadbeef")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+
+    #[tokio::test]
+    async fn auth_without_token_is_unauthorized() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/auth").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn session_cookie_from_auth_unlocks_ping() {
+        let (app, token) = test_app();
+        let auth = app
+            .oneshot(
+                get_request(&format!("/auth?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let cookie = auth.headers()[header::SET_COOKIE].to_str().unwrap();
+        let pair = cookie.split(';').next().unwrap().to_string();
+
+        let (app, _) = {
+            let state = AppState::new(PathBuf::from("/nonexistent/nigel.db"), token.clone());
+            (build_router(state), ())
+        };
+        let response = app
+            .oneshot(
+                get_request("/api/ping")
+                    .header(header::COOKIE, pair)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = json_body(response).await;
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn index_is_served_at_root_without_a_session() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(content_type(&response).starts_with("text/html"));
+        // The one string both the built SPA and the placeholder carry, so the
+        // suite does not depend on whether `web/` has been built here.
+        assert!(body_string(response).await.contains("<title>Nigel</title>"));
+    }
+
+    #[tokio::test]
+    async fn unknown_spa_path_falls_back_to_index() {
+        let (app, _token) = test_app();
+        let index = app
+            .oneshot(get_request("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let index_body = body_string(index).await;
+
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(
+                get_request("/some/deep/spa/route")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(content_type(&response).starts_with("text/html"));
+        assert_eq!(body_string(response).await, index_body);
+    }
+
+    #[tokio::test]
+    async fn unknown_api_path_is_a_json_404() {
+        let (app, token) = test_app();
+        let response = app
+            .oneshot(
+                get_request("/api/does-not-exist")
+                    .header(header::COOKIE, format!("nigel_session={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(content_type(&response).starts_with("application/json"));
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "not_found");
+        assert!(json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("/api/does-not-exist"));
+    }
+
+    #[tokio::test]
+    async fn status_describes_an_unencrypted_database() {
+        let (dir, db_path) = temp_db();
+        let conn = crate::db::open_connection(&db_path, None).unwrap();
+        crate::db::set_metadata(&conn, "company_name", "Raygun LLC").unwrap();
+        drop(conn);
+
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        assert_eq!(json["initialized"], true);
+        assert_eq!(json["encrypted"], false);
+        assert_eq!(json["locked"], false);
+        assert_eq!(json["companyName"], "Raygun LLC");
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["dataDir"], dir.path().display().to_string());
+    }
+
+    #[tokio::test]
+    async fn status_reports_whether_this_build_can_export_pdfs() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        // The SPA's export links are anchors: they cannot read a response
+        // before saving it, so the capability has to be advertised up front.
+        assert_eq!(json["pdfExport"], cfg!(feature = "pdf"));
+    }
+
+    #[tokio::test]
+    async fn status_reports_no_update_until_the_background_check_finds_one() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        // The check runs off the request path, so a status served before it
+        // answers says nothing rather than blocking on the network.
+        assert_eq!(json["updateAvailable"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_version_the_update_check_found() {
+        let (_dir, db_path) = temp_db();
+        let token = auth::generate_token();
+        let state = AppState::new(db_path, token.clone());
+        // Seeded directly: the real check talks to GitHub, which a test must not.
+        state.set_update_available(Some("9.9.9".into()));
+
+        let json = status_json(&build_router(state), &token).await;
+
+        assert_eq!(json["updateAvailable"], "9.9.9");
+    }
+
+    #[tokio::test]
+    async fn status_reports_a_missing_database_as_uninitialized() {
+        crate::db::set_db_password(None);
+        let dir = tempfile::tempdir().unwrap();
+        let (app, token) = app_for(&dir.path().join("nigel.db"));
+        let json = status_json(&app, &token).await;
+
+        assert_eq!(json["initialized"], false);
+        assert_eq!(json["encrypted"], false);
+        assert_eq!(json["locked"], false);
+        assert_eq!(json["companyName"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_an_encrypted_database_as_locked() {
+        let (_dir, db_path) = temp_db();
+        let conn = crate::db::open_connection(&db_path, None).unwrap();
+        crate::db::set_metadata(&conn, "company_name", "Raygun LLC").unwrap();
+        drop(conn);
+        encrypt(&db_path);
+
+        let (app, token) = app_for(&db_path);
+        let json = status_json(&app, &token).await;
+
+        assert_eq!(json["initialized"], true);
+        assert_eq!(json["encrypted"], true);
+        assert_eq!(json["locked"], true);
+        // Reading it would need the key we do not have yet.
+        assert_eq!(json["companyName"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn locked_database_refuses_data_routes_but_answers_the_gate() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let guarded = app
+            .clone()
+            .oneshot(session_get("/api/_guarded_probe", &token))
+            .await
+            .unwrap();
+        assert_eq!(guarded.status(), StatusCode::LOCKED);
+        let json = json_body(guarded).await;
+        assert_eq!(json["error"]["code"], "locked");
+
+        for uri in ["/api/ping", "/api/status"] {
+            let response = app.clone().oneshot(session_get(uri, &token)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri} while locked");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_gates_unknown_api_paths_too() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        // The guard wraps the whole /api router, fallback included, so a locked
+        // database answers 423 before it answers 404. Nothing is leaked either
+        // way, and the SPA gets the routing signal it needs.
+        let response = app
+            .oneshot(session_get("/api/does-not-exist", &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::LOCKED);
+        assert_eq!(json_body(response).await["error"]["code"], "locked");
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_refuses_every_data_route() {
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        // Table-driven over the whole read surface: a route mounted outside the
+        // guarded router would answer here instead of refusing.
+        for uri in DATA_ROUTES {
+            let (status, body) = get_json(&app, uri, &token).await;
+            assert_eq!(status, StatusCode::LOCKED, "{uri} while locked: {body}");
+            assert_eq!(body["error"]["code"], "locked", "for {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_refuses_every_mutation() {
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for route in WRITE_ROUTES {
+            let (status, body) = send_write(&app, route, &token).await;
+            let (method, uri, _) = route;
+            assert_eq!(
+                status,
+                StatusCode::LOCKED,
+                "{method} {uri} while locked: {body}"
+            );
+            assert_eq!(body["error"]["code"], "locked", "for {method} {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unlocking_opens_every_data_route() {
+        // /api/settings/app reads settings.json; keep the suite off the real one.
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let unlocked = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(unlocked.status(), StatusCode::OK);
+
+        for uri in DATA_ROUTES {
+            let (status, body) = get_json(&app, uri, &token).await;
+            assert_eq!(status, StatusCode::OK, "{uri} after unlock: {body}");
+        }
+
+        crate::db::set_db_password(None);
+    }
+
+    #[tokio::test]
+    async fn unencrypted_database_has_no_gate() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .oneshot(session_get("/api/_guarded_probe", &token))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unlock_rejects_wrong_passwords_with_a_shrinking_budget() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for (attempt, remaining) in [(1, 2), (2, 1)] {
+            let response = app
+                .clone()
+                .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "attempt {attempt}"
+            );
+            let json = json_body(response).await;
+            assert_eq!(json["error"]["code"], "invalid_password");
+            assert_eq!(json["error"]["details"]["attemptsRemaining"], remaining);
+            assert_eq!(json["error"]["details"]["retryAfterMs"], 0);
+        }
+
+        // The third failure is the first the server holds back.
+        let started = std::time::Instant::now();
+        let response = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["details"]["attemptsRemaining"], 0);
+        assert_eq!(json["error"]["details"]["retryAfterMs"], 1000);
+        assert!(
+            elapsed >= std::time::Duration::from_millis(900),
+            "expected a backoff delay, took {elapsed:?}"
+        );
+
+        assert_eq!(status_json(&app, &token).await["locked"], true);
+        assert!(crate::db::get_db_password().is_none());
+    }
+
+    #[tokio::test]
+    async fn unlock_with_the_right_password_opens_the_data_routes() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["locked"], false);
+
+        let json = status_json(&app, &token).await;
+        assert_eq!(json["encrypted"], true);
+        assert_eq!(json["locked"], false);
+
+        let guarded = app
+            .clone()
+            .oneshot(session_get("/api/_guarded_probe", &token))
+            .await
+            .unwrap();
+        assert_eq!(guarded.status(), StatusCode::OK);
+
+        // Unlocking twice is not an error.
+        let again = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(again.status(), StatusCode::OK);
+
+        crate::db::set_db_password(None);
+    }
+
+    #[tokio::test]
+    async fn a_successful_unlock_restores_the_attempt_budget() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let ok = app
+            .clone()
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        // Simulate a fresh lock so the counter is observable again.
+        crate::db::set_db_password(None);
+        let response = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body("nope")))
+            .await
+            .unwrap();
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["details"]["attemptsRemaining"], 2);
+    }
+
+    #[tokio::test]
+    async fn unlock_on_an_unencrypted_database_is_a_bad_request() {
+        let (_dir, db_path) = temp_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "bad_request");
+        assert!(crate::db::get_db_password().is_none());
+    }
+
+    #[tokio::test]
+    async fn unlock_with_a_malformed_body_is_a_bad_request_that_echoes_nothing() {
+        let (_dir, db_path) = temp_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let response = app
+            .oneshot(session_post(
+                "/api/unlock",
+                &token,
+                r#"{"passphrase": "hunter2"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = json_body(response).await;
+        assert_eq!(json["error"]["code"], "bad_request");
+        assert!(
+            !json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("hunter2"),
+            "body echoed back: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_runs_the_migrations_serve_had_to_defer() {
+        // A 0.1.x-era database: the base schema, no csv_profiles table, and a
+        // version stamp from before the migrations that add one.
+        crate::db::set_db_password(None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("nigel.db");
+        let conn = crate::db::open_connection(&db_path, None).unwrap();
+        conn.execute_batch(crate::db::SCHEMA).unwrap();
+        crate::db::set_metadata(&conn, "schema_version", "1").unwrap();
+        drop(conn);
+        encrypt(&db_path);
+
+        let conn = crate::db::open_connection(&db_path, Some(PASSWORD)).unwrap();
+        assert_eq!(crate::migrations::get_schema_version(&conn).unwrap(), 1);
+        drop(conn);
+
+        let (app, token) = app_for(&db_path);
+        let response = app
+            .oneshot(session_post("/api/unlock", &token, &unlock_body(PASSWORD)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let conn = crate::db::open_connection(&db_path, Some(PASSWORD)).unwrap();
+        assert_eq!(
+            crate::migrations::get_schema_version(&conn).unwrap(),
+            crate::migrations::LATEST_VERSION
+        );
+
+        crate::db::set_db_password(None);
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_ends_the_server() {
+        let state = AppState::new(
+            PathBuf::from("/nonexistent/nigel.db"),
+            auth::generate_token(),
+        );
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("bind ephemeral port");
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(serve_with_shutdown(listener, state, async move {
+            let _ = rx.await;
+        }));
+
+        tx.send(()).expect("signal shutdown");
+        let joined = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("server did not shut down within 5s")
+            .expect("server task panicked");
+        assert!(joined.is_ok());
+    }
+
+    // -- static assets ------------------------------------------------------
+
+    #[tokio::test]
+    async fn the_shell_is_never_stored() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+
+    /// A client-side route is the shell, and the shell is not cacheable —
+    /// otherwise a browser holding it across an upgrade asks for bundles this
+    /// build does not have.
+    #[tokio::test]
+    async fn an_unknown_path_falls_back_to_the_uncached_shell() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/reports").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(content_type(&response).starts_with("text/html"));
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+
+    #[tokio::test]
+    async fn a_missing_bundle_is_a_404_rather_than_the_shell() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(
+                get_request("/assets/index-fromanoldbuild.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!content_type(&response).starts_with("text/html"));
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_blanket_headers() {
+        let (app, token) = test_app();
+
+        // One of each: the shell, an authorized API answer, and a refusal.
+        for request in [
+            get_request("/").body(Body::empty()).unwrap(),
+            session_get("/api/ping", &token),
+            get_request("/api/ping").body(Body::empty()).unwrap(),
+        ] {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+            assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+        }
+    }
+}

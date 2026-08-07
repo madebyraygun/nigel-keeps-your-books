@@ -7,11 +7,9 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
-use crate::cli::accounts;
+use crate::cli::accounts::{self, ACCOUNT_TYPES};
 use crate::models::Account;
 use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
-
-const ACCOUNT_TYPES: &[&str] = &["checking", "credit_card", "line_of_credit", "payroll"];
 
 // Field indices for AccountForm::new_add() — keep in sync with field order
 const NAME_IDX: usize = 0;
@@ -495,7 +493,7 @@ impl AccountManager {
                         institution.as_deref(),
                         last_four.as_deref(),
                     ) {
-                        Ok(()) => {
+                        Ok(_) => {
                             self.reload(conn);
                             self.screen = Screen::List;
                             self.set_status(format!("Added account: {name}"));

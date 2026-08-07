@@ -26,8 +26,9 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Monthly reconciliation** — compare calculated balances against bank statements
+- **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. Every report the CLI prints is there too, for any period, with text and PDF downloads and a print-friendly layout
 - **SQLite storage** — single portable database, no server required
-- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen; backups preserve encryption state
+- **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen, or in the browser when using `nigel serve`; backups preserve encryption state
 - **Auto-updater** — checks GitHub Releases for new versions on launch (once per 24 hours); run `nigel update` to download and install the latest binary in-place; opt out via the Settings screen or `update_check: false` in settings.json
 - **Settings screen** — edit business name, manage database password, and toggle auto-update checks from the dashboard (`p` key)
 - **Snake** - 🍎 🐍
@@ -138,6 +139,10 @@ nigel password set                                # Encrypt database with a pass
 nigel password change                             # Change existing password
 nigel password remove                             # Decrypt database (remove password)
 
+# Web UI (localhost only)
+nigel serve                                       # Opens a browser at 127.0.0.1:5731
+nigel serve --port 8080 --no-open                 # Custom port, print the URL instead
+
 # Check for and install updates
 nigel update
 
@@ -168,27 +173,53 @@ Read the password from a secret store, as above, rather than writing it into a s
 
 Settings are stored in `~/.config/nigel/settings.json`. The data directory defaults to `~/Documents/nigel/` and can be changed by re-running `nigel init --data-dir <path>`. Use `nigel load <path>` to switch between existing data directories without reinitializing. `nigel status` shows the active database and summary statistics. Set `"update_check": false` to disable automatic update checks on launch.
 
+`nigel serve` binds 127.0.0.1 only and generates a fresh session token on every start, so the URL it prints is what grants access — it is never saved to disk. Requests from any other host or origin are refused. An encrypted database stays locked until you enter its password in the browser; the password is held in memory for that run only. See [docs/api.md](docs/api.md) for the endpoint inventory and security model.
+
+The browser's Settings screen covers the same ground as the dashboard's: business name, the auto-update check, setting, changing or removing the database password, and switching data directories (which reloads the page onto the new books). Switching away from a database whose password you have forgotten is a terminal job — `nigel load` — because that screen is behind the same lock as everything else.
+
 ## Feature Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `gusto` | Yes | Gusto payroll XLSX importer + auto-categorization |
 | `pdf` | Yes | PDF export via printpdf (built-in Helvetica, no font files needed) |
+| `serve` | Yes | `nigel serve` web UI and JSON API (axum + embedded assets) |
 
-Build without Gusto support:
+Build without Gusto, PDF, and web server support:
 
 ```bash
 cargo build --release --no-default-features
 ```
+
+Individual features can be re-enabled, e.g. `--no-default-features --features serve`.
 
 ## Development
 
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test               # Run all tests
-cargo test --no-default-features  # Test without gusto/pdf features
+cargo test -- --test-threads=1    # Run all tests (serial — the DB password is a process global)
+cargo test --no-default-features -- --test-threads=1   # Without gusto/pdf/serve
 ```
+
+### Building the web UI
+
+`nigel serve` serves a single-page app that is compiled into the binary. It
+lives in `web/` and needs Node 20.19 or newer (22 recommended):
+
+```bash
+cd web
+npm ci
+npm run build            # writes web/dist, which the binary embeds
+```
+
+`cargo build` works without Node — the binary then serves a placeholder page
+explaining that the UI has not been built. Run the `npm run build` above before
+`cargo build --release` if you want a binary with the real interface in it.
+
+For the live dev loop (Vite on :5173 proxying to a running `nigel serve`), the
+component preview harness, and the theme and API conventions, see
+[web/README.md](web/README.md).
 
 ## License
 

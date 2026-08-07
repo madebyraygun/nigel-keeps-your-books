@@ -1064,3 +1064,42 @@ fn recategorize_works_on_encrypted_db_via_env_password() {
         .success()
         .stdout(predicate::str::contains("Recategorized 1 transaction"));
 }
+
+#[test]
+fn serve_help_documents_its_flags() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args(["serve", "--help"])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--port"))
+        .stdout(predicate::str::contains("--no-open"));
+}
+
+#[test]
+fn serve_requires_an_initialized_database() {
+    let env = TestEnv::new();
+    env.cmd()
+        .arg("serve")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Not initialized"));
+}
+
+/// In a build without the `serve` feature the subcommand still parses — the
+/// failure has to name the missing feature, the way the PDF gate does.
+#[cfg(not(feature = "serve"))]
+#[test]
+fn serve_without_the_feature_reports_a_clear_error() {
+    let env = TestEnv::new();
+    env.init_and_demo();
+
+    env.cmd()
+        .arg("serve")
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires the 'serve' feature"));
+}
