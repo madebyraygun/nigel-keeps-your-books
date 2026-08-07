@@ -33,3 +33,28 @@ export {
   type BarHeights,
 } from './wc-bar-chart.js';
 export { WcNoticeBar, type WcNoticeVariant } from './wc-notice-bar.js';
+export {
+  WcPeriodNav,
+  paramsToPeriod,
+  periodLabel,
+  periodToParams,
+  stepPeriod,
+  type NcDateGranularity,
+  type NcPeriod,
+  type NcPeriodKind,
+  type NcPeriodParams,
+} from './wc-period-nav.js';
+export {
+  WcRegisterTable,
+  type CategoryOption,
+  type NcEditCommitDetail,
+  type NcFlagToggleDetail,
+  type NcRowEventDetail,
+  type RegisterTableRow,
+} from './wc-register-table.js';
+export {
+  WcRegisterToolbar,
+  type AccountOption,
+  type NcAccountChangeDetail,
+  type NcSearchChangeDetail,
+} from './wc-register-toolbar.js';
