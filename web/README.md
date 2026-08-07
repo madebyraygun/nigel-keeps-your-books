@@ -251,6 +251,137 @@ this Web Awesome build ships no searchable select, and the ARIA wiring
 (`aria-activedescendant` into the option list) needs a real input underneath.
 Options are grouped income then expense, the order `/api/categories` returns.
 
+## Reports
+
+`#/reports` is a directory of the eight; `#/reports?report=pnl&year=2025` is one
+of them. The report is a query parameter rather than a path segment because the
+router has none — the same reason `#/review?id=185` looks the way it does — and
+every parameter that reaches the API is in the hash, so a report view is a URL
+you can paste to someone.
+
+One screen serves all eight. The frame never changes (period control, export
+links, a body) and only the body differs, so `screens/reports-data.ts` holds the
+catalog — one `ReportDef` per slug, describing its title, its icon and the date
+parameters it accepts — and the landing page and the detail view both read it.
+`REPORTS[slug].supports` is not decoration: the server answers `400` for a
+parameter its route does not take, so sending `year` to `/api/reports/balance`
+is an error rather than a no-op, and dropping the unsupported ones is what lets
+one screen speak eight vocabularies.
+
+**The period control is driven by the server.** `wc-period-nav` takes its
+granularity from the `granularity` field on the report envelope, not from a
+table in the client: `monthAndYear` gets paging and the month/year toggle,
+`yearOnly` gets year paging alone, and `none` renders nothing at all. It runs
+with `allowAll` off — "all transactions" belongs to the register browser, and a
+report is always a report of some period. With no period in the route the screen
+opens on the current year, which is what the TUI's own date navigation is seeded
+with (`TableReportView::new` takes today, and every builder passes
+`year.unwrap_or(current_year)`).
+
+Period and account changes navigate; they never mutate state directly. The route
+is the only thing that triggers a load, so the back button walks periods.
+
+**The bodies** are composed from `@nigel/ui`, out of pure mappers:
+
+| Report | What renders it |
+|---|---|
+| pnl, expenses, tax, cashflow, flagged | `wc-report-table` from a mapper |
+| cashflow | plus `wc-bar-chart`, reusing the dashboard's `cashflowBuckets` |
+| balance | `wc-balance-list` and a `wc-stat-card` for YTD net income |
+| register | `wc-register-table` in `readonly` mode, with an account filter |
+| k1 | `wc-panel`s, `wc-report-table`s and `wc-notice-bar`s, composed |
+
+The K-1 worksheet is composed rather than given a component of its own. Every
+block of it is already a primitive, nothing about the stacking is reusable
+anywhere else, and a `wc-k1-worksheet` would have to take `K1PrepReport` as a
+property — which would drag API types into `@nigel/ui`, the one thing the
+package boundary forbids. It renders in `format_k1`'s order, including the
+**auto-mapped note** (income with no form line falls back to gross receipts) and
+the **needs-mapping section** (expenses with no form line, excluded from every
+total above and listed so they can be mapped).
+
+The register view is read only, and says so with a link to `#/register`. Editing
+in two places would mean two places to keep honest about the same row.
+
+### Exports
+
+Both formats are plain `<a download>` links, from `wc-export-links`. The browser
+streams the file, the session cookie rides along on a same-origin navigation,
+and `Content-Disposition` names it — the same filename the CLI would write.
+
+The href comes from `client.exportUrl(slug, format, params)`, never from a
+string in the screen. A download link is as much a hardcoded address as a
+`fetch` is, and a Tauri or remote client has no `/api` to serve it, so the api
+seam owns it like every other endpoint. The guard test enforces this: a quoted
+`/api/` literal anywhere under `src` outside `src/api` fails the build. (Naming
+an endpoint in a doc comment is fine — the rule skips comment lines, because
+documenting the seam is not routing around it.)
+
+**PDF is offered only when the server can produce it.** PDF export is a
+compile-time cargo feature, and `/api/status` reports it as `pdfExport`. A
+download link cannot inspect what comes back, so without that flag a no-pdf
+build would save a `501` error envelope as `pnl.pdf` — a failure dressed as a
+success. When it is off, the PDF control is disabled with the reason in text
+beside it and text export carries on. The status call already happens at boot,
+so the check costs nothing.
+
+Known edge, stated rather than hidden: a rare export failure that survives all
+of the above (an account deleted in another tab, a server bug) is saved by the
+browser as a small file containing the error envelope, because a link cannot
+read a status code.
+
+### Figure parity with the CLI
+
+The reports have to show the numbers `nigel report` prints, and
+`screens/reports-parity.test.ts` proves it against the CLI's own bytes: for each
+report it renders the screen from a captured API response and compares every
+money figure on the page with every money figure in the captured text export.
+The comparison is on absolute values, because `wc-money` always renders the sign
+while the text report prints magnitudes and lets colour carry direction — a
+deliberate difference (colour cannot be the only cue), not a difference in the
+figures.
+
+Both sides come from one seeded database. Regenerate them after changing a
+report's shape:
+
+```bash
+cargo test --features serve capture_web_report_fixtures -- --ignored --nocapture
+```
+
+That is an ignored test in `src/server/fixture_capture.rs` rather than a script
+because the seeded database, the router and a session already exist as test-only
+code — and because a script driving `nigel serve` would have to run `nigel init
+--data-dir`, which rewrites the developer's real `~/.config/nigel/settings.json`
+and repoints their books. It writes `web/apps/app/src/__fixtures__/reports/`:
+a `.json` (what the browser would receive), a `.txt` (what the CLI would export)
+and a `manifest.json` per report, plus a `needs-mapping-k1` pair from a second
+database carrying an unmapped category, so the K-1's mapping states have real
+captured data behind them.
+
+### Printing
+
+A printed report is the artifact someone keeps, so `@media print` in
+`@nigel/theme`'s `print.ts` gives the page over to the report: shell chrome
+hidden, black on white, 1.5cm margins, table headings repeating across page
+breaks, and rows and panels kept from splitting.
+
+The recolouring works by redefining the tokens at `:root`, not by restyling
+components — custom properties inherit through shadow boundaries, which is the
+only thing that reaches inside every `wc-*` element at once. Hiding the shell
+needs the other route through the boundary, which is why `wc-app-shell` exposes
+`sidebar`, `header`, `banner` and `content` as parts.
+
+`packages/theme/__tests__/print.test.ts` asserts the rules that carry the
+behaviour, and the build test proves they reach `dist/css/nigel.css`. What a
+printer actually does still needs eyes, so before changing this sheet, run
+through:
+
+- [ ] `npm run dev`, open each of the eight reports, print preview
+- [ ] No sidebar, header, banner, period control or export buttons
+- [ ] Black on white in both light and dark mode
+- [ ] A multi-page register repeats its column headings
+- [ ] Nothing clipped at the right edge, at A4 and at Letter
+
 ## Boot sequence
 
 `nigel-app` fetches `/api/status` and nothing else until it knows where it
