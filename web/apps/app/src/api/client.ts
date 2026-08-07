@@ -3,6 +3,7 @@ import {
   isKnownApiErrorCode,
   UPLOAD_NOT_FOUND,
   type Account,
+  type AccountPatch,
   type ApiErrorCode,
   type ApiErrorEnvelope,
   type AppSettings,
@@ -12,7 +13,9 @@ import {
   type ChangePasswordRequest,
   type CompanyNameResponse,
   type ConfirmImportRequest,
+  type CategoryPatch,
   type CsvProfile,
+  type Deleted,
   type ExpenseBreakdown,
   type ExportFormat,
   type ExportParams,
@@ -24,6 +27,9 @@ import {
   type ImportRequest,
   type InvalidPasswordDetails,
   type K1PrepReport,
+  type NewAccountRequest,
+  type NewCategoryRequest,
+  type NewRuleRequest,
   type PasswordStateResponse,
   type PingResponse,
   type PnlReport,
@@ -35,6 +41,8 @@ import {
   type ReviewApplyRequest,
   type ReviewApplyResponse,
   type ReviewUndoRequest,
+  type RulePatch,
+  type RuleRow,
   type RuleTestRequest,
   type RuleTestResult,
   type SetPasswordRequest,
@@ -191,8 +199,26 @@ export interface ApiClient {
 
   getAccounts(): Promise<Account[]>;
   getCategories(): Promise<CategoryRow[]>;
+  /** Active rules, priority descending — the order the categorizer applies them. */
+  getRules(): Promise<RuleRow[]>;
   /** Partial update; answers with the row as it now stands. */
   patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow>;
+
+  createAccount(input: NewAccountRequest): Promise<Account>;
+  /** The only edit an account has: `PATCH /api/accounts/:id` takes a name. */
+  renameAccount(id: number, input: AccountPatch): Promise<Account>;
+  /** Hard delete, and it takes the account's reconciliations with it. */
+  deleteAccount(id: number): Promise<Deleted>;
+
+  createCategory(input: NewCategoryRequest): Promise<CategoryRow>;
+  updateCategory(id: number, input: CategoryPatch): Promise<CategoryRow>;
+  /** Soft delete: the row stays on the transactions that already use it. */
+  deleteCategory(id: number): Promise<Deleted>;
+
+  createRule(input: NewRuleRequest): Promise<RuleRow>;
+  updateRule(id: number, input: RulePatch): Promise<RuleRow>;
+  /** Soft delete: the row survives for its hit count. */
+  deleteRule(id: number): Promise<Deleted>;
 
   getReviewQueue(): Promise<FlaggedTxn[]>;
   /** One transaction to re-review, as a full register row. */
@@ -384,8 +410,48 @@ export class FetchApiClient implements ApiClient {
     return this.request<CategoryRow[]>('GET', '/categories');
   }
 
+  getRules(): Promise<RuleRow[]> {
+    return this.request<RuleRow[]>('GET', '/rules');
+  }
+
   patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow> {
     return this.request<RegisterRow>('PATCH', `/transactions/${id}`, changes);
+  }
+
+  createAccount(input: NewAccountRequest): Promise<Account> {
+    return this.request<Account>('POST', '/accounts', input);
+  }
+
+  renameAccount(id: number, input: AccountPatch): Promise<Account> {
+    return this.request<Account>('PATCH', `/accounts/${id}`, input);
+  }
+
+  deleteAccount(id: number): Promise<Deleted> {
+    return this.request<Deleted>('DELETE', `/accounts/${id}`);
+  }
+
+  createCategory(input: NewCategoryRequest): Promise<CategoryRow> {
+    return this.request<CategoryRow>('POST', '/categories', input);
+  }
+
+  updateCategory(id: number, input: CategoryPatch): Promise<CategoryRow> {
+    return this.request<CategoryRow>('PATCH', `/categories/${id}`, input);
+  }
+
+  deleteCategory(id: number): Promise<Deleted> {
+    return this.request<Deleted>('DELETE', `/categories/${id}`);
+  }
+
+  createRule(input: NewRuleRequest): Promise<RuleRow> {
+    return this.request<RuleRow>('POST', '/rules', input);
+  }
+
+  updateRule(id: number, input: RulePatch): Promise<RuleRow> {
+    return this.request<RuleRow>('PATCH', `/rules/${id}`, input);
+  }
+
+  deleteRule(id: number): Promise<Deleted> {
+    return this.request<Deleted>('DELETE', `/rules/${id}`);
   }
 
   getReviewQueue(): Promise<FlaggedTxn[]> {

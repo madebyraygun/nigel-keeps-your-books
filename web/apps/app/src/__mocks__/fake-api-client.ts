@@ -8,14 +8,17 @@ import type {
 } from '../api/client.js';
 import type {
   Account,
+  AccountPatch,
   AppSettings,
   BalanceReport,
   CashflowReport,
+  CategoryPatch,
   CategoryRow,
   ChangePasswordRequest,
   CompanyNameResponse,
   ConfirmImportRequest,
   CsvProfile,
+  Deleted,
   ExpenseBreakdown,
   ExportFormat,
   ExportParams,
@@ -26,6 +29,9 @@ import type {
   ImportPreview,
   ImportRequest,
   K1PrepReport,
+  NewAccountRequest,
+  NewCategoryRequest,
+  NewRuleRequest,
   PasswordStateResponse,
   PingResponse,
   PnlReport,
@@ -37,6 +43,8 @@ import type {
   ReviewApplyRequest,
   ReviewApplyResponse,
   ReviewUndoRequest,
+  RulePatch,
+  RuleRow,
   RuleTestRequest,
   RuleTestResult,
   SetPasswordRequest,
@@ -147,6 +155,32 @@ export const LOCKED_STATUS: StatusResponse = {
   locked: true,
   companyName: null,
 };
+
+/** The order `GET /api/rules` answers in: priority descending, ties by id. */
+function sortRules(rules: RuleRow[]): RuleRow[] {
+  return [...rules].sort((a, b) => b.priority - a.priority || a.id - b.id);
+}
+
+/**
+ * A 409 exactly as the server shapes one, for the guardrail paths.
+ *
+ * Every manager screen has to render four of these, and hand-building the
+ * envelope at each call site is how one of them ends up subtly different from
+ * what the server actually sends.
+ */
+export function conflictError(
+  reason: string,
+  extra: { count?: number; name?: string; message?: string } = {},
+): ApiError {
+  const { message, ...details } = extra;
+  return new ApiError({
+    code: 'conflict',
+    rawCode: 'conflict',
+    message: message ?? `Refused: ${reason}`,
+    status: 409,
+    details: { reason, ...details },
+  });
+}
 
 /**
  * An ApiClient that never touches the network.
@@ -402,6 +436,157 @@ export class FakeApiClient implements ApiClient {
     this.calls.push(`testRule:${JSON.stringify(input)}`);
     if (this.ruleTestError) throw this.ruleTestError;
     return this.ruleTest;
+  }
+
+  // -- managers -------------------------------------------------------------
+  //
+  // Every write really moves the fixture, because the screens refetch after a
+  // mutation rather than splicing the response in: a fake that only logged its
+  // calls would pass even if the refetch were wired to the wrong list.
+
+  rules: RuleRow[] = [];
+
+  rulesError: Error | null = null;
+  createAccountError: Error | null = null;
+  renameAccountError: Error | null = null;
+  deleteAccountError: Error | null = null;
+  createCategoryError: Error | null = null;
+  updateCategoryError: Error | null = null;
+  deleteCategoryError: Error | null = null;
+  createRuleError: Error | null = null;
+  updateRuleError: Error | null = null;
+  deleteRuleError: Error | null = null;
+
+  /** Ids handed out in order, so a test can name the row it expects. */
+  private nextId = 900;
+
+  async getRules(): Promise<RuleRow[]> {
+    this.calls.push('getRules');
+    if (this.rulesError) throw this.rulesError;
+    return this.rules;
+  }
+
+  async createAccount(input: NewAccountRequest): Promise<Account> {
+    this.calls.push(`createAccount:${JSON.stringify(input)}`);
+    if (this.createAccountError) throw this.createAccountError;
+
+    const account: Account = {
+      id: this.nextId++,
+      name: input.name,
+      accountType: input.accountType,
+      institution: input.institution ?? null,
+      lastFour: input.lastFour ?? null,
+    };
+    this.accounts = [...this.accounts, account];
+    return account;
+  }
+
+  async renameAccount(id: number, input: AccountPatch): Promise<Account> {
+    this.calls.push(`renameAccount:${id}:${JSON.stringify(input)}`);
+    if (this.renameAccountError) throw this.renameAccountError;
+
+    const account = this.accounts.find((candidate) => candidate.id === id);
+    if (!account) throw new Error(`no account ${id} in the fixture`);
+    account.name = input.name;
+    return { ...account };
+  }
+
+  async deleteAccount(id: number): Promise<Deleted> {
+    this.calls.push(`deleteAccount:${id}`);
+    if (this.deleteAccountError) throw this.deleteAccountError;
+
+    this.accounts = this.accounts.filter((account) => account.id !== id);
+    return { id, deleted: true };
+  }
+
+  async createCategory(input: NewCategoryRequest): Promise<CategoryRow> {
+    this.calls.push(`createCategory:${JSON.stringify(input)}`);
+    if (this.createCategoryError) throw this.createCategoryError;
+
+    const category: CategoryRow = {
+      id: this.nextId++,
+      name: input.name,
+      categoryType: input.categoryType,
+      taxLine: input.taxLine ?? null,
+      formLine: input.formLine ?? null,
+    };
+    this.categories = [...this.categories, category];
+    return category;
+  }
+
+  async updateCategory(id: number, input: CategoryPatch): Promise<CategoryRow> {
+    this.calls.push(`updateCategory:${id}:${JSON.stringify(input)}`);
+    if (this.updateCategoryError) throw this.updateCategoryError;
+
+    const category = this.categories.find((candidate) => candidate.id === id);
+    if (!category) throw new Error(`no category ${id} in the fixture`);
+
+    // Absent keeps, null clears — the double_option semantics the route has.
+    if (input.name !== undefined) category.name = input.name;
+    if (input.categoryType !== undefined) category.categoryType = input.categoryType;
+    if (input.taxLine !== undefined) category.taxLine = input.taxLine;
+    if (input.formLine !== undefined) category.formLine = input.formLine;
+    return { ...category };
+  }
+
+  async deleteCategory(id: number): Promise<Deleted> {
+    this.calls.push(`deleteCategory:${id}`);
+    if (this.deleteCategoryError) throw this.deleteCategoryError;
+
+    // Soft-deleted server-side, and the list endpoint omits inactive rows —
+    // which from a client's point of view is the same as gone.
+    this.categories = this.categories.filter((category) => category.id !== id);
+    return { id, deleted: true };
+  }
+
+  async createRule(input: NewRuleRequest): Promise<RuleRow> {
+    this.calls.push(`createRule:${JSON.stringify(input)}`);
+    if (this.createRuleError) throw this.createRuleError;
+
+    const rule: RuleRow = {
+      id: this.nextId++,
+      pattern: input.pattern,
+      matchType: input.matchType ?? 'contains',
+      vendor: input.vendor ?? null,
+      category:
+        this.categories.find((c) => c.id === input.categoryId)?.name ?? 'Unknown',
+      categoryId: input.categoryId,
+      priority: input.priority ?? 0,
+      hitCount: 0,
+    };
+    this.rules = sortRules([...this.rules, rule]);
+    return rule;
+  }
+
+  async updateRule(id: number, input: RulePatch): Promise<RuleRow> {
+    this.calls.push(`updateRule:${id}:${JSON.stringify(input)}`);
+    if (this.updateRuleError) throw this.updateRuleError;
+
+    const rule = this.rules.find((candidate) => candidate.id === id);
+    if (!rule) throw new Error(`no rule ${id} in the fixture`);
+
+    if (input.pattern !== undefined) rule.pattern = input.pattern;
+    if (input.matchType !== undefined) rule.matchType = input.matchType;
+    if (input.vendor !== undefined) rule.vendor = input.vendor;
+    if (input.priority !== undefined) rule.priority = input.priority;
+    if (input.categoryId !== undefined) {
+      rule.categoryId = input.categoryId;
+      rule.category =
+        this.categories.find((c) => c.id === input.categoryId)?.name ?? rule.category;
+    }
+
+    // A priority edit reorders the list, which is the reason the screens
+    // refetch instead of splicing the response back in.
+    this.rules = sortRules([...this.rules]);
+    return { ...rule };
+  }
+
+  async deleteRule(id: number): Promise<Deleted> {
+    this.calls.push(`deleteRule:${id}`);
+    if (this.deleteRuleError) throw this.deleteRuleError;
+
+    this.rules = this.rules.filter((rule) => rule.id !== id);
+    return { id, deleted: true };
   }
 
   // -- imports --------------------------------------------------------------

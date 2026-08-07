@@ -417,6 +417,118 @@ export interface RuleTestResult {
 }
 
 /**
+ * `GET /api/rules` — active rules in the order the categorizer applies them:
+ * priority descending, ties by id.
+ *
+ * `matchType` is a plain string rather than `RuleMatchType`. Every write path
+ * validates against the three, but a row written by some other tool cannot be
+ * assumed to be one of them, and typing it narrowly would make the manager's
+ * select quietly retype a rule it merely displayed.
+ */
+export interface RuleRow {
+  id: number;
+  pattern: string;
+  matchType: string;
+  vendor: string | null;
+  /** The category's name, joined for display. */
+  category: string;
+  categoryId: number;
+  priority: number;
+  hitCount: number;
+}
+
+/** `POST /api/accounts` */
+export interface NewAccountRequest {
+  name: string;
+  accountType: string;
+  institution?: string | null;
+  lastFour?: string | null;
+}
+
+/**
+ * `PATCH /api/accounts/:id`
+ *
+ * Renaming is the whole of it: institution and last four are set at creation,
+ * which is all the data layer offers.
+ */
+export interface AccountPatch {
+  name: string;
+}
+
+/** `POST /api/categories` */
+export interface NewCategoryRequest {
+  name: string;
+  categoryType: string;
+  taxLine?: string | null;
+  formLine?: string | null;
+}
+
+/**
+ * `PATCH /api/categories/:id` — a true partial update.
+ *
+ * Omitting a field keeps it; sending `null` clears `taxLine` or `formLine`. A
+ * body with no recognized field is a 400, so a save with nothing changed must
+ * not be sent at all.
+ */
+export interface CategoryPatch {
+  name?: string;
+  categoryType?: string;
+  taxLine?: string | null;
+  formLine?: string | null;
+}
+
+/** `POST /api/rules` — `matchType` defaults to `contains`, `priority` to 0. */
+export interface NewRuleRequest {
+  pattern: string;
+  categoryId: number;
+  vendor?: string | null;
+  matchType?: RuleMatchType;
+  priority?: number;
+}
+
+/** `PATCH /api/rules/:id`. `vendor: null` clears it. */
+export interface RulePatch {
+  pattern?: string;
+  matchType?: RuleMatchType;
+  vendor?: string | null;
+  categoryId?: number;
+  priority?: number;
+}
+
+/**
+ * What every delete answers with — a body rather than a bare 204, so a client
+ * decodes every response the same way.
+ */
+export interface Deleted {
+  id: number;
+  deleted: boolean;
+}
+
+/**
+ * The `details.reason` values a 409 carries.
+ *
+ * The codes are the contract: a client explains the block in its own words
+ * instead of parsing the server's sentence, which is what makes the message
+ * translatable and the count formattable.
+ */
+export const CONFLICT_REASONS = [
+  'has_transactions',
+  'has_active_rules',
+  'duplicate_name',
+  'already_inactive',
+  'no_transactions',
+] as const;
+
+export type ConflictReason = (typeof CONFLICT_REASONS)[number];
+
+/** The shape of `error.details` on a 409. Every field is optional by reason. */
+export interface ConflictDetails {
+  reason?: string;
+  count?: number;
+  name?: string;
+}
+
+/**
  * Every error code the server can emit. The client normalizes anything it does
  * not recognize to `unknown` rather than lying about the type — the raw string
  * stays available on `ApiError.rawCode`, so a code the server learns before
