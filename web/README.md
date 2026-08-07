@@ -97,6 +97,16 @@ A guard test fails the build if `fetch(`, `XMLHttpRequest`, `EventSource`,
 `WebSocket` or `navigator.sendBeacon` appears anywhere under `src` outside
 `src/api` — tests included. Use `src/__mocks__/fake-api-client.ts` instead.
 
+One transport wrinkle lives behind that seam. `uploadImport(file)` sends a
+`FormData` body, and `request()` omits its usual JSON content type when it sees
+one: `multipart/form-data` needs a boundary parameter that only the browser can
+generate, and naming the header by hand produces a body the server cannot
+parse. The method takes a `File` and no progress callback — `fetch` cannot
+report upload progress, and putting a callback on the interface would oblige a
+Tauri or remote client to invent progress it does not have. A client that *can*
+measure it (an XHR one, which is why `src/api` is exempt from the guard above)
+adds it as an optional options object without disturbing this one.
+
 ## Screens
 
 `apps/app/src/screens/registry.ts` is the single description of a screen:
@@ -119,6 +129,42 @@ route's query parameters, and `navigate`. Screens take their client from there
 rather than importing a singleton, which is what lets a test drive a whole
 screen with `FakeApiClient` and what will let a Tauri client take the same
 place. Keep it small — anything added to it is added for every screen at once.
+
+## Importing
+
+`#/import` is one screen with three panels that appear as the decision is made:
+choose a file, preview what it would do, confirm. Nothing is written until the
+confirm, and the server takes a snapshot before it writes.
+
+**The upload is lazy.** Choosing a file sends nothing. Preview uploads and then
+dry-runs, in one action, for two reasons: a file picked and thought better of
+never reaches the server's spool, and an upload before an account is chosen is
+an upload that cannot be used for anything. The `uploadId` is then cached
+against that file, so fixing a column mapping and previewing again costs one
+request rather than re-sending the bytes.
+
+**An expired upload re-uploads itself, once.** The spool clears after an hour,
+which a preview left open over lunch will find. The file is still in the
+browser, so the honest response is to send it again rather than to make someone
+re-choose it; the retry is capped at one, after which the dropzone says the
+upload expired.
+
+**A duplicate file blocks the confirm.** The server would answer `200` with
+`duplicateFile: true` and zero counts — the checksum is checked before anything
+is parsed — so a confirm button there would offer a no-op. The screen shows the
+warning and offers no button.
+
+**Format and mapping cannot both be sent.** The API refuses the pair with a
+`400`. `importRequestBody` in `screens/import-data.ts` derives both from the
+single format field, so there is no branch that sets them together; likewise
+`saveProfile` is dropped unless there is a mapping to save under it, which is
+the other pairing the API refuses.
+
+Failures go where their cause is, not into a toast that vanishes while the form
+is still on screen — `routeImportError` is the whole table. `423` and `401` go
+nowhere at all: the shell gates both before this screen is constructed, so
+handling them here would be a second, worse telling of a story already on
+screen.
 
 ## The register
 
