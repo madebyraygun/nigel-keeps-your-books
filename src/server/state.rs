@@ -8,8 +8,8 @@ use tokio::sync::RwLock as TokioRwLock;
 
 use super::error::ApiError;
 
-/// Failed unlock attempts that cost nothing but a message. Past this, every
-/// answer is delayed.
+/// The failure count at which answers start being held back. The first two
+/// cost nothing but a message; the third and every one after it is delayed.
 const MAX_FREE_ATTEMPTS: u32 = 3;
 const BACKOFF_BASE: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(30);

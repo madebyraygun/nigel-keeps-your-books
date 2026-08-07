@@ -195,8 +195,14 @@ pub fn purge_stale(dir: &Path, max_age: Duration) {
     }
 }
 
+/// Lowercase because that is what `hex::encode` produces, and because a
+/// case-insensitive filesystem would otherwise resolve an id this module never
+/// handed out.
 fn is_valid_id(id: &str) -> bool {
-    id.len() == ID_BYTES * 2 && id.bytes().all(|b| b.is_ascii_hexdigit())
+    id.len() == ID_BYTES * 2
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -319,6 +325,31 @@ mod tests {
             assert!(resolve(&spool, id).is_none(), "{id} should not resolve");
         }
         assert!(resolve(&spool, &new_id()).is_none());
+    }
+
+    /// The id guard has to do the rejecting on its own: every case above is one
+    /// the filesystem would also turn away, so a guard that accepted them all
+    /// would still pass that test.
+    #[test]
+    fn the_id_guard_rejects_before_the_filesystem_is_consulted() {
+        assert!(!is_valid_id(""));
+        assert!(!is_valid_id("../.."));
+        assert!(!is_valid_id(&"a".repeat(31)));
+        assert!(!is_valid_id(&"a".repeat(33)));
+        assert!(!is_valid_id(&"g".repeat(32)));
+        // Uppercase hex is not what `new_id` hands out, and a case-insensitive
+        // filesystem would resolve it to a real upload.
+        assert!(!is_valid_id(&"A".repeat(32)));
+        assert!(is_valid_id(&new_id()));
+    }
+
+    #[test]
+    fn an_uppercase_spelling_of_a_real_id_does_not_resolve() {
+        let (_dir, spool) = spool();
+        let stored = store(&spool, "jan.csv", b"x").unwrap();
+
+        assert!(resolve(&spool, &stored.id).is_some());
+        assert!(resolve(&spool, &stored.id.to_uppercase()).is_none());
     }
 
     #[test]

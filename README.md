@@ -173,8 +173,8 @@ Individual features can be re-enabled, e.g. `--no-default-features --features se
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test               # Run all tests
-cargo test --no-default-features  # Test without gusto/pdf features
+cargo test -- --test-threads=1    # Run all tests (serial — the DB password is a process global)
+cargo test --no-default-features -- --test-threads=1   # Without gusto/pdf/serve
 ```
 
 ### Building the web UI

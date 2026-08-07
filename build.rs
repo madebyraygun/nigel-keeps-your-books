@@ -6,7 +6,11 @@
 //!    tracked by git, so a clone without node has nothing for `rust-embed` to
 //!    embed. When `web/dist/index.html` is missing, the committed
 //!    `web/placeholder/index.html` is copied in so `cargo build` works on its
-//!    own. An existing build is never overwritten.
+//!    own, and a marker is left beside it. A real vite build is never
+//!    overwritten; a copy this script seeded earlier is refreshed, since
+//!    `web/dist` survives every checkout and would otherwise pin the first
+//!    placeholder a machine ever built with. Vite runs with `emptyOutDir`, so a
+//!    real build clears the marker along with everything else.
 //! 2. **Invalidate.** `rust-embed`'s `debug-embed` decides *when* assets are
 //!    baked in, not when cargo reconsiders them: the proc macro cannot emit
 //!    `cargo:rerun-if-changed`, so without this script a fresh `npm run build`
@@ -26,17 +30,27 @@ fn main() {
 
     let dist = Path::new("web/dist");
     let index = dist.join("index.html");
-    if index.exists() {
-        return;
-    }
-
     let placeholder = Path::new("web/placeholder/index.html");
+
     if !placeholder.exists() {
         println!("cargo:warning=web/placeholder/index.html is missing; web/dist may be empty");
         return;
     }
 
-    if let Err(err) = fs::create_dir_all(dist).and_then(|()| fs::copy(placeholder, &index)) {
+    let marker = dist.join(".seeded-from-placeholder");
+    if index.exists() && !marker.exists() {
+        return;
+    }
+
+    let seeded = fs::create_dir_all(dist)
+        .and_then(|()| fs::copy(placeholder, &index))
+        .and_then(|_| {
+            fs::write(
+                &marker,
+                "web/dist holds the placeholder, not a vite build\n",
+            )
+        });
+    if let Err(err) = seeded {
         println!("cargo:warning=could not seed web/dist from the placeholder: {err}");
     }
 }

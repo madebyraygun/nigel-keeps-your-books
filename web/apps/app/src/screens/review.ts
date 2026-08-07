@@ -19,6 +19,7 @@ import {
 import { ApiError, type ApiClient } from '../api/index.js';
 import type { CategoryRow, RuleTestResult } from '../api/types.js';
 import {
+  isMissingTransaction,
   singleIdFrom,
   summarize,
   toReviewItem,
@@ -247,9 +248,14 @@ export class NigelReviewScreen extends LitElement {
    * tab, or an undone import, can take one out from under a review that is
    * already open. It counts as a skip so that stepping back over it does not
    * try to undo a decision that was never made.
+   *
+   * Every other failure, including the apply route's other 404 — a category
+   * that has been deleted since the picker listed it — holds the transaction on
+   * screen. Moving on from that one would file it as reviewed and leave it
+   * uncategorized.
    */
   private handleApplyFailure(error: unknown): void {
-    if (error instanceof ApiError && error.status === 404) {
+    if (isMissingTransaction(error)) {
       dispatchNcToast(this, {
         message: 'That transaction is gone — moving on.',
         variant: 'info',

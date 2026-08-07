@@ -1,4 +1,5 @@
-import type { FlaggedTxn, RegisterRow } from '../api/types.js';
+import { ApiError } from '../api/index.js';
+import type { FlaggedTxn, NotFoundDetails, RegisterRow } from '../api/types.js';
 
 /**
  * One transaction as the review screen holds it.
@@ -67,6 +68,22 @@ export function summarize(history: Decision[]): ReviewSummary {
   }
 
   return { reviewed, skipped, rulesCreated };
+}
+
+/**
+ * Whether a failed apply means the transaction itself has gone.
+ *
+ * `POST /api/review/:id/apply` answers 404 for two unrelated things, and they
+ * call for opposite handling: a transaction another tab has taken away is one
+ * to skip past, while a category that has been deleted leaves a decision still
+ * to be made on a transaction that is still there. The reason code is what
+ * tells them apart, so a 404 without one is treated as the second — the queue
+ * survives being wrong about that, the books do not survive the reverse.
+ */
+export function isMissingTransaction(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 404) return false;
+  const details = error.details as NotFoundDetails | undefined;
+  return details?.reason === 'transaction_not_found';
 }
 
 /**

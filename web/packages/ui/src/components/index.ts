@@ -14,6 +14,7 @@ export {
   type ConfirmOptions,
   type WcConfirmVariant,
 } from './wc-confirm.js';
+export { roundHalfEven } from './round-half-even.js';
 export { WcMoney, type WcMoneyAlign } from './wc-money.js';
 export { WcEmptyState } from './wc-empty-state.js';
 export { WcSpinner, type WcSpinnerSize } from './wc-spinner.js';

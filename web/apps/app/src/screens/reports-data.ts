@@ -173,6 +173,21 @@ const NAME_AMOUNT: ReportColumn[] = [
   { key: 'amount', label: 'Amount', kind: 'moneyAbs' },
 ];
 
+/**
+ * The P&L amount column, signed.
+ *
+ * `format_pnl` prints income, Total Income and NET through `money()` and only
+ * the expense band through `money(…abs())`, so the sign is what tells a $4,750
+ * loss from a $4,750 profit on the row that matters most. The expense rows
+ * carry `MAGNITUDE` to drop back to the magnitude the CLI prints there.
+ */
+const PNL_COLUMNS: ReportColumn[] = [
+  { key: 'name', label: 'Category', kind: 'text' },
+  { key: 'amount', label: 'Amount', kind: 'money' },
+];
+
+const MAGNITUDE = { amount: 'moneyAbs' } as const;
+
 export function pnlTable(report: PnlReport): ReportTable {
   const rows: ReportTableRow[] = [];
 
@@ -190,10 +205,15 @@ export function pnlTable(report: PnlReport): ReportTable {
   if (report.expenses.length > 0) {
     rows.push({ cells: { name: 'Expenses' }, emphasis: 'section' });
     for (const item of report.expenses) {
-      rows.push({ cells: { name: item.name, amount: item.total }, indent: 1 });
+      rows.push({
+        cells: { name: item.name, amount: item.total },
+        cellKinds: MAGNITUDE,
+        indent: 1,
+      });
     }
     rows.push({
       cells: { name: 'Total Expenses', amount: report.totalExpenses },
+      cellKinds: MAGNITUDE,
       emphasis: 'subtotal',
     });
   }
@@ -204,7 +224,7 @@ export function pnlTable(report: PnlReport): ReportTable {
     tone: report.net >= 0 ? 'income' : 'expense',
   });
 
-  return { columns: NAME_AMOUNT, rows };
+  return { columns: PNL_COLUMNS, rows };
 }
 
 export function expenseTable(report: ExpenseBreakdown): ReportTable {

@@ -12,6 +12,8 @@ use axum::extract::{DefaultBodyLimit, Multipart, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::categorizer::categorize_transactions;
@@ -125,8 +127,8 @@ async fn upload(
     };
     let filename = uploads::sanitize_filename(&raw_name).map_err(ApiError::bad_request)?;
 
-    let dir = uploads::uploads_dir(&state.db_path());
-    let stored = blocking(&state, move || {
+    let stored = blocking(&state, move |db_path| {
+        let dir = uploads::uploads_dir(&db_path);
         // Every upload is also a chance to collect the ones nobody came back
         // for, so an abandoned statement never lingers past its hour.
         uploads::purge_stale(&dir, uploads::MAX_AGE);
@@ -168,8 +170,7 @@ async fn preview(
         request.mapping,
     )?;
 
-    let db_path = state.db_path();
-    let result = blocking(&state, move || plan.run(&db_path, true)).await?;
+    let result = blocking(&state, move |db_path| plan.run(&db_path, true)).await?;
 
     Ok(Json(result))
 }
@@ -218,11 +219,10 @@ async fn confirm(
         .data_dir()
         .join(format!("snapshots/pre-import-{stamp}.db"));
 
-    let db_path = state.db_path();
     let upload_id = plan.upload.id.clone();
     let snapshot_path = snapshot.clone();
 
-    let response = blocking(&state, move || {
+    let response = blocking(&state, move |db_path| {
         let conn = crate::db::get_connection(&db_path)?;
         // Checked before the snapshot: `import_file` would catch it a moment
         // later, but only after writing a snapshot for an import that was never
@@ -257,9 +257,8 @@ async fn confirm(
 
     // The file has done its job. A failed confirm keeps it, so the same
     // uploadId can be retried once the caller fixes the request.
-    let dir = uploads::uploads_dir(&state.db_path());
-    blocking(&state, move || {
-        uploads::delete(&dir, &upload_id);
+    blocking(&state, move |db_path| {
+        uploads::delete(&uploads::uploads_dir(&db_path), &upload_id);
         Ok(())
     })
     .await?;
@@ -365,14 +364,21 @@ impl SaveProfile {
 ///
 /// Takes the `db_gate` read guard for the duration: these routes open their own
 /// connections rather than going through `with_conn`, and encrypt, decrypt and
-/// the data-directory switch rewrite the database file itself.
+/// the data-directory switch rewrite the database file itself. Both the spool
+/// directory and the database live in the data directory, so filesystem-only
+/// work belongs under the same guard.
+///
+/// The database path is handed to the closure rather than captured by it, so it
+/// is always read after the guard opens — one taken beforehand would name the
+/// database a pending switch has already replaced.
 async fn blocking<T, F>(state: &AppState, work: F) -> ApiResult<T>
 where
-    F: FnOnce() -> ApiResult<T> + Send + 'static,
+    F: FnOnce(PathBuf) -> ApiResult<T> + Send + 'static,
     T: Send + 'static,
 {
     let _gate = state.db_gate.read().await;
-    tokio::task::spawn_blocking(work)
+    let db_path = state.db_path();
+    tokio::task::spawn_blocking(move || work(db_path))
         .await
         .map_err(ApiError::internal)?
 }

@@ -121,6 +121,9 @@ export class NigelRegisterScreen extends LitElement {
 
   /** The request the currently loaded rows answer, so a re-render cannot refetch. */
   private loadedKey: string | null = null;
+
+  /** Drops a register response whose request is no longer the current one. */
+  private loadSeq = 0;
   private seededSearch = false;
 
   willUpdate(changed: PropertyValues<this>): void {
@@ -132,15 +135,22 @@ export class NigelRegisterScreen extends LitElement {
     }
 
     const request = registerParamsFrom(this.params);
-    const key = JSON.stringify(request);
-    if (key === this.loadedKey) return;
-    this.loadedKey = key;
+    if (JSON.stringify(request) === this.loadedKey) return;
     void this.load(request);
   }
 
   // -- loading --------------------------------------------------------------
 
+  /**
+   * Fetch the rows for one request.
+   *
+   * Sequenced: a slow answer overtaken by a newer one is dropped, and
+   * `loadedKey` moves only once rows are actually on screen, so a period whose
+   * response lost the race is refetched rather than skipped by the early
+   * return above.
+   */
   private async load(request: RegisterParams): Promise<void> {
+    const seq = (this.loadSeq += 1);
     this.loading = true;
     this.error = null;
 
@@ -150,18 +160,25 @@ export class NigelRegisterScreen extends LitElement {
         this.client.getAccounts(),
         this.client.getCategories(),
       ]);
+      if (seq !== this.loadSeq) return;
 
       this.rows = register.report.rows;
       this.total = register.report.total;
       this.accounts = accounts;
       this.categories = categories;
+      this.loadedKey = JSON.stringify(request);
       this.loading = false;
 
       await this.updateComplete;
+      if (seq !== this.loadSeq) return;
       this.landOnOpeningRow(request);
     } catch (error) {
+      if (seq !== this.loadSeq) return;
       this.loading = false;
       this.rows = [];
+      // No rows are shown, so nothing is loaded: coming back to this route asks
+      // again rather than settling for the error.
+      this.loadedKey = null;
       this.error =
         error instanceof ApiError ? error.message : 'Could not load the register.';
       // A locked or expired session is the shell's story to tell; anything

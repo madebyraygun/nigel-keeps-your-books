@@ -59,11 +59,13 @@ export function parseStatementBalance(raw: string): number | null {
  * Tidy a parsed balance back into the field: two decimals, grouped.
  *
  * Decimal style rather than currency, because the field renders its own `$`
- * prefix. The output re-parses, since `parseStatementBalance` strips the
- * separators this puts in.
+ * prefix. `en-US` rather than the reader's locale, because the output has to
+ * survive `parseStatementBalance`, which reads a comma as a separator and a dot
+ * as the decimal point: on a comma-decimal locale a tidied `500.25` would come
+ * back as `500,25` and re-parse as 50025.
  */
-export function formatStatementBalance(amount: number, locale?: string): string {
-  return new Intl.NumberFormat(locale, {
+export function formatStatementBalance(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount);

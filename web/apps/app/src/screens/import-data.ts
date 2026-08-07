@@ -95,7 +95,14 @@ export function resultCounts(result: ImportConfirmation): CountItem[] {
       value: result.malformed,
       emphasis: result.malformed > 0 ? 'warn' : 'default',
     },
-    { label: 'Categorized', value: result.categorized, emphasis: 'good' },
+    // Both of these are the ledger's counts, not the file's: the pass an
+    // import ends with runs over every uncategorized transaction there is.
+    {
+      label: 'Categorized',
+      value: result.categorized,
+      emphasis: 'good',
+      hint: 'across the ledger',
+    },
     {
       label: 'Still flagged',
       value: result.stillFlagged,

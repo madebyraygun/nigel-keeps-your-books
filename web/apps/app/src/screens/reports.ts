@@ -4,6 +4,7 @@ import '@nigel/ui';
 import {
   paramsToPeriod,
   periodToParams,
+  roundHalfEven,
   type NcDateGranularity,
   type NcPeriod,
   type RegisterTableRow,
@@ -60,11 +61,17 @@ type ReportData =
   | RegisterReport
   | K1PrepReport;
 
+/** What a loaded report is, for deciding whether the route still wants it. */
+function loadKey(slug: ReportSlug, request: ExportParams): string {
+  return `${slug}:${JSON.stringify(request)}`;
+}
+
+/** The K-1 warnings quote figures; they round as `fmt::money` rounds. */
 function money(amount: number): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: 'USD',
-  }).format(amount);
+  }).format(roundHalfEven(amount, 2));
 }
 
 /**
@@ -182,7 +189,11 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
   @state() private error: string | null = null;
   @state() private accounts: string[] = [];
 
+  /** The request the shown figures answer, set only once they are shown. */
   private loadedKey = '';
+
+  /** Drops a report response whose request is no longer the current one. */
+  private loadSeq = 0;
 
   private appStore: AppStore = getAppStore();
 
@@ -203,15 +214,14 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
 
     const slug = this.slug;
     if (!slug) {
+      this.loadSeq += 1;
       this.data = null;
       this.loadedKey = '';
       return;
     }
 
     const request = reportParamsFrom(slug, this.effectiveParams);
-    const key = `${slug}:${JSON.stringify(request)}`;
-    if (key === this.loadedKey) return;
-    this.loadedKey = key;
+    if (loadKey(slug, request) === this.loadedKey) return;
     void this.load(slug, request);
   }
 
@@ -240,27 +250,44 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
     return paramsToPeriod(this.effectiveParams);
   }
 
+  /**
+   * Fetch one report into `data`.
+   *
+   * Sequenced: a slow answer that arrives after a faster newer one is dropped,
+   * and `loadedKey` moves only when an answer is actually shown. Setting it up
+   * front would let a stale response paint figures under the newer period's
+   * heading, and the early return in `willUpdate` would then decline to ever
+   * ask again.
+   */
   private async load(slug: ReportSlug, request: ExportParams): Promise<void> {
+    const seq = (this.loadSeq += 1);
     this.loading = true;
     this.error = null;
 
     try {
       const answer = await this.fetchReport(slug, request);
+      if (seq !== this.loadSeq) return;
       this.data = answer.report;
       this.granularity = answer.granularity;
+      this.loadedKey = loadKey(slug, request);
 
       // The register's account filter needs the account list, and nothing else
       // on this screen does.
       if (slug === 'register' && this.accounts.length === 0) {
         const accounts = await this.client.getAccounts();
+        if (seq !== this.loadSeq) return;
         this.accounts = accounts.map((account) => account.name);
       }
     } catch (cause) {
+      if (seq !== this.loadSeq) return;
       this.data = null;
+      // Nothing is shown, so nothing is loaded: coming back to this route asks
+      // again rather than settling for the error.
+      this.loadedKey = '';
       this.error =
         cause instanceof ApiError ? cause.message : 'Could not load this report.';
     } finally {
-      this.loading = false;
+      if (seq === this.loadSeq) this.loading = false;
     }
   }
 
@@ -291,7 +318,6 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
   private retry = (): void => {
     const slug = this.slug;
     if (!slug) return;
-    this.loadedKey = '';
     void this.load(slug, reportParamsFrom(slug, this.effectiveParams));
   };
 

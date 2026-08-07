@@ -245,13 +245,15 @@ async fn post_password_set(
     body: Result<Json<SetPasswordRequest>, JsonRejection>,
 ) -> ApiResult<Json<PasswordStateResponse>> {
     let request = password_body(body, "{\"newPassword\": \"...\"}")?;
+    let new_password = trimmed_new_password(&request.new_password)?;
+
+    // Taken before the path is read, so a data-directory switch that lands
+    // between the two cannot leave this encrypting the database it replaced.
+    let _gate = state.db_gate.write().await;
     let db_path = state.db_path();
     if db::is_encrypted(&db_path)? {
         return Err(already_encrypted());
     }
-    let new_password = trimmed_new_password(&request.new_password)?;
-
-    let _gate = state.db_gate.write().await;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         password::encrypt_database(&db_path, &new_password)?;
         // Only after the file is genuinely encrypted: the reverse order leaves
@@ -277,15 +279,16 @@ async fn post_password_change(
         body,
         "{\"currentPassword\": \"...\", \"newPassword\": \"...\"}",
     )?;
+    let new_password = trimmed_new_password(&request.new_password)?;
+    let current = request.current_password.expose().trim().to_string();
+
+    let _gate = state.db_gate.write().await;
     let db_path = state.db_path();
     if !db::is_encrypted(&db_path)? {
         return Err(not_encrypted());
     }
-    let new_password = trimmed_new_password(&request.new_password)?;
-    let current = request.current_password.expose().trim().to_string();
     verify_current_password(&state, &db_path, &current).await?;
 
-    let _gate = state.db_gate.write().await;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         password::rekey_database(&db_path, &current, &new_password)?;
         db::set_db_password(Some(new_password));
@@ -306,14 +309,15 @@ async fn post_password_remove(
     body: Result<Json<RemovePasswordRequest>, JsonRejection>,
 ) -> ApiResult<Json<PasswordStateResponse>> {
     let request = password_body(body, "{\"currentPassword\": \"...\"}")?;
+    let current = request.current_password.expose().trim().to_string();
+
+    let _gate = state.db_gate.write().await;
     let db_path = state.db_path();
     if !db::is_encrypted(&db_path)? {
         return Err(not_encrypted());
     }
-    let current = request.current_password.expose().trim().to_string();
     verify_current_password(&state, &db_path, &current).await?;
 
-    let _gate = state.db_gate.write().await;
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         password::decrypt_database(&db_path, &current)?;
         db::set_db_password(None);
@@ -336,6 +340,11 @@ async fn post_password_remove(
 /// throttle is decoration. Validating up front also keeps a wrong password a
 /// clean `401` instead of the `NotADatabase` failure `rekey_database` would
 /// raise a moment later.
+///
+/// **The caller holds `db_gate`.** Both callers go on to rewrite the database
+/// file, so they hold the write side across the check and the rewrite together
+/// — taking a read guard here would deadlock against it, and releasing between
+/// the two would let a data-directory switch land in the middle.
 async fn verify_current_password(
     state: &AppState,
     db_path: &std::path::Path,
@@ -343,15 +352,12 @@ async fn verify_current_password(
 ) -> ApiResult<()> {
     let path = db_path.to_path_buf();
     let candidate = current.to_string();
-    let valid = {
-        let _gate = state.db_gate.read().await;
-        tokio::task::spawn_blocking(move || db::validate_password(&path, &candidate))
-            .await
-            .map_err(ApiError::internal)?
-            // The error text is dropped: the key is applied as literal SQL in a
-            // `PRAGMA key` statement, which rusqlite prints back in its message.
-            .map_err(|_| ApiError::internal("Couldn't open the database to check the password."))?
-    };
+    let valid = tokio::task::spawn_blocking(move || db::validate_password(&path, &candidate))
+        .await
+        .map_err(ApiError::internal)?
+        // The error text is dropped: the key is applied as literal SQL in a
+        // `PRAGMA key` statement, which rusqlite prints back in its message.
+        .map_err(|_| ApiError::internal("Couldn't open the database to check the password."))?;
     if valid {
         state.unlock.reset();
         return Ok(());
@@ -367,11 +373,23 @@ async fn verify_current_password(
 
 /// Trim as `prompt_and_confirm` and the TUI's password screen both do, so a
 /// password set from the web can always be typed back in from the terminal.
+///
+/// Control characters are refused for the same reason. `encrypt_database` binds
+/// the key as a parameter and so accepts anything, but every later open applies
+/// it through `PRAGMA key = '…'` as literal SQL, which cannot tokenize an
+/// embedded NUL. A password containing one encrypts the database and then locks
+/// its owner out permanently: it cannot be typed at a terminal prompt, and it
+/// cannot survive `NIGEL_DB_PASSWORD` either, since a NUL terminates the value.
 fn trimmed_new_password(secret: &Secret) -> ApiResult<String> {
     let trimmed = secret.expose().trim();
     if trimmed.is_empty() {
         return Err(ApiError::bad_request(
             "The password cannot be empty. Use `password/remove` to decrypt the database.",
+        ));
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "The password cannot contain control characters.",
         ));
     }
     Ok(trimmed.to_string())
@@ -723,6 +741,30 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert!(!crate::db::is_encrypted(&db_path).expect("probe"));
+    }
+
+    /// A password SQLCipher accepts but `PRAGMA key = '…'` cannot tokenize
+    /// encrypts the database and then locks its owner out of it for good.
+    #[tokio::test]
+    async fn a_new_password_holding_a_control_character_is_refused() {
+        let (_config, _dir, db_path) = fixture();
+        let (app, token) = app_for(&db_path);
+
+        for password in ["ab\u{0}cd", "line\nbreak", "tab\there"] {
+            let (status, body) = post_json(
+                &app,
+                "/api/settings/password/set",
+                &token,
+                &json!({ "newPassword": password }),
+            )
+            .await;
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{password:?}: {body}");
+            assert!(
+                !crate::db::is_encrypted(&db_path).expect("probe"),
+                "{password:?} encrypted the database"
+            );
+        }
     }
 
     #[tokio::test]

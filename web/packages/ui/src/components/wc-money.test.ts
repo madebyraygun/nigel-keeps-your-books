@@ -38,6 +38,22 @@ describe('wc-money', () => {
     expect(text(el)).toBe(expected);
   });
 
+  // Rust reads the stored double and settles an exact tie on the even
+  // neighbour; Intl left to itself reads the shortest decimal and rounds a tie
+  // away from zero, which is a cent's disagreement on a tax worksheet.
+  it.each([
+    [0.565, '$0.56'],
+    [1.005, '$1.00'],
+    [8.835, '$8.84'],
+    [0.125, '$0.12'],
+    [0.375, '$0.38'],
+    [617.375, '$617.38'],
+    [-0.125, '-$0.12'],
+  ])('rounds %d to %s, matching `{:.2}`', async (amount, expected) => {
+    const el = await mount({ amount });
+    expect(text(el)).toBe(expected);
+  });
+
   it('renders the minus sign rather than relying on color alone', async () => {
     const el = await mount({ amount: -500 });
     expect(text(el)).toContain('-');

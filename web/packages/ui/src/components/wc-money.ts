@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { roundHalfEven } from './round-half-even.js';
 
 export type WcMoneyAlign = 'start' | 'end';
 
@@ -13,7 +14,8 @@ export type WcMoneyAlign = 'start' | 'end';
  * distinction is exactly the pair most color-vision deficiencies flatten.
  *
  * Formatting goes through Intl, which for USD produces the same text as
- * `fmt::money` ("$1,234.56", "-$500.00").
+ * `fmt::money` ("$1,234.56", "-$500.00") — once the amount has been rounded the
+ * way `{:.2}` rounds it, which is what `roundHalfEven` is for.
  */
 @customElement('wc-money')
 export class WcMoney extends LitElement {
@@ -73,10 +75,14 @@ export class WcMoney extends LitElement {
 
   /** The formatted text, exposed so callers can reuse it (titles, exports). */
   get formatted(): string {
-    return new Intl.NumberFormat(this.locale, {
+    const format = new Intl.NumberFormat(this.locale, {
       style: 'currency',
       currency: this.currency,
-    }).format(this.amount);
+    });
+    // The currency decides how many decimals it keeps, so the rounding that
+    // precedes it asks rather than assuming the two dollars have.
+    const digits = format.resolvedOptions().maximumFractionDigits ?? 2;
+    return format.format(roundHalfEven(this.amount, digits));
   }
 
   render() {

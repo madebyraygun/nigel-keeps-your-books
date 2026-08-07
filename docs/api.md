@@ -181,9 +181,10 @@ server clears it.
 
 ## Reading data
 
-Every endpoint below reads the database, so all of them answer `423 locked`
-until an encrypted database has been unlocked. All are `GET`, and all are
-read-only.
+Every endpoint below answers `423 locked` until an encrypted database has been
+unlocked. All are `GET`, and all are read-only. Most read the database;
+`/api/imports/formats` reads a compiled-in list and is gated by policy rather
+than need, for the same reason `settings/app` is.
 
 Every `/api/reports/*` route answers with the `{ "granularity": …, "report": … }`
 envelope described under [Report responses](#report-responses); the type in the
@@ -247,7 +248,7 @@ of `year` and `month` that route will accept.
 
 ### List responses
 
-The five list endpoints answer with a bare JSON array — no envelope, no
+The six list endpoints answer with a bare JSON array — no envelope, no
 pagination.
 
 - `/api/accounts` — every account, by name.
@@ -271,8 +272,10 @@ pagination.
 
 ## Changing data
 
-Every endpoint in this section writes, and every one is refused with `423
-locked` until an encrypted database is unlocked.
+Every endpoint in this section is part of a write flow, and every one is
+refused with `423 locked` until an encrypted database is unlocked. Three are
+`GET`s that a write flow reads first, and two of the `POST`s — `rules/test` and
+`imports/preview` — are dry runs that write nothing.
 
 | Route | Method | Body | Response |
 |---|---|---|---|
@@ -310,7 +313,10 @@ locked` until an encrypted database is unlocked.
   transaction or a rule, `taxLine` and `formLine` on a category. `categoryId` is
   the exception — `null` there is `400`, because uncategorizing is what
   `/api/review/:id/undo` is for.
-- Unknown fields in a body are ignored.
+- Unknown fields in a body are ignored, except on `/api/imports/preview` and
+  `/api/imports/confirm`, where an unrecognized key is a `400`: those two carry
+  the column mapping, and a misspelled field there would silently import the
+  wrong columns.
 - Requesting a route with the wrong method is axum's bodyless `405`, the one
   response on the API that is not an error envelope.
 

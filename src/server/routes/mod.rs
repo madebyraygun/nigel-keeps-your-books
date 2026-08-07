@@ -82,7 +82,9 @@ struct GuardProbe {
 /// decrypting and switching data directories take the write side, so none of
 /// them can rewrite the file underneath a live connection. **A handler that
 /// opens a connection without coming through here must take
-/// `state.db_gate.read().await` itself** — see `routes::imports`, which does.
+/// `state.db_gate.read().await` itself, and must read `state.db_path()` after
+/// it rather than before** — `routes::imports`, `routes::status` and
+/// `routes::settings` all do.
 pub(super) async fn with_conn<T, F>(state: &AppState, work: F) -> ApiResult<T>
 where
     F: FnOnce(&Connection) -> crate::error::Result<T> + Send + 'static,
@@ -99,8 +101,11 @@ where
     F: FnOnce(&Connection) -> ApiResult<T> + Send + 'static,
     T: Send + 'static,
 {
-    let db_path = state.db_path();
+    // The guard comes first: the path is read under it, because a data-directory
+    // switch holds the write side and a path captured before the wait belongs to
+    // the database this request is no longer serving.
     let _gate = state.db_gate.read().await;
+    let db_path = state.db_path();
     tokio::task::spawn_blocking(move || -> ApiResult<T> {
         let conn = crate::db::get_connection(&db_path)?;
         work(&conn)

@@ -94,29 +94,7 @@ pub fn encrypt(db_path: &Path) {
 /// Any test that reaches `settings::save_settings` — the whole settings-screen
 /// surface — would otherwise rewrite the developer's real settings.json and
 /// repoint their data directory at a tempdir that is about to be deleted.
-pub struct TempConfig {
-    _dir: tempfile::TempDir,
-}
-
-impl TempConfig {
-    pub fn new() -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        crate::settings::set_config_dir_for_tests(Some(dir.path().to_path_buf()));
-        Self { _dir: dir }
-    }
-}
-
-impl Default for TempConfig {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Drop for TempConfig {
-    fn drop(&mut self) {
-        crate::settings::set_config_dir_for_tests(None);
-    }
-}
+pub type TempConfig = crate::settings::TempConfigDir;
 
 pub fn app_for(db_path: &Path) -> (Router, String) {
     let token = auth::generate_token();
@@ -326,10 +304,22 @@ pub const EXPORT_ROUTES: [&str; 8] = [
     "/api/exports/k1",
 ];
 
-/// Every route that writes, as method, path, and a body good enough to reach
-/// the handler. The locked guard has to refuse all of them: a mutation that
-/// slipped past it would be changing a database nobody has unlocked.
-pub const WRITE_ROUTES: [(&str, &str, &str); 22] = [
+/// Every non-`GET` route, as method, path, and a body good enough to reach the
+/// handler. The locked guard has to refuse all of them: a mutation that slipped
+/// past it would be changing a database nobody has unlocked.
+///
+/// Described by method rather than by effect because two of them write nothing
+/// — `rules/test` and `imports/preview` are dry runs — and a rule stated as
+/// "the ones that write" invites the next dry run to be left out of a list the
+/// guard still has to cover.
+pub const WRITE_ROUTES: [(&str, &str, &str); 25] = [
+    ("PATCH", "/api/rules/1", r#"{"priority":5}"#),
+    ("DELETE", "/api/rules/1", ""),
+    (
+        "POST",
+        "/api/reconcile",
+        r#"{"account":"X","month":"2025-01","statementBalance":0}"#,
+    ),
     ("PATCH", "/api/transactions/1", r#"{"flag":true}"#),
     ("PUT", "/api/settings/app", r#"{"updateCheck":true}"#),
     ("PUT", "/api/settings/company-name", r#"{"name":"X"}"#),

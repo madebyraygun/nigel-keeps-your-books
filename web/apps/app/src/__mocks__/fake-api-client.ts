@@ -13,6 +13,7 @@ import type {
   AppSettings,
   BalanceReport,
   CashflowReport,
+  CategorizeResult,
   CategoryPatch,
   CategoryRow,
   ChangePasswordRequest,
@@ -377,6 +378,15 @@ export class FakeApiClient implements ApiClient {
     if (changes.flag !== undefined) row.isFlagged = changes.flag;
 
     return { ...row };
+  }
+
+  categorizeResult: CategorizeResult = { categorized: 0, stillFlagged: 0 };
+  categorizeError: Error | null = null;
+
+  async categorize(): Promise<CategorizeResult> {
+    this.calls.push('categorize');
+    if (this.categorizeError) throw this.categorizeError;
+    return this.categorizeResult;
   }
 
   // -- review ---------------------------------------------------------------

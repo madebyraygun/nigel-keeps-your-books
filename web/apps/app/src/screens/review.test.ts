@@ -381,6 +381,7 @@ describe('nigel-review-screen', () => {
         rawCode: 'not_found',
         message: 'No transaction found with ID 1',
         status: 404,
+        details: { reason: 'transaction_not_found' },
       });
       const { el } = await mount(fake);
 
@@ -394,6 +395,42 @@ describe('nigel-review-screen', () => {
       fake.applyError = null;
       await back(el);
       expect(fake.calls.some((call) => call.startsWith('undoReview'))).toBe(false);
+    });
+
+    it('stays on the transaction when it is the category that has gone', async () => {
+      // The apply route answers 404 for both, and skipping this one would file
+      // a transaction as reviewed while leaving it uncategorized.
+      const fake = client();
+      fake.applyError = new ApiError({
+        code: 'not_found',
+        rawCode: 'not_found',
+        message: 'No category found with ID 13',
+        status: 404,
+        details: { reason: 'category_not_found' },
+      });
+      const { el } = await mount(fake);
+
+      await apply(el);
+
+      expect(form(el).error).toBe('No category found with ID 13');
+      expect(card(el)?.description).toBe('ADOBE CREATIVE CLOUD 0000123');
+      expect(progressText(el)).toBe('1 of 3');
+    });
+
+    it('holds its ground on a 404 that names no reason', async () => {
+      const fake = client();
+      fake.applyError = new ApiError({
+        code: 'not_found',
+        rawCode: 'not_found',
+        message: 'Not found',
+        status: 404,
+      });
+      const { el } = await mount(fake);
+
+      await apply(el);
+
+      expect(card(el)?.description).toBe('ADOBE CREATIVE CLOUD 0000123');
+      expect(form(el).error).toBe('Not found');
     });
 
     it('shows a rejected decision inline and stays put', async () => {

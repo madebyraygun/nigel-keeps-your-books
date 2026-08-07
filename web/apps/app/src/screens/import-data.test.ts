@@ -236,6 +236,15 @@ describe('counts', () => {
     // would misread every time an older flagged row is still sitting there.
     expect(resultCounts(CONFIRMATION).at(-1)?.hint).toBe('across the ledger');
   });
+
+  it('says the same of the categorized count', () => {
+    // `categorize_transactions` scans every uncategorized transaction there
+    // is, so the two counts have exactly the same scope.
+    const counts = resultCounts(CONFIRMATION);
+    expect(counts.find((count) => count.label === 'Categorized')?.hint).toBe(
+      'across the ledger',
+    );
+  });
 });
 
 describe('routeImportError', () => {

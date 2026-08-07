@@ -256,6 +256,31 @@ describe('nigel-import-screen', () => {
     expect(fake.calls.some((call) => call.startsWith('confirmImport'))).toBe(false);
   });
 
+  it('blocks the confirm when the preview would import nothing', async () => {
+    // Confirming would still record the file's checksum, after which a
+    // corrected format or mapping could never import it.
+    const fake = client();
+    fake.importPreview = {
+      ...EMPTY_IMPORT_PREVIEW,
+      imported: 0,
+      skipped: 4,
+      format: 'bofa_checking',
+    };
+    const { el } = await mount(fake);
+
+    await toPreview(el);
+
+    const confirm = button(el, 'Import 0');
+    expect(confirm?.disabled).toBe(true);
+    expect(
+      el.shadowRoot?.querySelector('wc-notice-bar')?.getAttribute('message'),
+    ).toContain('nothing here to import');
+
+    confirm?.click();
+    await settle(el);
+    expect(fake.calls.some((call) => call.startsWith('confirmImport'))).toBe(false);
+  });
+
   it('sends the mapping and the profile name for a generic CSV', async () => {
     const { el, fake } = await mount();
 

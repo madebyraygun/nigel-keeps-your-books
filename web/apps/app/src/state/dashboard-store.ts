@@ -46,6 +46,8 @@ interface Slot<T> {
   data: Signal.State<T | null>;
   loading: Signal.State<boolean>;
   error: Signal.State<ApiError | null>;
+  /** Sequence of the latest fetch into this slot; older answers are dropped. */
+  seq: number;
 }
 
 function slot<T>(): Slot<T> {
@@ -53,6 +55,7 @@ function slot<T>(): Slot<T> {
     data: signal<T | null>(null),
     loading: signal(false),
     error: signal<ApiError | null>(null),
+    seq: 0,
   };
 }
 
@@ -73,16 +76,24 @@ function toApiError(error: unknown): ApiError {
  * Never throws: a rejected call belongs in that slot's `error` signal, where
  * the card that needs it can render a message and a retry. Letting it escape
  * would take the other three fetches down with it.
+ *
+ * Sequenced, because a refresh can overtake the load it interrupts: only the
+ * newest fetch into a slot is allowed to write to it, so a slow answer landing
+ * late cannot restore figures the reader has already replaced.
  */
 async function fill<T>(target: Slot<T>, request: () => Promise<T>): Promise<void> {
+  const seq = (target.seq += 1);
   target.loading.set(true);
   try {
-    target.data.set(await request());
+    const data = await request();
+    if (seq !== target.seq) return;
+    target.data.set(data);
     target.error.set(null);
   } catch (error) {
+    if (seq !== target.seq) return;
     target.error.set(toApiError(error));
   } finally {
-    target.loading.set(false);
+    if (seq === target.seq) target.loading.set(false);
   }
 }
 

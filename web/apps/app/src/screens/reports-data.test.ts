@@ -161,6 +161,21 @@ describe('pnlTable', () => {
     expect(rows[0]?.indent).toBeUndefined();
   });
 
+  it('signs income and the net, and prints the expense band as magnitudes', () => {
+    // `format_pnl` runs the income rows, Total Income and NET through
+    // `money()`, and only the expense band through `money(…abs())`.
+    const { columns, rows } = pnlTable(PNL);
+    expect(columns[1]?.kind).toBe('money');
+
+    const kindOf = (label: string) =>
+      rows.find((row) => row.cells.name === label)?.cellKinds?.amount;
+    expect(kindOf('Client Services')).toBeUndefined();
+    expect(kindOf('Total Income')).toBeUndefined();
+    expect(kindOf('Net')).toBeUndefined();
+    expect(kindOf('Software & Subscriptions')).toBe('moneyAbs');
+    expect(kindOf('Total Expenses')).toBe('moneyAbs');
+  });
+
   it('tones the net row by its sign', () => {
     expect(pnlTable(PNL).rows.at(-1)?.tone).toBe('income');
     expect(pnlTable({ ...PNL, net: -5 }).rows.at(-1)?.tone).toBe('expense');

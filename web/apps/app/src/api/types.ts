@@ -281,6 +281,18 @@ export interface TransactionPatch {
   flag?: boolean;
 }
 
+/**
+ * `POST /api/categorize` — what the rules pass over everything uncategorized
+ * did.
+ *
+ * Both counts are ledger-wide, as `categorize_transactions` scans every
+ * transaction with no category rather than any one import's.
+ */
+export interface CategorizeResult {
+  categorized: number;
+  stillFlagged: number;
+}
+
 /** `POST /api/unlock` */
 export interface UnlockRequest {
   password: string;
@@ -517,18 +529,42 @@ export const CONFLICT_REASONS = [
   'duplicate_name',
   'already_inactive',
   'no_transactions',
+  'already_encrypted',
+  'not_encrypted',
 ] as const;
 
 export type ConflictReason = (typeof CONFLICT_REASONS)[number];
 
 /** The shape of `error.details` on a 409. Every field is optional by reason. */
 export interface ConflictDetails {
-  reason?: string;
+  reason?: ConflictReason;
   count?: number;
   name?: string;
   /** `no_transactions` names the account and month it found nothing in. */
   account?: string;
   month?: string;
+}
+
+/**
+ * The `details.reason` values a 404 carries.
+ *
+ * The same contract as the conflict reasons, and it matters most where one
+ * route can answer 404 for two unrelated things: an apply that cannot find its
+ * transaction is a row to skip past, an apply that cannot find its category is
+ * a decision still waiting to be made.
+ */
+export const NOT_FOUND_REASONS = [
+  'transaction_not_found',
+  'category_not_found',
+  'account_not_found',
+  'upload_not_found',
+] as const;
+
+export type NotFoundReason = (typeof NOT_FOUND_REASONS)[number];
+
+/** The shape of `error.details` on a 404. */
+export interface NotFoundDetails {
+  reason?: NotFoundReason;
 }
 
 /**
@@ -661,7 +697,7 @@ export interface ImportConfirmation extends ImportPreview {
 export const GENERIC_FORMAT = 'generic';
 
 /** `details.reason` distinguishing an expired upload from any other 404. */
-export const UPLOAD_NOT_FOUND = 'upload_not_found';
+export const UPLOAD_NOT_FOUND: NotFoundReason = 'upload_not_found';
 
 // -- reconcile and undo -------------------------------------------------------
 

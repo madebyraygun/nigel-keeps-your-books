@@ -16,7 +16,7 @@ use crate::reviewer::{self, FlaggedTxn};
 use super::super::error::{ApiError, ApiResult};
 use super::super::extract::{ApiJson, ApiPath};
 use super::super::state::AppState;
-use super::with_conn;
+use super::{with_conn, with_conn_api};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -83,9 +83,14 @@ async fn apply(
         ));
     }
 
-    let rule_id = with_conn(&state, move |conn| {
-        reports::get_register_row(conn, id)?;
-        categories::ensure_category_exists(conn, request.category_id)?;
+    // Both lookups answer `404`, and they mean opposite things to a caller: a
+    // transaction that is gone should be skipped, a category that is gone
+    // should not be. Each carries its own reason so the two stay tellable apart.
+    let rule_id = with_conn_api(&state, move |conn| {
+        reports::get_register_row(conn, id)
+            .map_err(|e| ApiError::not_found_because(e.to_string(), "transaction_not_found"))?;
+        categories::ensure_category_exists(conn, request.category_id)
+            .map_err(|e| ApiError::not_found_because(e.to_string(), "category_not_found"))?;
         reviewer::apply_review(
             conn,
             id,
@@ -94,6 +99,7 @@ async fn apply(
             request.create_rule,
             request.rule_pattern.as_deref(),
         )
+        .map_err(ApiError::from)
     })
     .await?;
 
@@ -277,6 +283,39 @@ mod tests {
             assert_eq!(status, expected, "POST {uri} with {body} gave {json}");
             assert!(json["error"]["code"].is_string(), "envelope for {uri}");
         }
+    }
+
+    /// The two `404`s mean opposite things to a caller — one is a transaction
+    /// worth skipping, the other a category the user has to pick again — so the
+    /// reason is what tells them apart, not the status.
+    #[tokio::test]
+    async fn the_two_not_founds_name_what_was_missing() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+        let id = ok_json(&app, "/api/review/queue", &token).await[0]["id"]
+            .as_i64()
+            .unwrap();
+        let fees = category_id(&db_path, "Bank & Merchant Fees");
+
+        let (status, json) = post_json(
+            &app,
+            &format!("/api/review/{id}/apply"),
+            &token,
+            &serde_json::json!({ "categoryId": 99_999 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "category_not_found");
+
+        let (status, json) = post_json(
+            &app,
+            "/api/review/999999/apply",
+            &token,
+            &serde_json::json!({ "categoryId": fees }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "transaction_not_found");
     }
 
     #[tokio::test]

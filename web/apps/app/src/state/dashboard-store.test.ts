@@ -135,6 +135,30 @@ describe('dashboard store', () => {
     expect(client.calls[client.calls.length - 1]).toBe('getBalance');
   });
 
+  it('ignores a fetch that is overtaken by a newer one', async () => {
+    const pending: Array<() => void> = [];
+    const stale: BalanceReport = { accounts: [], total: 1, ytdNetIncome: 1 };
+    let answer = stale;
+    client.getBalance = () => {
+      const report = answer;
+      return new Promise((resolve) => {
+        pending.push(() => resolve({ granularity: 'none', report }));
+      });
+    };
+
+    const first = store.reloadBalance();
+    answer = BALANCE;
+    const second = store.reloadBalance();
+
+    // The second fetch answers first, and the first one lands afterwards.
+    pending[1]?.();
+    pending[0]?.();
+    await Promise.all([first, second]);
+
+    expect(store.balance.data.get()).toEqual(BALANCE);
+    expect(store.balance.loading.get()).toBe(false);
+  });
+
   it('counts the flagged transactions', async () => {
     await store.load();
     expect(store.flaggedCount.get()).toBe(2);

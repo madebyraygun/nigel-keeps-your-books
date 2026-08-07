@@ -113,6 +113,16 @@ impl ApiError {
         Self::new(ApiErrorCode::NotFound, message)
     }
 
+    /// A `404` that says *which* thing was missing.
+    ///
+    /// A route that looks up more than one thing answers the same status for
+    /// each, so a client branching on the status alone has to guess — and the
+    /// review screen guessed "the transaction is gone" for a category that had
+    /// merely been deactivated, skipping a transaction it had not reviewed.
+    pub fn not_found_because(message: impl Into<String>, reason: &str) -> Self {
+        Self::not_found(message).with_details(serde_json::json!({ "reason": reason }))
+    }
+
     pub fn conflict(message: impl Into<String>, details: Value) -> Self {
         Self::new(ApiErrorCode::Conflict, message).with_details(details)
     }
@@ -144,9 +154,13 @@ impl ApiError {
 impl From<NigelError> for ApiError {
     fn from(err: NigelError) -> Self {
         match err {
-            NigelError::UnknownAccount(_)
-            | NigelError::UnknownCategory(_)
-            | NigelError::NotFound(_) => Self::not_found(err.to_string()),
+            NigelError::UnknownAccount(_) => {
+                Self::not_found_because(err.to_string(), "account_not_found")
+            }
+            NigelError::UnknownCategory(_) => {
+                Self::not_found_because(err.to_string(), "category_not_found")
+            }
+            NigelError::NotFound(_) => Self::not_found(err.to_string()),
             NigelError::UnknownFormat(_) | NigelError::NoImporter(_) | NigelError::Invalid(_) => {
                 Self::bad_request(err.to_string())
             }
@@ -174,9 +188,21 @@ impl From<NigelError> for ApiError {
             NigelError::Conflict { code, .. } => {
                 Self::conflict(err.to_string(), serde_json::json!({ "reason": code }))
             }
+            NigelError::Db(_) => Self::internal(redact_key_pragma(err.to_string())),
             other => Self::internal(other),
         }
     }
+}
+
+/// rusqlite renders the statement it failed on, and the statement that carries
+/// the database password is `PRAGMA key = '…'`. Any rusqlite error is therefore
+/// one bad key away from putting the key in a response body, so the text is
+/// dropped rather than filtered whenever it mentions that statement.
+fn redact_key_pragma(message: String) -> String {
+    if message.to_ascii_uppercase().contains("PRAGMA KEY") {
+        return "Database error while opening the database.".to_string();
+    }
+    message
 }
 
 #[derive(Serialize)]
@@ -349,5 +375,34 @@ mod tests {
             assert_eq!(api.details, Some(expected), "for {message}");
             assert_eq!(api.message, message, "the human message is preserved");
         }
+    }
+
+    /// rusqlite renders the statement it failed on, and the statement that
+    /// carries the database password is `PRAGMA key = '…'`.
+    #[test]
+    fn a_database_error_never_carries_the_key_back() {
+        let leaky = redact_key_pragma(
+            "unrecognized token: \"'ab\" in PRAGMA key='ab cd' at offset 11".to_string(),
+        );
+        assert!(!leaky.contains("ab cd"), "{leaky}");
+        assert!(!leaky.to_ascii_uppercase().contains("PRAGMA"), "{leaky}");
+
+        let ordinary = redact_key_pragma("no such table: transactions".to_string());
+        assert_eq!(ordinary, "no such table: transactions");
+    }
+
+    #[test]
+    fn not_found_variants_say_which_thing_was_missing() {
+        let account = ApiError::from(NigelError::UnknownAccount("Books".into()));
+        assert_eq!(
+            account.details,
+            Some(json!({ "reason": "account_not_found" }))
+        );
+
+        let category = ApiError::from(NigelError::UnknownCategory("Meals".into()));
+        assert_eq!(
+            category.details,
+            Some(json!({ "reason": "category_not_found" }))
+        );
     }
 }

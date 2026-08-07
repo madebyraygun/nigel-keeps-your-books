@@ -259,6 +259,20 @@ export class NigelImportScreen extends LitElement {
     return this.file !== null && this.form.account !== '' && this.busy === null;
   }
 
+  /**
+   * Whether confirming would actually import something.
+   *
+   * A preview with nothing to import is the same trap a duplicate file is: the
+   * confirm succeeds, adds no rows, and records the file's checksum, after
+   * which the file can never be imported — so a corrected format or column
+   * mapping arrives too late.
+   */
+  private get importable(): boolean {
+    return (
+      this.preview !== null && !this.preview.duplicateFile && this.preview.imported > 0
+    );
+  }
+
   // -- the two calls --------------------------------------------------------
 
   /** The server's copy of the chosen file, uploading it if it has none. */
@@ -313,7 +327,7 @@ export class NigelImportScreen extends LitElement {
   };
 
   private handleConfirm = async (): Promise<void> => {
-    if (this.busy !== null || this.preview === null || this.preview.duplicateFile) return;
+    if (this.busy !== null || !this.importable) return;
     this.clearErrors();
 
     try {
@@ -466,6 +480,12 @@ export class NigelImportScreen extends LitElement {
             <strong>${formatLabel(preview.format, this.formats, this.profiles)}</strong>
           </p>
           <wc-count-grid .items=${previewCounts(preview)}></wc-count-grid>
+          ${preview.imported === 0
+            ? html`<wc-notice-bar
+                variant="warning"
+                message="There is nothing here to import. Check the format and, for a generic CSV, the column mapping above, then preview again."
+              ></wc-notice-bar>`
+            : nothing}
           <wc-sample-table
             .rows=${preview.sample}
             caption=${`First ${preview.sample.length} rows of ${this.filename}`}
@@ -477,7 +497,7 @@ export class NigelImportScreen extends LitElement {
           class="action primary"
           slot="actions"
           type="button"
-          ?disabled=${this.busy !== null}
+          ?disabled=${this.busy !== null || !this.importable}
           @click=${this.handleConfirm}
         >
           Import ${preview.imported} transactions

@@ -9,6 +9,7 @@ import {
   type AppSettings,
   type BalanceReport,
   type CashflowReport,
+  type CategorizeResult,
   type CategoryRow,
   type ChangePasswordRequest,
   type CompanyNameResponse,
@@ -213,6 +214,13 @@ export interface ApiClient {
   getRules(): Promise<RuleRow[]>;
   /** Partial update; answers with the row as it now stands. */
   patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow>;
+  /**
+   * Re-run the rules over everything uncategorized — `nigel categorize`.
+   *
+   * The same pass an import ends with, over the whole ledger rather than one
+   * file, which is why both counts it answers with are ledger-wide.
+   */
+  categorize(): Promise<CategorizeResult>;
 
   createAccount(input: NewAccountRequest): Promise<Account>;
   /** The only edit an account has: `PATCH /api/accounts/:id` takes a name. */
@@ -445,6 +453,10 @@ export class FetchApiClient implements ApiClient {
 
   patchTransaction(id: number, changes: TransactionPatch): Promise<RegisterRow> {
     return this.request<RegisterRow>('PATCH', `/transactions/${id}`, changes);
+  }
+
+  categorize(): Promise<CategorizeResult> {
+    return this.request<CategorizeResult>('POST', '/categorize');
   }
 
   createAccount(input: NewAccountRequest): Promise<Account> {

@@ -172,6 +172,63 @@ describe('the reports screen', () => {
       expect(tableText(el)).toContain('Net');
     });
 
+    it('renders a loss with its sign', async () => {
+      // `format_pnl` prints NET through `money()`, so a $4,750 loss must not
+      // read as a $4,750 profit.
+      const client = seeded();
+      client.pnl = {
+        income: [{ name: 'Client Services', total: 1000 }],
+        expenses: [{ name: 'Rent', total: -5750 }],
+        totalIncome: 1000,
+        totalExpenses: -5750,
+        net: -4750,
+      };
+      const { el } = await mount('report=pnl&year=2025', client);
+
+      expect(screenText(el)).toContain('-$4,750.00');
+      // The expense band still prints magnitudes, as the CLI does.
+      expect(screenText(el)).toContain('$5,750.00');
+      expect(screenText(el)).not.toContain('-$5,750.00');
+    });
+
+    it('ignores a report that arrives after a newer one, and refetches the period it dropped', async () => {
+      const client = seeded();
+      const pending: Array<() => void> = [];
+      const byYear: Record<string, PnlReport> = {
+        '2025': { income: [], expenses: [], totalIncome: 0, totalExpenses: 0, net: 2025 },
+        '2024': { income: [], expenses: [], totalIncome: 0, totalExpenses: 0, net: 2024 },
+      };
+      client.getPnl = (params = {}) => {
+        const year = String(params.year);
+        client.calls.push(`getPnl:${year}`);
+        return new Promise((resolve) => {
+          pending.push(() =>
+            resolve({ granularity: 'monthAndYear', report: byYear[year] as PnlReport }),
+          );
+        });
+      };
+
+      const { el } = await mount('report=pnl&year=2025', client);
+      el.params = new URLSearchParams('report=pnl&year=2024');
+      await el.updateComplete;
+
+      // The 2024 request answers first; 2025's slow answer lands afterwards.
+      pending[1]?.();
+      pending[0]?.();
+      await new Promise((r) => setTimeout(r, 0));
+      await el.updateComplete;
+
+      expect(screenText(el)).toContain('$2,024.00');
+      expect(screenText(el)).not.toContain('$2,025.00');
+
+      // Going back to 2025 asks again rather than trusting a period that was
+      // never shown.
+      client.calls.length = 0;
+      el.params = new URLSearchParams('report=pnl&year=2025');
+      await el.updateComplete;
+      expect(client.calls).toEqual(['getPnl:2025']);
+    });
+
     it('shows the error and retries from it', async () => {
       const client = seeded();
       client.pnlError = new Error('boom');

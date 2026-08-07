@@ -2,6 +2,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import './wc-money.js';
 import './wc-spinner.js';
+import { roundHalfEven } from './round-half-even.js';
 
 /**
  * How a cell is formatted, which also decides its default alignment.
@@ -31,6 +32,13 @@ export type ReportRowEmphasis = 'normal' | 'section' | 'subtotal' | 'total';
 export interface ReportTableRow {
   id?: string;
   cells: Record<string, string | number | null>;
+  /**
+   * Formatting for this row's cells, overriding the column's, keyed by column.
+   *
+   * The P&L needs it: `format_pnl` prints its income lines and its net signed
+   * and its expense band as magnitudes, in one two-column table.
+   */
+  cellKinds?: Record<string, ReportCellKind>;
   emphasis?: ReportRowEmphasis;
   tone?: 'income' | 'expense' | 'neutral';
   indent?: 0 | 1;
@@ -242,10 +250,14 @@ export class WcReportTable extends LitElement {
     return column.align ?? (NUMERIC.includes(column.kind) ? 'end' : 'start');
   }
 
-  private renderValue(column: ReportColumn, value: string | number | null) {
+  private static kindOf(row: ReportTableRow, column: ReportColumn): ReportCellKind {
+    return row.cellKinds?.[column.key] ?? column.kind;
+  }
+
+  private renderValue(kind: ReportCellKind, value: string | number | null) {
     if (value === null || value === undefined || value === '') return nothing;
 
-    switch (column.kind) {
+    switch (kind) {
       case 'money':
         return html`<wc-money
           .amount=${Number(value)}
@@ -260,7 +272,8 @@ export class WcReportTable extends LitElement {
           align="end"
         ></wc-money>`;
       case 'percent':
-        return `${Number(value).toFixed(1)}%`;
+        // `{:.1}%`, tie and all — see `roundHalfEven`.
+        return `${roundHalfEven(Number(value), 1).toFixed(1)}%`;
       case 'count':
         return String(value);
       default:
@@ -279,7 +292,10 @@ export class WcReportTable extends LitElement {
       return html`
         <tr data-emphasis="section" data-tone=${row.tone ?? nothing}>
           <td class="label" colspan=${this.columns.length}>
-            ${this.renderValue(first, row.cells[first.key] ?? null)}
+            ${this.renderValue(
+              WcReportTable.kindOf(row, first),
+              row.cells[first.key] ?? null,
+            )}
           </td>
         </tr>
       `;
@@ -287,9 +303,10 @@ export class WcReportTable extends LitElement {
 
     // The separating space is a text node, not a margin: a screen reader reads
     // the text, and "Meals(50%)" is not what the report says.
-    const label = html`${this.renderValue(first, row.cells[first.key] ?? null)}${row.note
-      ? html`<span class="note"> ${row.note}</span>`
-      : nothing}`;
+    const label = html`${this.renderValue(
+      WcReportTable.kindOf(row, first),
+      row.cells[first.key] ?? null,
+    )}${row.note ? html`<span class="note"> ${row.note}</span>` : nothing}`;
 
     return html`
       <tr
@@ -306,7 +323,10 @@ export class WcReportTable extends LitElement {
         ${rest.map(
           (column) => html`
             <td class=${this.alignOf(column) === 'end' ? 'end' : ''}>
-              ${this.renderValue(column, row.cells[column.key] ?? null)}
+              ${this.renderValue(
+                WcReportTable.kindOf(row, column),
+                row.cells[column.key] ?? null,
+              )}
             </td>
           `,
         )}

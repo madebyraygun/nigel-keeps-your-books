@@ -8,15 +8,31 @@ const amountColumns: ReportColumn[] = [
   { key: 'amount', label: 'Amount', kind: 'moneyAbs' },
 ];
 
+/** The P&L amount column is signed; its expense band prints magnitudes. */
+const pnlColumns: ReportColumn[] = [
+  { key: 'name', label: 'Category', kind: 'text' },
+  { key: 'amount', label: 'Amount', kind: 'money' },
+];
+
+const magnitude = { amount: 'moneyAbs' } as const;
+
 const pnlRows: ReportTableRow[] = [
   { cells: { name: 'Income' }, emphasis: 'section' },
   { cells: { name: 'Client Services', amount: 8700 }, indent: 1 },
   { cells: { name: 'Interest', amount: 42.15 }, indent: 1 },
   { cells: { name: 'Total Income', amount: 8742.15 }, emphasis: 'subtotal' },
   { cells: { name: 'Expenses' }, emphasis: 'section' },
-  { cells: { name: 'Software & Subscriptions', amount: -169.97 }, indent: 1 },
-  { cells: { name: 'Bank & Merchant Fees', amount: -24 }, indent: 1 },
-  { cells: { name: 'Total Expenses', amount: -193.97 }, emphasis: 'subtotal' },
+  {
+    cells: { name: 'Software & Subscriptions', amount: -169.97 },
+    cellKinds: magnitude,
+    indent: 1,
+  },
+  { cells: { name: 'Bank & Merchant Fees', amount: -24 }, cellKinds: magnitude, indent: 1 },
+  {
+    cells: { name: 'Total Expenses', amount: -193.97 },
+    cellKinds: magnitude,
+    emphasis: 'subtotal',
+  },
 ];
 
 const netRow: ReportTableRow = {
@@ -61,8 +77,25 @@ const preview: Preview = {
       render: () => html`
         <wc-report-table
           caption="Profit and loss"
-          .columns=${amountColumns}
+          .columns=${pnlColumns}
           .rows=${[...pnlRows, netRow]}
+        ></wc-report-table>
+      `,
+    },
+    {
+      name: 'pnl at a loss',
+      render: () => html`
+        <wc-report-table
+          caption="Profit and loss"
+          .columns=${pnlColumns}
+          .rows=${[
+            ...pnlRows,
+            {
+              cells: { name: 'Net', amount: -4750 },
+              emphasis: 'total',
+              tone: 'expense',
+            },
+          ] satisfies ReportTableRow[]}
         ></wc-report-table>
       `,
     },
@@ -207,7 +240,7 @@ const preview: Preview = {
         <wc-report-table
           dense
           caption="Profit and loss"
-          .columns=${amountColumns}
+          .columns=${pnlColumns}
           .rows=${pnlRows}
         ></wc-report-table>
       `,

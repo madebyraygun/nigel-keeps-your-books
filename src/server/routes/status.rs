@@ -70,6 +70,10 @@ pub(crate) struct StatusResponse {
 /// database it just moved to rather than with a second shape that says the same
 /// thing.
 pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse> {
+    // Everything below describes one database, so the guard is taken before the
+    // path is read: a data-directory switch landing partway through would
+    // otherwise report one database's name under another's path.
+    let _gate = state.db_gate.read().await;
     let db_path = state.db_path();
     let initialized = db_path.exists();
     let encrypted = db::is_encrypted(&db_path)?;
@@ -78,7 +82,6 @@ pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse
     // Reading the company name means reading the database, which needs the key.
     let company_name = if initialized && !locked {
         let path = db_path.clone();
-        let _gate = state.db_gate.read().await;
         tokio::task::spawn_blocking(move || -> ApiResult<Option<String>> {
             let conn = db::get_connection(&path)?;
             Ok(db::get_metadata(&conn, "company_name"))
@@ -150,11 +153,12 @@ async fn unlock(
         return Ok(Json(UnlockResponse { locked: false }));
     }
 
-    let db_path = state.db_path();
     // try_unlock opens a connection and migrates: the file must not be swapped
-    // out from under it.
+    // out from under it, and the path is read under the guard so the key is
+    // never applied to a database the switch has already moved on from.
     let unlocked = {
         let _gate = state.db_gate.read().await;
+        let db_path = state.db_path();
         tokio::task::spawn_blocking(move || try_unlock(&db_path, request.password.expose()))
             .await
             .map_err(ApiError::internal)??

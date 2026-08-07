@@ -208,6 +208,21 @@ describe('FetchApiClient', () => {
     });
   });
 
+  describe('categorize', () => {
+    it('posts an empty body and reads both counts back', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ categorized: 12, stillFlagged: 3 }));
+      const result = await clientFor(fetchImpl).categorize();
+
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe('/api/categorize');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBeUndefined();
+      expect(result).toEqual({ categorized: 12, stillFlagged: 3 });
+    });
+  });
+
   describe('reports', () => {
     const wrapped = (report: unknown, granularity = 'monthAndYear') =>
       jsonResponse({ granularity, report });

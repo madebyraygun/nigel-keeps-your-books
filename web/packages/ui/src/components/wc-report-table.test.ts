@@ -87,6 +87,33 @@ describe('wc-report-table', () => {
     expect(query(el, 'wc-money')).toBeNull();
   });
 
+  it('rounds a percent tie the way `{:.1}` does', async () => {
+    const el = await mount({
+      columns: [
+        { key: 'name', label: 'Category', kind: 'text' },
+        { key: 'pct', label: '%', kind: 'percent' },
+      ],
+      rows: [{ cells: { name: 'Software', pct: 12.25 } }],
+    });
+    expect(all(el, 'tbody td').map((td) => td.textContent?.trim())).toEqual([
+      'Software',
+      '12.2%',
+    ]);
+  });
+
+  it('lets a row override the column format', async () => {
+    // The P&L's expense band, printed as a magnitude in a signed column.
+    const el = await mount({
+      rows: [
+        { cells: { name: 'Client Services', amount: 8700 } },
+        { cells: { name: 'Fees', amount: -24 }, cellKinds: { amount: 'moneyAbs' } },
+      ],
+    });
+    const money = all<WcMoney>(el, 'wc-money');
+    expect(money.map((m) => m.amount)).toEqual([8700, 24]);
+    expect(money.map((m) => m.variant)).toEqual(['signed', 'plain']);
+  });
+
   it('spans a section row across the table', async () => {
     const el = await mount({
       rows: [{ cells: { name: 'Income' }, emphasis: 'section' }],

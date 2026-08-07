@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import './wc-reconcile-form.js';
 import {
   EMPTY_RECONCILE_FORM,
@@ -75,13 +75,31 @@ describe('parseStatementBalance', () => {
 
 describe('formatStatementBalance', () => {
   it('groups and pads to cents', () => {
-    expect(formatStatementBalance(4928.1, 'en-US')).toBe('4,928.10');
-    expect(formatStatementBalance(-250, 'en-US')).toBe('-250.00');
+    expect(formatStatementBalance(4928.1)).toBe('4,928.10');
+    expect(formatStatementBalance(-250)).toBe('-250.00');
   });
 
   it('round-trips back through the parser', () => {
-    const formatted = formatStatementBalance(1234567.89, 'en-US');
+    const formatted = formatStatementBalance(1234567.89);
     expect(parseStatementBalance(formatted)).toBe(1234567.89);
+  });
+
+  it('round-trips where the runtime locale writes decimals with a comma', () => {
+    // On de-DE the runtime default would render 500.25 as "500,25", which the
+    // parser — which strips commas as separators — reads back as 50025.
+    const NumberFormat = Intl.NumberFormat;
+    const stub = vi
+      .spyOn(Intl, 'NumberFormat')
+      .mockImplementation(((locale?: string, options?: Intl.NumberFormatOptions) =>
+        new NumberFormat(locale ?? 'de-DE', options)) as unknown as typeof Intl.NumberFormat);
+
+    try {
+      const formatted = formatStatementBalance(500.25);
+      expect(formatted).toBe('500.25');
+      expect(parseStatementBalance(formatted)).toBe(500.25);
+    } finally {
+      stub.mockRestore();
+    }
   });
 });
 

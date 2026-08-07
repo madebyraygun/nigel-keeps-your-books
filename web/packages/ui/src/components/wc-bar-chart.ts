@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import './wc-spinner.js';
+import { roundHalfEven } from './round-half-even.js';
 
 /** One period's pair of bars. Both figures are positive magnitudes. */
 export interface BarBucket {
@@ -206,10 +207,13 @@ export class WcBarChart extends LitElement {
   };
 
   private money(amount: number): string {
-    return new Intl.NumberFormat(this.locale, {
+    const format = new Intl.NumberFormat(this.locale, {
       style: 'currency',
       currency: this.currency,
-    }).format(amount);
+    });
+    return format.format(
+      roundHalfEven(amount, format.resolvedOptions().maximumFractionDigits ?? 2),
+    );
   }
 
   /** What a screen reader hears before it reaches the table. */
