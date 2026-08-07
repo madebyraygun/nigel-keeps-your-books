@@ -382,6 +382,65 @@ through:
 - [ ] A multi-page register repeats its column headings
 - [ ] Nothing clipped at the right edge, at A4 and at Letter
 
+## The managers
+
+`#/accounts`, `#/categories` and `#/rules` are one screen three times over: a
+list, an Add button, per-row Edit and Delete. They share `wc-manager-layout`,
+`wc-manager-table` and `wc-manager-dialog`, and differ only in their columns and
+their form. Together they are a superset of the TUI: `rules_manager.rs` can list
+and delete rules, and nothing outside `nigel rules add` can write one.
+
+**Editing happens in a dialog, not an inline panel.** The rule form is tall —
+pattern, match type, category, vendor, priority, and a live preview of what the
+pattern matches — and inline it would push the list it is about off the screen.
+Delete is already a dialog, so this is one overlay idiom per screen rather than
+two, and `wa-dialog` brings the focus trap and the Esc handling with it.
+
+**A guardrail is rendered from its reason code, never from the server's
+sentence.** `screens/manager-errors.ts` is the whole table: `has_transactions`,
+`has_active_rules`, `duplicate_name` and `already_inactive` each map to a string
+written here, with the count formatted here. `docs/api.md` puts it plainly —
+"a client can explain the block in its own words instead of parsing ours" — and
+those strings are then the only thing a translation would have to touch. Two
+deliberate exceptions: a `400` renders the server's message, because
+`Invalid regex: unclosed group` names the offending value and anything we
+re-derived would drift from the server's actual rules; and an unrecognized 409
+reason falls back to the message rather than to an invented sentence.
+
+**Where the message lands depends on what was refused.** A failed save renders
+inside the dialog, beside the field that caused it. A failed *delete* renders in
+the layout's own alert region, because `confirmDialog()` resolves and removes
+itself before the request is even sent — there is no dialog left to render into,
+and a toast would take the count away before it had been read.
+
+**Every mutation refetches the list.** No optimistic splicing: a priority edit
+reorders the rules, a rename or a type change reorders the categories, and a
+category rename changes the name shown on every rule row. The lists are
+unpaginated single-table queries against a local server, so the refetch buys
+three ways of being quietly wrong for one round trip.
+
+Per screen:
+
+- **Accounts.** No transaction-count column — `GET /api/accounts` does not carry
+  one, and a screen may not add an endpoint; the number appears in the blocked
+  delete instead, where it is actionable. Rename is the only edit, because that
+  is all `PATCH /api/accounts/:id` accepts. The four-digit rule on Last four is
+  enforced here and only here: `account_manager.rs` has it, the route does not.
+- **Categories.** All four fields, income/expense as radios, and the K-1 form
+  line documented next to the field with a datalist built at runtime from the
+  form lines the chart of accounts already uses. A value the worksheet will not
+  recognize gets a warning, never a block — `form_line` is free text everywhere
+  else, and `resolve_k1_mapping` has defined behaviour for a value it does not
+  know. An edit sends only what changed, since an all-omitted `PATCH` is a 400.
+- **Rules.** Priority order is the semantics, so the list is never re-sorted.
+  The pattern box drives `POST /api/rules/test` through the same 250 ms debounce
+  the review screen uses, into the same `wc-rule-test-preview`; a match-type
+  change fires immediately, because a click is a decision rather than typing.
+  There is no client-side regex validation: JavaScript's `RegExp` and the Rust
+  `regex` crate accept different languages, so a local check would be wrong in
+  both directions. `#/rules?categoryId=12` filters the list client-side, which is
+  where the categories screen's "3 active rules assign this category" points.
+
 ## Boot sequence
 
 `nigel-app` fetches `/api/status` and nothing else until it knows where it
