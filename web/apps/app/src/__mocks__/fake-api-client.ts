@@ -1,5 +1,22 @@
 import type { ApiClient } from '../api/client.js';
-import type { PingResponse, StatusResponse, UnlockResponse } from '../api/types.js';
+import type {
+  AppSettings,
+  ChangePasswordRequest,
+  CompanyNameResponse,
+  PasswordStateResponse,
+  PingResponse,
+  RemovePasswordRequest,
+  SetPasswordRequest,
+  StatusResponse,
+  UnlockResponse,
+  UpdateAppSettingsRequest,
+} from '../api/types.js';
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  userName: 'Tester',
+  updateCheck: true,
+  lastUpdateCheck: null,
+};
 
 export const UNLOCKED_STATUS: StatusResponse = {
   initialized: true,
@@ -47,5 +64,61 @@ export class FakeApiClient implements ApiClient {
     if (this.unlockError) throw this.unlockError;
     this.status = { ...this.status, locked: false };
     return { locked: false };
+  }
+
+  // -- settings -------------------------------------------------------------
+  //
+  // These record the method name only. `unlock` above records its argument
+  // because the boot-order test asserts on it; there is no reason to put a
+  // password anywhere else, even in a test double.
+
+  appSettings: AppSettings = DEFAULT_APP_SETTINGS;
+  settingsError: Error | null = null;
+
+  async getAppSettings(): Promise<AppSettings> {
+    this.calls.push('getAppSettings');
+    if (this.settingsError) throw this.settingsError;
+    return this.appSettings;
+  }
+
+  async updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings> {
+    this.calls.push('updateAppSettings');
+    if (this.settingsError) throw this.settingsError;
+    this.appSettings = { ...this.appSettings, updateCheck: input.updateCheck };
+    return this.appSettings;
+  }
+
+  async setCompanyName(name: string): Promise<CompanyNameResponse> {
+    this.calls.push('setCompanyName');
+    if (this.settingsError) throw this.settingsError;
+    this.status = { ...this.status, companyName: name };
+    return { companyName: name };
+  }
+
+  async setDataDir(path: string): Promise<StatusResponse> {
+    this.calls.push('setDataDir');
+    if (this.settingsError) throw this.settingsError;
+    this.status = { ...this.status, dataDir: path };
+    return this.status;
+  }
+
+  async setPassword(_input: SetPasswordRequest): Promise<PasswordStateResponse> {
+    this.calls.push('setPassword');
+    if (this.settingsError) throw this.settingsError;
+    this.status = { ...this.status, encrypted: true, locked: false };
+    return { encrypted: true, locked: false };
+  }
+
+  async changePassword(_input: ChangePasswordRequest): Promise<PasswordStateResponse> {
+    this.calls.push('changePassword');
+    if (this.settingsError) throw this.settingsError;
+    return { encrypted: true, locked: false };
+  }
+
+  async removePassword(_input: RemovePasswordRequest): Promise<PasswordStateResponse> {
+    this.calls.push('removePassword');
+    if (this.settingsError) throw this.settingsError;
+    this.status = { ...this.status, encrypted: false, locked: false };
+    return { encrypted: false, locked: false };
   }
 }

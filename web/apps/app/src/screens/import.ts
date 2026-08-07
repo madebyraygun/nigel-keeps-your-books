@@ -1,7 +1,9 @@
 import { html, type TemplateResult } from 'lit';
 import '@nigel/ui';
 
-export function renderImport(): TemplateResult {
+import type { ScreenContext } from './context.js';
+
+export function renderImport(_ctx: ScreenContext): TemplateResult {
   return html`
     <wc-empty-state
       icon="wc-icon-import"

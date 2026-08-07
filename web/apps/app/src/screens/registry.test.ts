@@ -8,6 +8,14 @@ import {
   type ScreenId,
 } from './registry.js';
 import { ICON_TAGS } from '@nigel/ui';
+import { FakeApiClient } from '../__mocks__/fake-api-client.js';
+import type { ScreenContext } from './context.js';
+
+const ctx: ScreenContext = {
+  client: new FakeApiClient(),
+  params: new URLSearchParams(),
+  navigate: () => {},
+};
 
 const ALL: ScreenId[] = [
   'dashboard',
@@ -49,7 +57,7 @@ describe('screen registry', () => {
 
   it('renders a template for each screen', () => {
     for (const def of SCREENS.values()) {
-      expect(def.render(), `${def.id} render`).toBeTruthy();
+      expect(def.render(ctx), `${def.id} render`).toBeTruthy();
     }
   });
 

@@ -1,7 +1,9 @@
 import { html, type TemplateResult } from 'lit';
 import '@nigel/ui';
 
-export function renderReconcile(): TemplateResult {
+import type { ScreenContext } from './context.js';
+
+export function renderReconcile(_ctx: ScreenContext): TemplateResult {
   return html`
     <wc-empty-state
       icon="wc-icon-reconcile"

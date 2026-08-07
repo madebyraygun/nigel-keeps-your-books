@@ -48,6 +48,7 @@ export default defineConfig({
     setupFiles: ['./src/test-setup.ts'],
     environmentMatchGlobs: [
       ['**/components/**', 'jsdom'],
+      ['**/screens/**', 'jsdom'],
       ['**/state/**', 'jsdom'],
       ['**/api/**', 'jsdom'],
     ],

@@ -1,6 +1,8 @@
 import type { TemplateResult } from 'lit';
 import type { NavItem } from '@nigel/ui';
 
+import type { ScreenContext } from './context.js';
+
 import { renderDashboard } from './dashboard.js';
 import { renderRegister } from './register.js';
 import { renderReview } from './review.js';
@@ -38,7 +40,12 @@ export interface ScreenDef {
   icon: string;
   /** Whether the screen appears in the sidebar. */
   inNav: boolean;
-  render: () => TemplateResult;
+  /**
+   * Render the screen. The context carries the api client, the route's query
+   * parameters, and navigation — everything a screen needs from the shell,
+   * handed over rather than imported, so a screen can be driven by a fake.
+   */
+  render: (ctx: ScreenContext) => TemplateResult;
 }
 
 /**
