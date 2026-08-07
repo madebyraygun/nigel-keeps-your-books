@@ -10,3 +10,4 @@ export { radiusCss } from './tokens/radius.js';
 export { shadowCss } from './tokens/shadow.js';
 export { motionCss } from './tokens/motion.js';
 export { globalCss } from './global.js';
+export { printCss } from './print.js';

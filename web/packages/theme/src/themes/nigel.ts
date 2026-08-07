@@ -7,13 +7,15 @@ import { radiusCss } from '../tokens/radius.js';
 import { shadowCss } from '../tokens/shadow.js';
 import { motionCss } from '../tokens/motion.js';
 import { globalCss } from '../global.js';
+import { printCss } from '../print.js';
 
 /**
  * The composed token sheet.
  *
  * Order is load bearing: light defaults first, then the dark overrides (whose
  * higher-specificity selectors have to come later to win), then the `::part()`
- * overrides last so they can read every token defined above them.
+ * overrides so they can read every token defined above them, and the print
+ * sheet last of all — it has to win over everything, including dark mode.
  */
 export const nigelTheme = css`
   ${colorCss}
@@ -25,4 +27,5 @@ export const nigelTheme = css`
   ${motionCss}
   ${colorDarkCss}
   ${globalCss}
+  ${printCss}
 `;
