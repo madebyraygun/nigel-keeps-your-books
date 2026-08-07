@@ -16,6 +16,11 @@ function clientFor(fetchImpl: typeof fetch): FetchApiClient {
   return new FetchApiClient({ fetchImpl });
 }
 
+/** A fetch that answers every POST with an empty object. */
+function jsonPost() {
+  return vi.fn().mockResolvedValue(jsonResponse({}));
+}
+
 describe('FetchApiClient', () => {
   beforeEach(() => {
     appLocked.set(false);
@@ -86,17 +91,18 @@ describe('FetchApiClient', () => {
     });
 
     it('keeps an unrecognised code as unknown without losing the original', async () => {
-      // 31.7 introduces payload_too_large; a client built before it must not
-      // crash or mistype the error when a newer server sends one.
+      // A server newer than this client can name a code the client has never
+      // heard of. That must not crash or be mistyped as one we do know — the
+      // raw string stays reachable so a caller can still branch on it.
       const fetchImpl = vi
         .fn()
-        .mockResolvedValue(envelope('payload_too_large', 'too big', undefined, 413));
+        .mockResolvedValue(envelope('teapot_overheated', 'too hot', undefined, 418));
 
       const error = await clientFor(fetchImpl).getStatus().catch((e) => e);
 
       expect(error.code).toBe('unknown');
-      expect(error.rawCode).toBe('payload_too_large');
-      expect(error.status).toBe(413);
+      expect(error.rawCode).toBe('teapot_overheated');
+      expect(error.status).toBe(418);
     });
 
     it('derives a code from the status when the body is not an envelope', async () => {
@@ -284,6 +290,106 @@ describe('FetchApiClient', () => {
         ApiError,
       );
       expect(appLocked.get()).toBe(true);
+    });
+  });
+
+  describe('imports', () => {
+    it('uploads the file as multipart, letting the browser set the boundary', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ uploadId: 'a1', filename: 'x.csv', size: 9 }));
+      const file = new File(['date,desc,amount'], 'april.csv');
+
+      const answer = await clientFor(fetchImpl).uploadImport(file);
+
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe('/api/imports/upload');
+      expect(init.method).toBe('POST');
+      expect(init.body).toBeInstanceOf(FormData);
+      // jsdom's FormData re-wraps the blob, so identity is not preserved;
+      // what matters is that the name the server records survives.
+      const sent = (init.body as FormData).get('file') as File;
+      expect(sent.name).toBe('april.csv');
+      // Naming the content type here would omit the multipart boundary, which
+      // only the browser can generate, and the server could not parse the body.
+      expect(init.headers).toBeUndefined();
+      expect(answer.uploadId).toBe('a1');
+    });
+
+    it('still sends the JSON content type for every other call', async () => {
+      const fetchImpl = jsonPost();
+      await clientFor(fetchImpl).previewImport({ uploadId: 'a1', account: 'Checking' });
+
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe('/api/imports/preview');
+      expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+      expect(JSON.parse(init.body)).toEqual({ uploadId: 'a1', account: 'Checking' });
+    });
+
+    it('posts the confirm body including a profile to save', async () => {
+      const fetchImpl = jsonPost();
+      await clientFor(fetchImpl).confirmImport({
+        uploadId: 'a1',
+        account: 'Checking',
+        mapping: { dateCol: 0, descCol: 1, amountCol: 2, dateFormat: '%m/%d/%Y' },
+        saveProfile: 'chase',
+      });
+
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/imports/confirm');
+      expect(JSON.parse(fetchImpl.mock.calls[0][1].body).saveProfile).toBe('chase');
+    });
+
+    it('reads the format and profile lists', async () => {
+      const formats = [{ key: 'bofa_checking', name: 'BofA', accountTypes: ['checking'] }];
+      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(formats));
+      expect(await clientFor(fetchImpl).getImportFormats()).toEqual(formats);
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/imports/formats');
+
+      const profiles = vi.fn().mockResolvedValue(jsonResponse([]));
+      await clientFor(profiles).getCsvProfiles();
+      expect(profiles.mock.calls[0][0]).toBe('/api/csv-profiles');
+    });
+
+    it('normalizes a 413 to payload_too_large', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(envelope('payload_too_large', 'Too big.', undefined, 413));
+
+      const error = await clientFor(fetchImpl)
+        .uploadImport(new File([''], 'x.csv'))
+        .catch((e: unknown) => e as ApiError);
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).code).toBe('payload_too_large');
+      expect((error as ApiError).status).toBe(413);
+    });
+
+    it('recognizes an expired upload among other 404s', async () => {
+      const expired = new ApiError({
+        code: 'not_found',
+        rawCode: 'not_found',
+        message: 'gone',
+        status: 404,
+        details: { reason: 'upload_not_found' },
+      });
+      expect(expired.isUploadExpired).toBe(true);
+
+      const missingAccount = new ApiError({
+        code: 'not_found',
+        rawCode: 'not_found',
+        message: 'no account',
+        status: 404,
+      });
+      expect(missingAccount.isUploadExpired).toBe(false);
+
+      const otherStatus = new ApiError({
+        code: 'bad_request',
+        rawCode: 'bad_request',
+        message: 'no',
+        status: 400,
+        details: { reason: 'upload_not_found' },
+      });
+      expect(otherStatus.isUploadExpired).toBe(false);
     });
   });
 });

@@ -12,8 +12,14 @@ import type {
   CategoryRow,
   ChangePasswordRequest,
   CompanyNameResponse,
+  ConfirmImportRequest,
+  CsvProfile,
   FlaggedTransaction,
   FlaggedTxn,
+  ImportConfirmation,
+  ImporterFormat,
+  ImportPreview,
+  ImportRequest,
   PasswordStateResponse,
   PingResponse,
   PnlReport,
@@ -31,7 +37,10 @@ import type {
   TransactionPatch,
   UnlockResponse,
   UpdateAppSettingsRequest,
+  UploadResponse,
 } from '../api/types.js';
+import { UPLOAD_NOT_FOUND } from '../api/types.js';
+import { ApiError } from '../api/client.js';
 
 /**
  * The query a register request would carry, in a stable key order so a test
@@ -65,6 +74,23 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   userName: 'Tester',
   updateCheck: true,
   lastUpdateCheck: null,
+};
+
+export const EMPTY_IMPORT_PREVIEW: ImportPreview = {
+  imported: 0,
+  skipped: 0,
+  malformed: 0,
+  duplicateFile: false,
+  sample: [],
+  format: null,
+  importId: null,
+};
+
+export const EMPTY_IMPORT_CONFIRMATION: ImportConfirmation = {
+  ...EMPTY_IMPORT_PREVIEW,
+  categorized: 0,
+  stillFlagged: 0,
+  snapshot: '/tmp/nigel/snapshots/pre-import-20250401-120000.db',
 };
 
 export const UNLOCKED_STATUS: StatusResponse = {
@@ -288,6 +314,102 @@ export class FakeApiClient implements ApiClient {
     this.calls.push(`testRule:${JSON.stringify(input)}`);
     if (this.ruleTestError) throw this.ruleTestError;
     return this.ruleTest;
+  }
+
+  // -- imports --------------------------------------------------------------
+  //
+  // The upload really is remembered and really is consumed: a confirmed import
+  // drops its upload, so a screen that reuses a spent id gets the same 404 the
+  // server would give it. That is the behaviour the expired-upload retry is
+  // built on, and a fake that only logged calls could not exercise it.
+
+  importFormats: ImporterFormat[] = [];
+  csvProfiles: CsvProfile[] = [];
+  importPreview: ImportPreview = { ...EMPTY_IMPORT_PREVIEW };
+  importConfirmation: ImportConfirmation = { ...EMPTY_IMPORT_CONFIRMATION };
+
+  uploadError: Error | null = null;
+  previewError: Error | null = null;
+  confirmError: Error | null = null;
+  formatsError: Error | null = null;
+  csvProfilesError: Error | null = null;
+
+  /** Thrown once, then cleared — for the retry paths that must recover. */
+  previewErrorOnce: Error | null = null;
+  confirmErrorOnce: Error | null = null;
+
+  /** Upload ids handed out in order, so a test can name the one it expects. */
+  private nextUploadId = 1;
+  /** Ids the server would still recognize. */
+  readonly liveUploads = new Set<string>();
+
+  async uploadImport(file: File): Promise<UploadResponse> {
+    // The name and size only — never the bytes, which no assertion wants and
+    // which would make a failure message unreadable.
+    this.calls.push(`uploadImport:${file.name}`);
+    if (this.uploadError) throw this.uploadError;
+
+    const uploadId = `upload-${this.nextUploadId++}`;
+    this.liveUploads.add(uploadId);
+    return { uploadId, filename: file.name, size: file.size };
+  }
+
+  async previewImport(input: ImportRequest): Promise<ImportPreview> {
+    this.calls.push(`previewImport:${JSON.stringify(input)}`);
+    if (this.previewErrorOnce) {
+      const error = this.previewErrorOnce;
+      this.previewErrorOnce = null;
+      throw error;
+    }
+    if (this.previewError) throw this.previewError;
+    this.assertUploadLives(input.uploadId);
+
+    return { ...this.importPreview };
+  }
+
+  async confirmImport(input: ConfirmImportRequest): Promise<ImportConfirmation> {
+    this.calls.push(`confirmImport:${JSON.stringify(input)}`);
+    if (this.confirmErrorOnce) {
+      const error = this.confirmErrorOnce;
+      this.confirmErrorOnce = null;
+      throw error;
+    }
+    if (this.confirmError) throw this.confirmError;
+    this.assertUploadLives(input.uploadId);
+
+    // A confirmed upload is deleted server-side, so reusing the id must fail.
+    this.liveUploads.delete(input.uploadId);
+    if (input.saveProfile && input.mapping) {
+      this.csvProfiles = [
+        ...this.csvProfiles.filter((profile) => profile.name !== input.saveProfile),
+        { name: input.saveProfile, config: input.mapping },
+      ];
+    }
+
+    return { ...this.importConfirmation };
+  }
+
+  async getImportFormats(): Promise<ImporterFormat[]> {
+    this.calls.push('getImportFormats');
+    if (this.formatsError) throw this.formatsError;
+    return this.importFormats;
+  }
+
+  async getCsvProfiles(): Promise<CsvProfile[]> {
+    this.calls.push('getCsvProfiles');
+    if (this.csvProfilesError) throw this.csvProfilesError;
+    return this.csvProfiles;
+  }
+
+  private assertUploadLives(uploadId: string): void {
+    if (this.liveUploads.has(uploadId)) return;
+    throw new ApiError({
+      code: 'not_found',
+      rawCode: 'not_found',
+      message: 'That upload is no longer here. Choose the file again.',
+      status: 404,
+      details: { reason: UPLOAD_NOT_FOUND },
+    });
   }
 
   // -- settings -------------------------------------------------------------

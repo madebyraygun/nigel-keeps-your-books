@@ -5,9 +5,8 @@
  * names here match the wire exactly. `docs/api.md` is the contract; every API
  * task keeps this file in step with it in the same commit.
  *
- * Today this covers the endpoints that answer while the database is locked and
- * the settings surface. Read, write, import and export types arrive with their
- * own tasks.
+ * Export types arrive with their own task; everything else the SPA reaches for
+ * is here.
  */
 
 /** `GET /api/ping` */
@@ -302,10 +301,10 @@ export interface RuleTestResult {
 }
 
 /**
- * Every error code the server can currently emit. New codes appear as the API
- * grows (31.7 adds `payload_too_large`), so the client normalizes anything it
- * does not recognize to `unknown` rather than lying about the type — the raw
- * string stays available on `ApiError.rawCode`.
+ * Every error code the server can emit. The client normalizes anything it does
+ * not recognize to `unknown` rather than lying about the type — the raw string
+ * stays available on `ApiError.rawCode`, so a code the server learns before
+ * this list does still reaches a caller that wants to branch on it.
  */
 export const API_ERROR_CODES = [
   'bad_request',
@@ -315,6 +314,7 @@ export const API_ERROR_CODES = [
   'not_found',
   'conflict',
   'locked',
+  'payload_too_large',
   'internal',
   'feature_disabled',
 ] as const;
@@ -340,3 +340,94 @@ export interface InvalidPasswordDetails {
   attemptsRemaining: number;
   retryAfterMs: number;
 }
+
+// -- imports ----------------------------------------------------------------
+
+/** `POST /api/imports/upload` — the file is parked, nothing is parsed yet. */
+export interface UploadResponse {
+  uploadId: string;
+  /** The name as stored, reduced to safe characters. */
+  filename: string;
+  size: number;
+}
+
+/** Column positions for a CSV no built-in importer can read. */
+export interface GenericCsvConfig {
+  dateCol: number;
+  descCol: number;
+  amountCol: number;
+  /** A chrono format string, e.g. `%m/%d/%Y`. */
+  dateFormat: string;
+}
+
+/** One built-in importer. Gusto is absent from builds without its feature. */
+export interface ImporterFormat {
+  key: string;
+  name: string;
+  accountTypes: string[];
+}
+
+/** A saved column mapping, addressed by the name `format` takes. */
+export interface CsvProfile {
+  name: string;
+  config: GenericCsvConfig;
+}
+
+/** One parsed row, as the preview reports it. Mirrors `ParsedRow`. */
+export interface ImportSampleRow {
+  date: string;
+  description: string;
+  amount: number;
+}
+
+/**
+ * The body preview and confirm share.
+ *
+ * `format` and `mapping` are mutually exclusive — sending both is a 400 rather
+ * than a guess. Neither means "detect from the account type and the file".
+ */
+export interface ImportRequest {
+  uploadId: string;
+  account: string;
+  format?: string;
+  mapping?: GenericCsvConfig;
+}
+
+export interface ConfirmImportRequest extends ImportRequest {
+  /** Remembers `mapping` under this name; requires one. */
+  saveProfile?: string;
+}
+
+/**
+ * `POST /api/imports/preview` — what an import *would* do, having written
+ * nothing at all.
+ *
+ * `format` is what actually resolved: a built-in key, a profile name, or
+ * `GENERIC_FORMAT`. It is null only for a duplicate file, which is answered
+ * before a format is resolved.
+ */
+export interface ImportPreview {
+  imported: number;
+  skipped: number;
+  malformed: number;
+  duplicateFile: boolean;
+  sample: ImportSampleRow[];
+  format: string | null;
+  /** Always null from preview; the `imports` row id after a confirm. */
+  importId: number | null;
+}
+
+/** `POST /api/imports/confirm` — the preview shape plus what the write did. */
+export interface ImportConfirmation extends ImportPreview {
+  categorized: number;
+  /** The whole ledger's flagged count, not just this import's. */
+  stillFlagged: number;
+  /** Absolute path of the pre-import snapshot. */
+  snapshot: string;
+}
+
+/** What `format` reads back as when an inline `mapping` was used. */
+export const GENERIC_FORMAT = 'generic';
+
+/** `details.reason` distinguishing an expired upload from any other 404. */
+export const UPLOAD_NOT_FOUND = 'upload_not_found';

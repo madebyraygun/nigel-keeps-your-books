@@ -1,6 +1,7 @@
 import { signal, type Signal } from '../mixins/signal-watcher.js';
 import {
   isKnownApiErrorCode,
+  UPLOAD_NOT_FOUND,
   type Account,
   type ApiErrorCode,
   type ApiErrorEnvelope,
@@ -10,8 +11,14 @@ import {
   type CategoryRow,
   type ChangePasswordRequest,
   type CompanyNameResponse,
+  type ConfirmImportRequest,
+  type CsvProfile,
   type FlaggedTransaction,
   type FlaggedTxn,
+  type ImportConfirmation,
+  type ImporterFormat,
+  type ImportPreview,
+  type ImportRequest,
   type InvalidPasswordDetails,
   type PasswordStateResponse,
   type PingResponse,
@@ -30,6 +37,7 @@ import {
   type TransactionPatch,
   type UnlockResponse,
   type UpdateAppSettingsRequest,
+  type UploadResponse,
 } from './types.js';
 
 /**
@@ -51,6 +59,7 @@ const STATUS_CODES: Record<number, ApiErrorCode> = {
   403: 'forbidden',
   404: 'not_found',
   409: 'conflict',
+  413: 'payload_too_large',
   423: 'locked',
   500: 'internal',
   501: 'feature_disabled',
@@ -91,6 +100,17 @@ export class ApiError extends Error {
    */
   get isUnauthorized(): boolean {
     return this.status === 401 && this.code !== 'invalid_password';
+  }
+
+  /**
+   * An upload that has expired or was never there, as opposed to any other
+   * 404. Worth distinguishing because it is the one 404 a client can fix by
+   * itself: send the bytes again and carry on.
+   */
+  get isUploadExpired(): boolean {
+    if (this.status !== 404) return false;
+    const details = this.details as { reason?: unknown } | undefined;
+    return details?.reason === UPLOAD_NOT_FOUND;
   }
 
   invalidPasswordDetails(): InvalidPasswordDetails | null {
@@ -155,6 +175,21 @@ export interface ApiClient {
   undoReview(id: number, input: ReviewUndoRequest): Promise<RegisterRow>;
   /** A dry run against real descriptions; writes nothing. */
   testRule(input: RuleTestRequest): Promise<RuleTestResult>;
+
+  /**
+   * Park a statement on the server. Deliberately no progress callback: `fetch`
+   * cannot report upload progress, and promising it here would commit every
+   * future implementation to producing something it may not have. A client
+   * that can measure it adds an options object without breaking this one.
+   */
+  uploadImport(file: File): Promise<UploadResponse>;
+  /** A dry run: reports what an import would do, having written nothing. */
+  previewImport(input: ImportRequest): Promise<ImportPreview>;
+  /** Snapshot, import, categorize — the sequence the TUI has always used. */
+  confirmImport(input: ConfirmImportRequest): Promise<ImportConfirmation>;
+  /** The built-in importers this build has; Gusto depends on a cargo feature. */
+  getImportFormats(): Promise<ImporterFormat[]>;
+  getCsvProfiles(): Promise<CsvProfile[]>;
 
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings>;
@@ -317,6 +352,28 @@ export class FetchApiClient implements ApiClient {
     return this.request<RuleTestResult>('POST', '/rules/test', input);
   }
 
+  uploadImport(file: File): Promise<UploadResponse> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return this.request<UploadResponse>('POST', '/imports/upload', form);
+  }
+
+  previewImport(input: ImportRequest): Promise<ImportPreview> {
+    return this.request<ImportPreview>('POST', '/imports/preview', input);
+  }
+
+  confirmImport(input: ConfirmImportRequest): Promise<ImportConfirmation> {
+    return this.request<ImportConfirmation>('POST', '/imports/confirm', input);
+  }
+
+  getImportFormats(): Promise<ImporterFormat[]> {
+    return this.request<ImporterFormat[]>('GET', '/imports/formats');
+  }
+
+  getCsvProfiles(): Promise<CsvProfile[]> {
+    return this.request<CsvProfile[]>('GET', '/csv-profiles');
+  }
+
   setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse> {
     return this.request<PasswordStateResponse>('POST', '/settings/password/set', input);
   }
@@ -338,6 +395,11 @@ export class FetchApiClient implements ApiClient {
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    // A FormData body carries its own content type, and only the browser can
+    // generate the multipart boundary that belongs with it. Naming the header
+    // here would send a body the server cannot parse.
+    const isForm = body instanceof FormData;
+
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -346,8 +408,8 @@ export class FetchApiClient implements ApiClient {
         // proxy the browser's origin is the vite one, where /auth set the
         // cookie, so same-origin is right in both deployments.
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        headers: isForm ? undefined : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
       });
     } catch (cause) {
       throw new ApiError({
