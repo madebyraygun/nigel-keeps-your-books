@@ -151,6 +151,27 @@ export class WcIconChevronRight extends WcIconBase {
   }
 }
 
+@customElement('wc-icon-plus')
+export class WcIconPlus extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M12 5v14M5 12h14"/>`;
+  }
+}
+
+@customElement('wc-icon-edit')
+export class WcIconEdit extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M4 20h4l10-10-4-4L4 16z"/><path d="M14 6l4 4"/>`;
+  }
+}
+
+@customElement('wc-icon-trash')
+export class WcIconTrash extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>`;
+  }
+}
+
 /** Every tag this module registers, for previews and the registry's icon check. */
 export const ICON_TAGS = [
   'wc-icon-dashboard',
@@ -173,6 +194,9 @@ export const ICON_TAGS = [
   'wc-icon-download',
   'wc-icon-chevron-left',
   'wc-icon-chevron-right',
+  'wc-icon-plus',
+  'wc-icon-edit',
+  'wc-icon-trash',
 ] as const;
 
 export type IconTag = (typeof ICON_TAGS)[number];
@@ -199,5 +223,8 @@ declare global {
     'wc-icon-download': WcIconDownload;
     'wc-icon-chevron-left': WcIconChevronLeft;
     'wc-icon-chevron-right': WcIconChevronRight;
+    'wc-icon-plus': WcIconPlus;
+    'wc-icon-edit': WcIconEdit;
+    'wc-icon-trash': WcIconTrash;
   }
 }
