@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-08-06 22:10'
-updated_date: '2026-08-07 00:03'
+updated_date: '2026-08-07 00:51'
 labels:
   - enhancement
 dependencies: []
@@ -59,7 +59,7 @@ This intentionally changes existing `--account` export output, so that both filt
 - [x] #7 Update test coverage (register query unit tests + CLI integration tests, covering export header and filename for --account as well as the new category flags)
 - [x] #8 Create or update documentation (README, CLAUDE.md Commands), making sure to remove any out of date information
 - [x] #9 All linting checks pass
-- [ ] #10 **IMPORTANT**: Any PRs created from this issue must be created as DRAFTS until manually reviewed by the user
+- [x] #10 **IMPORTANT**: Any PRs created from this issue must be created as DRAFTS until manually reviewed by the user
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -85,6 +85,8 @@ This intentionally changes existing `--account` export output, so that both filt
 - Moved `date_range_label` out of the pdf-gated cli/export.rs into cli/report/mod.rs so text exports can use it, and corrected its no-date-filter case: it returned "FY <current year>" for reports that actually span every year in the database. It now returns "All dates". This also affects the existing pnl/tax/cashflow PDF headers.
 - `report register`'s interactive header now lists year alongside the other filters, matching `browse register`; previously account suppressed the year entirely.
 - Verified end-to-end against demo data: filtered text and PDF export headers and filenames, uncategorized selection, unknown-category exit code, clap conflict message, and the browse TUI footer captured in a pty.
+
+Draft PR: https://github.com/madebyraygun/nigel-keeps-your-books/pull/181
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
