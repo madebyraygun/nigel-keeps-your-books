@@ -150,7 +150,15 @@ describe('nigel-app', () => {
       await new Promise((r) => setTimeout(r, 0));
       await el.updateComplete;
 
-      expect(client.calls).toEqual(['getStatus', 'unlock:hunter2', 'getStatus']);
+      // A prefix rather than the whole log: once the shell exists the screen
+      // behind it starts loading its own data, and pinning the exact tail here
+      // would fail for every screen that ever fetches anything. What this test
+      // is about is the order of the first three — nothing before the unlock.
+      expect(client.calls.slice(0, 3)).toEqual([
+        'getStatus',
+        'unlock:hunter2',
+        'getStatus',
+      ]);
       expect(shell(el)).toBeTruthy();
     });
 

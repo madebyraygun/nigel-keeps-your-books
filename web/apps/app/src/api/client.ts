@@ -4,12 +4,17 @@ import {
   type ApiErrorCode,
   type ApiErrorEnvelope,
   type AppSettings,
+  type BalanceReport,
+  type CashflowReport,
   type ChangePasswordRequest,
   type CompanyNameResponse,
+  type FlaggedTransaction,
   type InvalidPasswordDetails,
   type PasswordStateResponse,
   type PingResponse,
+  type PnlReport,
   type RemovePasswordRequest,
+  type ReportEnvelope,
   type SetPasswordRequest,
   type StatusResponse,
   type UnlockResponse,
@@ -96,10 +101,29 @@ export class ApiError extends Error {
  * Routes that take more than one parameter take a single typed options object,
  * so adding parameters stays a non-breaking change.
  */
+/** Date parameters a `monthAndYear` report accepts. `from` and `to` come as a pair. */
+export interface ReportDateParams {
+  year?: number;
+  /** `YYYY-MM`. */
+  month?: string;
+  /** `YYYY-MM-DD`, only valid together with `to`. */
+  from?: string;
+  /** `YYYY-MM-DD`, only valid together with `from`. */
+  to?: string;
+}
+
+/** Cash flow takes no `from`/`to` — it is grouped by month either way. */
+export type CashflowParams = Pick<ReportDateParams, 'year' | 'month'>;
+
 export interface ApiClient {
   ping(): Promise<PingResponse>;
   getStatus(): Promise<StatusResponse>;
   unlock(password: string): Promise<UnlockResponse>;
+
+  getPnl(params?: ReportDateParams): Promise<ReportEnvelope<PnlReport>>;
+  getBalance(): Promise<ReportEnvelope<BalanceReport>>;
+  getCashflow(params?: CashflowParams): Promise<ReportEnvelope<CashflowReport>>;
+  getFlagged(): Promise<ReportEnvelope<FlaggedTransaction[]>>;
 
   getAppSettings(): Promise<AppSettings>;
   updateAppSettings(input: UpdateAppSettingsRequest): Promise<AppSettings>;
@@ -114,6 +138,25 @@ export interface ApiClient {
 export interface FetchApiClientOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+}
+
+/**
+ * A query string for the parameters that are actually set, or `''`.
+ *
+ * Omitted rather than sent empty: the server rejects a parameter a route does
+ * not support instead of ignoring it, so a stray `month=` would be a 400.
+ *
+ * Generic over the parameter object so each route can keep a named interface
+ * with only its own fields, rather than widening to an index signature that
+ * would accept any key at all.
+ */
+function query<T extends object>(params: T): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const rendered = search.toString();
+  return rendered ? `?${rendered}` : '';
 }
 
 function isEnvelope(body: unknown): body is ApiErrorEnvelope {
@@ -175,6 +218,33 @@ export class FetchApiClient implements ApiClient {
     // lock signal the same way getStatus does.
     appLocked.set(status.locked);
     return status;
+  }
+
+  getPnl(params: ReportDateParams = {}): Promise<ReportEnvelope<PnlReport>> {
+    return this.request<ReportEnvelope<PnlReport>>(
+      'GET',
+      `/reports/pnl${query(params)}`,
+    );
+  }
+
+  getBalance(): Promise<ReportEnvelope<BalanceReport>> {
+    return this.request<ReportEnvelope<BalanceReport>>('GET', '/reports/balance');
+  }
+
+  getCashflow(
+    params: CashflowParams = {},
+  ): Promise<ReportEnvelope<CashflowReport>> {
+    return this.request<ReportEnvelope<CashflowReport>>(
+      'GET',
+      `/reports/cashflow${query(params)}`,
+    );
+  }
+
+  getFlagged(): Promise<ReportEnvelope<FlaggedTransaction[]>> {
+    return this.request<ReportEnvelope<FlaggedTransaction[]>>(
+      'GET',
+      '/reports/flagged',
+    );
   }
 
   setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse> {

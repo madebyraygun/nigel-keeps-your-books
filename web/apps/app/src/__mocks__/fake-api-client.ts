@@ -1,16 +1,40 @@
-import type { ApiClient } from '../api/client.js';
+import type {
+  ApiClient,
+  CashflowParams,
+  ReportDateParams,
+} from '../api/client.js';
 import type {
   AppSettings,
+  BalanceReport,
+  CashflowReport,
   ChangePasswordRequest,
   CompanyNameResponse,
+  FlaggedTransaction,
   PasswordStateResponse,
   PingResponse,
+  PnlReport,
   RemovePasswordRequest,
+  ReportEnvelope,
   SetPasswordRequest,
   StatusResponse,
   UnlockResponse,
   UpdateAppSettingsRequest,
 } from '../api/types.js';
+
+/** A database with nothing in it — the state a fresh `nigel init` leaves. */
+export const EMPTY_PNL: PnlReport = {
+  income: [],
+  expenses: [],
+  totalIncome: 0,
+  totalExpenses: 0,
+  net: 0,
+};
+
+export const EMPTY_BALANCE: BalanceReport = {
+  accounts: [],
+  total: 0,
+  ytdNetIncome: 0,
+};
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   userName: 'Tester',
@@ -66,6 +90,48 @@ export class FakeApiClient implements ApiClient {
     if (this.unlockError) throw this.unlockError;
     this.status = { ...this.status, locked: false };
     return { locked: false };
+  }
+
+  // -- reports --------------------------------------------------------------
+  //
+  // Each fixture and each error is separate, which is the point: the dashboard
+  // fetches all four in parallel and a test needs to fail exactly one of them
+  // to prove the other three still render.
+
+  pnl: PnlReport = EMPTY_PNL;
+  balance: BalanceReport = EMPTY_BALANCE;
+  cashflow: CashflowReport = { months: [] };
+  flagged: FlaggedTransaction[] = [];
+
+  pnlError: Error | null = null;
+  balanceError: Error | null = null;
+  cashflowError: Error | null = null;
+  flaggedError: Error | null = null;
+
+  async getPnl(params: ReportDateParams = {}): Promise<ReportEnvelope<PnlReport>> {
+    this.calls.push(`getPnl:${params.year ?? ''}`);
+    if (this.pnlError) throw this.pnlError;
+    return { granularity: 'monthAndYear', report: this.pnl };
+  }
+
+  async getBalance(): Promise<ReportEnvelope<BalanceReport>> {
+    this.calls.push('getBalance');
+    if (this.balanceError) throw this.balanceError;
+    return { granularity: 'none', report: this.balance };
+  }
+
+  async getCashflow(
+    params: CashflowParams = {},
+  ): Promise<ReportEnvelope<CashflowReport>> {
+    this.calls.push(`getCashflow:${params.year ?? ''}`);
+    if (this.cashflowError) throw this.cashflowError;
+    return { granularity: 'monthAndYear', report: this.cashflow };
+  }
+
+  async getFlagged(): Promise<ReportEnvelope<FlaggedTransaction[]>> {
+    this.calls.push('getFlagged');
+    if (this.flaggedError) throw this.flaggedError;
+    return { granularity: 'none', report: this.flagged };
   }
 
   // -- settings -------------------------------------------------------------

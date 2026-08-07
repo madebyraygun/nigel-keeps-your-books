@@ -35,6 +35,79 @@ export interface StatusResponse {
   updateAvailable: string | null;
 }
 
+/**
+ * Which of `year` and `month` a report route accepts.
+ *
+ * Reported by the response rather than hardcoded per screen, so date controls
+ * are built from what the server says it supports.
+ */
+export type DateGranularity = 'monthAndYear' | 'yearOnly' | 'none';
+
+/** Every report response is wrapped with the date granularity it supports. */
+export interface ReportEnvelope<T> {
+  granularity: DateGranularity;
+  report: T;
+}
+
+/** A category and its total, in `PnlReport`. */
+export interface PnlItem {
+  name: string;
+  total: number;
+}
+
+/** `GET /api/reports/pnl` */
+export interface PnlReport {
+  income: PnlItem[];
+  expenses: PnlItem[];
+  totalIncome: number;
+  /** Negative — expenses are stored as negative amounts. */
+  totalExpenses: number;
+  net: number;
+}
+
+/** One account's cash position, in `BalanceReport`. */
+export interface AccountBalance {
+  name: string;
+  accountType: string;
+  balance: number;
+}
+
+/** `GET /api/reports/balance` */
+export interface BalanceReport {
+  accounts: AccountBalance[];
+  total: number;
+  ytdNetIncome: number;
+}
+
+/** One month of cash movement, in `CashflowReport`. */
+export interface CashflowMonth {
+  /** `YYYY-MM`. */
+  month: string;
+  inflows: number;
+  /** Negative — the sum of that month's negative amounts. */
+  outflows: number;
+  net: number;
+  runningBalance: number;
+}
+
+/**
+ * `GET /api/reports/cashflow`
+ *
+ * Only months with transactions appear; there are no zero-filled gaps.
+ */
+export interface CashflowReport {
+  months: CashflowMonth[];
+}
+
+/** `GET /api/reports/flagged` — one transaction awaiting review. */
+export interface FlaggedTransaction {
+  id: number;
+  date: string;
+  description: string;
+  amount: number;
+  accountName: string;
+}
+
 /** `POST /api/unlock` */
 export interface UnlockRequest {
   password: string;

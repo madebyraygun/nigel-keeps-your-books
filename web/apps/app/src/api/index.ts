@@ -5,5 +5,7 @@ export {
   appLocked,
   appUnauthorized,
   type ApiClient,
+  type CashflowParams,
   type FetchApiClientOptions,
+  type ReportDateParams,
 } from './client.js';

@@ -201,4 +201,89 @@ describe('FetchApiClient', () => {
       expect(appLocked.get()).toBe(true);
     });
   });
+
+  describe('reports', () => {
+    const wrapped = (report: unknown, granularity = 'monthAndYear') =>
+      jsonResponse({ granularity, report });
+
+    it('asks for a year of profit and loss', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped({ net: 1 }));
+      await clientFor(fetchImpl).getPnl({ year: 2026 });
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/pnl?year=2026');
+    });
+
+    it('omits parameters that were not given', async () => {
+      // The server rejects a parameter a route does not support rather than
+      // ignoring it, so a stray empty `month=` would be a 400.
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped({ net: 1 }));
+      await clientFor(fetchImpl).getPnl();
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/pnl');
+    });
+
+    it('carries a from/to pair through', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped({ net: 1 }));
+      await clientFor(fetchImpl).getPnl({ from: '2026-01-01', to: '2026-03-31' });
+      expect(fetchImpl.mock.calls[0][0]).toBe(
+        '/api/reports/pnl?from=2026-01-01&to=2026-03-31',
+      );
+    });
+
+    it('unwraps the envelope rather than handing screens the wrapper', async () => {
+      const report = {
+        income: [],
+        expenses: [],
+        totalIncome: 0,
+        totalExpenses: 0,
+        net: 0,
+      };
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped(report));
+      const answer = await clientFor(fetchImpl).getPnl({ year: 2026 });
+      expect(answer.report).toEqual(report);
+      expect(answer.granularity).toBe('monthAndYear');
+    });
+
+    it('takes no parameters for balance', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(
+          wrapped({ accounts: [], total: 0, ytdNetIncome: 0 }, 'none'),
+        );
+      await clientFor(fetchImpl).getBalance();
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/balance');
+    });
+
+    it('asks for cash flow unfiltered by default', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped({ months: [] }));
+      await clientFor(fetchImpl).getCashflow();
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/cashflow');
+    });
+
+    it('can narrow cash flow to a year', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped({ months: [] }));
+      await clientFor(fetchImpl).getCashflow({ year: 2025 });
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/cashflow?year=2025');
+    });
+
+    it('reads the flagged list out of its envelope', async () => {
+      const rows = [
+        { id: 1, date: '2026-01-01', description: 'X', amount: -5, accountName: 'A' },
+      ];
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped(rows, 'none'));
+      const answer = await clientFor(fetchImpl).getFlagged();
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/flagged');
+      expect(answer.report).toEqual(rows);
+    });
+
+    it('raises the lock signal when a report is refused', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(
+          envelope('locked', 'Database is locked.', undefined, 423),
+        );
+      await expect(clientFor(fetchImpl).getBalance()).rejects.toBeInstanceOf(
+        ApiError,
+      );
+      expect(appLocked.get()).toBe(true);
+    });
+  });
 });
