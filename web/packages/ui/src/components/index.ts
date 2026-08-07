@@ -90,3 +90,12 @@ export {
 } from './wc-import-form.js';
 export { WcSampleTable, type SampleTableRow } from './wc-sample-table.js';
 export { WcCountGrid, type CountEmphasis, type CountItem } from './wc-count-grid.js';
+export {
+  WcReportTable,
+  type ReportCellKind,
+  type ReportColumn,
+  type ReportRowEmphasis,
+  type ReportTableRow,
+} from './wc-report-table.js';
+export { WcExportLinks } from './wc-export-links.js';
+export { WcLinkGrid, type LinkGridItem } from './wc-link-grid.js';

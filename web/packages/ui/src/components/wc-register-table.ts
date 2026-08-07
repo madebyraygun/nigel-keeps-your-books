@@ -300,6 +300,18 @@ export class WcRegisterTable extends LitElement {
   @property({ type: Boolean, reflect: true })
   dense = false;
 
+  /**
+   * Drop every affordance that writes: no flag button, no activation, no edit
+   * mode. Selection and scrolling stay, because reading a long register still
+   * wants a cursor.
+   *
+   * This is what the reports screen's register view uses. Editing lives at
+   * `#/register`; offering it from two screens would mean two places to keep
+   * honest about the same row.
+   */
+  @property({ type: Boolean, reflect: true })
+  readonly = false;
+
   @property({ type: Boolean, attribute: 'show-account' })
   showAccount = true;
 
@@ -472,6 +484,8 @@ export class WcRegisterTable extends LitElement {
   private activateRow(row: RegisterTableRow | undefined): void {
     if (!row) return;
     this.setActive(row.id);
+    // A read-only table still moves its cursor; it just never asks to edit.
+    if (this.readonly) return;
     this.dispatchEvent(
       new CustomEvent<NcRowEventDetail>('nc-row-activate', {
         detail: { id: row.id },
@@ -482,7 +496,7 @@ export class WcRegisterTable extends LitElement {
   }
 
   private requestFlag(row: RegisterTableRow | undefined): void {
-    if (!row) return;
+    if (!row || this.readonly) return;
     this.dispatchEvent(
       new CustomEvent<NcFlagToggleDetail>('nc-flag-toggle', {
         detail: { id: row.id, flag: !row.isFlagged },
@@ -660,6 +674,30 @@ export class WcRegisterTable extends LitElement {
     `;
   }
 
+  private renderFlagButton(row: RegisterTableRow) {
+    return html`
+      <button
+        class="icon-button"
+        type="button"
+        aria-pressed=${row.isFlagged ? 'true' : 'false'}
+        aria-label=${`Flag transaction ${row.id}`}
+        ?disabled=${row.id === this.busyId}
+        @click=${() => this.requestFlag(row)}
+      >
+        <wc-icon-flag></wc-icon-flag>
+      </button>
+    `;
+  }
+
+  /**
+   * Read-only rows still have to show which transactions are flagged, and the
+   * row's colour cannot be the only channel that says so.
+   */
+  private renderFlagMark(row: RegisterTableRow) {
+    if (!row.isFlagged) return nothing;
+    return html`<wc-icon-flag role="img" aria-label="Flagged"></wc-icon-flag>`;
+  }
+
   private renderRow(row: RegisterTableRow) {
     const selected = row.id === this.activeId;
     const editing = row.id === this.editingId;
@@ -676,16 +714,7 @@ export class WcRegisterTable extends LitElement {
         @dblclick=${() => this.activateRow(row)}
       >
         <td role="gridcell" class="flag">
-          <button
-            class="icon-button"
-            type="button"
-            aria-pressed=${row.isFlagged ? 'true' : 'false'}
-            aria-label=${`Flag transaction ${row.id}`}
-            ?disabled=${row.id === this.busyId}
-            @click=${() => this.requestFlag(row)}
-          >
-            <wc-icon-flag></wc-icon-flag>
-          </button>
+          ${this.readonly ? this.renderFlagMark(row) : this.renderFlagButton(row)}
         </td>
         <td role="gridcell" class="date">${row.date}</td>
         <td role="gridcell">${row.description}</td>

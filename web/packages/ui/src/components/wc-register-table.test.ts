@@ -349,6 +349,49 @@ describe('wc-register-table', () => {
     await el.updateComplete;
     expect(selectedId(el)).toBe(100);
   });
+
+  describe('readonly', () => {
+    it('offers no flag button', async () => {
+      const el = await mount({ readonly: true });
+      expect(el.shadowRoot?.querySelector('.flag button')).toBeNull();
+    });
+
+    it('still shows which rows are flagged, with a label rather than colour', async () => {
+      const el = await mount({ readonly: true });
+      const marks = el.shadowRoot?.querySelectorAll('.flag wc-icon-flag') ?? [];
+      // Exactly the one flagged row the fixture carries.
+      expect(marks).toHaveLength(1);
+      expect(marks[0]?.getAttribute('aria-label')).toBe('Flagged');
+    });
+
+    it('emits no flag toggle from the f key', async () => {
+      const el = await mount({ readonly: true, selectedId: 102 });
+      const seen = listen<NcFlagToggleDetail>(el, 'nc-flag-toggle');
+      await press(el, 'f');
+      expect(seen).toEqual([]);
+    });
+
+    it('emits no row activation from Enter', async () => {
+      const el = await mount({ readonly: true, selectedId: 102 });
+      const seen = listen<NcRowEventDetail>(el, 'nc-row-activate');
+      await press(el, 'Enter');
+      expect(seen).toEqual([]);
+    });
+
+    it('emits no row activation from a double click', async () => {
+      const el = await mount({ readonly: true });
+      const seen = listen<NcRowEventDetail>(el, 'nc-row-activate');
+      rowEls(el)[1]?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      await el.updateComplete;
+      expect(seen).toEqual([]);
+    });
+
+    it('keeps arrow-key selection, because reading still wants a cursor', async () => {
+      const el = await mount({ readonly: true, selectedId: 100 });
+      await press(el, 'ArrowDown');
+      expect(selectedId(el)).toBe(101);
+    });
+  });
 });
 
 describePreviewA11y(preview);

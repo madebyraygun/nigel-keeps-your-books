@@ -75,15 +75,18 @@ export class WcAppShell extends LitElement {
   sidebarCollapsed = false;
 
   render() {
+    // The parts exist so a document-level stylesheet can reach the shell's
+    // furniture — `::part()` pierces the shadow boundary, nothing else does.
+    // The print sheet hides all three and lets the content have the page.
     return html`
-      <slot name="sidebar"></slot>
+      <slot name="sidebar" part="sidebar"></slot>
       <div class="main">
-        <header>
+        <header part="header">
           <h1 class="title">${this.screenTitle}</h1>
           <div class="actions"><slot name="header-actions"></slot></div>
         </header>
-        <div class="banner"><slot name="banner"></slot></div>
-        <main class="content"><slot></slot></main>
+        <div class="banner" part="banner"><slot name="banner"></slot></div>
+        <main class="content" part="content"><slot></slot></main>
       </div>
       <wc-toast></wc-toast>
     `;

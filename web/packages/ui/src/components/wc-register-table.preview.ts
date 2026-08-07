@@ -135,6 +135,17 @@ const preview: Preview = {
         ></wc-register-table>
       `,
     },
+    {
+      name: 'readonly',
+      render: () => html`
+        <wc-register-table
+          readonly
+          .rows=${rows}
+          .total=${-120.99}
+          footer-note="Read-only — editing lives in the register browser"
+        ></wc-register-table>
+      `,
+    },
   ],
 };
 

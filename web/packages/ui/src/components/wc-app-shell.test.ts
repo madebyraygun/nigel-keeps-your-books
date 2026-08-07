@@ -59,6 +59,17 @@ describe('wc-app-shell', () => {
     const el = await mount({ sidebarCollapsed: true });
     expect(el.hasAttribute('sidebar-collapsed')).toBe(true);
   });
+
+  it('exposes its furniture as parts', async () => {
+    const el = await mount();
+    // `::part()` is the only way a document stylesheet reaches inside a shadow
+    // root, and the print sheet has to hide all three of these to give the page
+    // over to the content.
+    const parts = [...(el.shadowRoot?.querySelectorAll('[part]') ?? [])].map((node) =>
+      node.getAttribute('part'),
+    );
+    expect(parts).toEqual(['sidebar', 'header', 'banner', 'content']);
+  });
 });
 
 describePreviewA11y(preview);
