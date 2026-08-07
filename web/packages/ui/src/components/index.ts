@@ -24,3 +24,12 @@ export {
   type NcPasswordSubmitDetail,
   type WcPasswordMode,
 } from './wc-password-form.js';
+export { WcStatCard } from './wc-stat-card.js';
+export { WcBalanceList, type BalanceRow } from './wc-balance-list.js';
+export {
+  WcBarChart,
+  barHeights,
+  type BarBucket,
+  type BarHeights,
+} from './wc-bar-chart.js';
+export { WcNoticeBar, type WcNoticeVariant } from './wc-notice-bar.js';

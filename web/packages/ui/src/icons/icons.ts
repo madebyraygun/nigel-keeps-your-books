@@ -123,6 +123,20 @@ export class WcIconFlag extends WcIconBase {
   }
 }
 
+@customElement('wc-icon-refresh')
+export class WcIconRefresh extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>`;
+  }
+}
+
+@customElement('wc-icon-download')
+export class WcIconDownload extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/>`;
+  }
+}
+
 @customElement('wc-icon-chevron-left')
 export class WcIconChevronLeft extends WcIconBase {
   protected renderIcon() {
@@ -155,6 +169,8 @@ export const ICON_TAGS = [
   'wc-icon-close',
   'wc-icon-check',
   'wc-icon-flag',
+  'wc-icon-refresh',
+  'wc-icon-download',
   'wc-icon-chevron-left',
   'wc-icon-chevron-right',
 ] as const;
@@ -179,6 +195,8 @@ declare global {
     'wc-icon-close': WcIconClose;
     'wc-icon-check': WcIconCheck;
     'wc-icon-flag': WcIconFlag;
+    'wc-icon-refresh': WcIconRefresh;
+    'wc-icon-download': WcIconDownload;
     'wc-icon-chevron-left': WcIconChevronLeft;
     'wc-icon-chevron-right': WcIconChevronRight;
   }
