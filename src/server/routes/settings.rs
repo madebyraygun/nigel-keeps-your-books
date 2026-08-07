@@ -511,6 +511,13 @@ mod tests {
         .expect("account");
         drop(conn);
         let other_root = other_db.parent().unwrap().to_path_buf();
+        // The route resolves the path it is handed, so what comes back is the
+        // resolved one — on macOS the tempdir's `/var` is a symlink into
+        // `/private/var`, and the two spellings are not equal as strings.
+        let resolved = std::fs::canonicalize(&other_root)
+            .expect("canonicalize")
+            .to_string_lossy()
+            .to_string();
 
         let (status, body) = post_json(
             &app,
@@ -520,7 +527,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["dataDir"], other_root.to_string_lossy().to_string());
+        assert_eq!(body["dataDir"], resolved);
 
         let accounts = ok_json(&app, "/api/accounts", &token).await;
         let names: Vec<&str> = accounts
@@ -533,7 +540,7 @@ mod tests {
 
         assert_eq!(
             crate::settings::load_settings().data_dir,
-            other_root.to_string_lossy().to_string(),
+            resolved,
             "settings.json was not rewritten"
         );
     }

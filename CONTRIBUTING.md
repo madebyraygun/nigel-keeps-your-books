@@ -11,11 +11,24 @@ cargo build
 ## Running Tests
 
 ```bash
-cargo test               # All tests
-cargo test --no-default-features  # Without gusto feature
+cargo test -- --test-threads=1                       # All tests
+cargo test --no-default-features -- --test-threads=1 # Without gusto feature
+cargo test --no-default-features --features serve -- --test-threads=1
 ```
 
-Tests use in-memory SQLite databases with synthetic data — no external files or services needed.
+`--test-threads=1` is not optional. The database password is a process-global
+(`db::DB_PASSWORD`), and the tests that encrypt, decrypt, unlock and switch data
+directories all move it — run in parallel they read each other's keys and fail
+in a different combination each time. CI runs them serially for the same reason.
+
+Tests use temporary and in-memory SQLite databases with synthetic data — no
+external files or services needed.
+
+The web suite has no such constraint:
+
+```bash
+cd web && npm ci && npm test
+```
 
 ## Project Layout
 

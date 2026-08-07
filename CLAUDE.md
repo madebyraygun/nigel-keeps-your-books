@@ -61,8 +61,8 @@ Nigel — a Rust CLI bookkeeping tool to replace QuickBooks for small consultanc
 ```bash
 cargo build                                       # Debug build
 cargo build --release                             # Release build
-cargo test                                        # Run all tests
-cargo test --no-default-features                  # Test without gusto/pdf features
+cargo test -- --test-threads=1                    # Run all tests (serial — the DB password is a process global)
+cargo test --no-default-features -- --test-threads=1   # Test without gusto/pdf features
 nigel                                             # Interactive dashboard (default)
 nigel --help                                      # CLI help
 nigel init                                        # Initialize (prompts for data dir on first run)

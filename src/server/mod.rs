@@ -21,6 +21,10 @@ use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+use axum::extract::Request;
+use axum::http::{header, HeaderValue};
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::routing::get;
 use axum::{middleware, Router};
 use tokio::net::TcpListener;
@@ -136,11 +140,30 @@ async fn shutdown_signal() {
     }
 }
 
-/// Layers run outermost-first: Host/Origin, then the session cookie, then the
-/// route. The session layer wraps the `/api` router itself rather than using
-/// `route_layer`, so it also covers that router's 404 fallback — otherwise an
-/// unauthenticated request to an unknown `/api` path would skip the check.
-/// `/auth` and the static assets sit outside the nest and need no session.
+/// Two headers on everything this server answers, refusals included.
+///
+/// `SameSite=Strict` already keeps the session cookie out of a cross-site
+/// frame, so framing the SPA gets an attacker an unauthenticated shell; denying
+/// it outright costs a header and removes the question. `nosniff` holds the
+/// browser to the content type each response states — the API's `application/
+/// json` error envelopes echo request values, and a sniffed one is HTML.
+async fn security_headers(req: Request, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response
+}
+
+/// Layers run outermost-first: the blanket headers, Host/Origin, then the
+/// session cookie, then the route. The session layer wraps the `/api` router
+/// itself rather than using `route_layer`, so it also covers that router's 404
+/// fallback — otherwise an unauthenticated request to an unknown `/api` path
+/// would skip the check. `/auth` and the static assets sit outside the nest and
+/// need no session.
 fn build_router(state: AppState) -> Router {
     let api = routes::api_router(&state).layer(middleware::from_fn_with_state(
         state.clone(),
@@ -152,6 +175,7 @@ fn build_router(state: AppState) -> Router {
         .route("/auth", get(auth::auth_redirect))
         .fallback(static_files::static_handler)
         .layer(middleware::from_fn(auth::host_guard))
+        .layer(middleware::from_fn(security_headers))
         .with_state(state)
 }
 
@@ -772,5 +796,70 @@ mod tests {
             .expect("server did not shut down within 5s")
             .expect("server task panicked");
         assert!(joined.is_ok());
+    }
+
+    // -- static assets ------------------------------------------------------
+
+    #[tokio::test]
+    async fn the_shell_is_never_stored() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+
+    /// A client-side route is the shell, and the shell is not cacheable —
+    /// otherwise a browser holding it across an upgrade asks for bundles this
+    /// build does not have.
+    #[tokio::test]
+    async fn an_unknown_path_falls_back_to_the_uncached_shell() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(get_request("/reports").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(content_type(&response).starts_with("text/html"));
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+
+    #[tokio::test]
+    async fn a_missing_bundle_is_a_404_rather_than_the_shell() {
+        let (app, _token) = test_app();
+        let response = app
+            .oneshot(
+                get_request("/assets/index-fromanoldbuild.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!content_type(&response).starts_with("text/html"));
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_blanket_headers() {
+        let (app, token) = test_app();
+
+        // One of each: the shell, an authorized API answer, and a refusal.
+        for request in [
+            get_request("/").body(Body::empty()).unwrap(),
+            session_get("/api/ping", &token),
+            get_request("/api/ping").body(Body::empty()).unwrap(),
+        ] {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+            assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+        }
     }
 }
