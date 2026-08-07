@@ -13,6 +13,9 @@ import {
   type CompanyNameResponse,
   type ConfirmImportRequest,
   type CsvProfile,
+  type ExpenseBreakdown,
+  type ExportFormat,
+  type ExportParams,
   type FlaggedTransaction,
   type FlaggedTxn,
   type ImportConfirmation,
@@ -20,6 +23,7 @@ import {
   type ImportPreview,
   type ImportRequest,
   type InvalidPasswordDetails,
+  type K1PrepReport,
   type PasswordStateResponse,
   type PingResponse,
   type PnlReport,
@@ -27,6 +31,7 @@ import {
   type RegisterRow,
   type RemovePasswordRequest,
   type ReportEnvelope,
+  type ReportSlug,
   type ReviewApplyRequest,
   type ReviewApplyResponse,
   type ReviewUndoRequest,
@@ -34,6 +39,7 @@ import {
   type RuleTestResult,
   type SetPasswordRequest,
   type StatusResponse,
+  type TaxSummary,
   type TransactionPatch,
   type UnlockResponse,
   type UpdateAppSettingsRequest,
@@ -151,6 +157,12 @@ export interface RegisterParams extends ReportDateParams {
   account?: string;
 }
 
+/** Expenses is grouped by month, so it takes no date range. */
+export type ExpenseParams = Pick<ReportDateParams, 'year' | 'month'>;
+
+/** Tax and the K-1 worksheet are annual documents. */
+export type YearParams = Pick<ReportDateParams, 'year'>;
+
 export interface ApiClient {
   ping(): Promise<PingResponse>;
   getStatus(): Promise<StatusResponse>;
@@ -161,6 +173,21 @@ export interface ApiClient {
   getCashflow(params?: CashflowParams): Promise<ReportEnvelope<CashflowReport>>;
   getFlagged(): Promise<ReportEnvelope<FlaggedTransaction[]>>;
   getRegister(params?: RegisterParams): Promise<ReportEnvelope<RegisterReport>>;
+  getExpenses(params?: ExpenseParams): Promise<ReportEnvelope<ExpenseBreakdown>>;
+  getTax(params?: YearParams): Promise<ReportEnvelope<TaxSummary>>;
+  getK1(params?: YearParams): Promise<ReportEnvelope<K1PrepReport>>;
+
+  /**
+   * Where a report's export lives, for a plain download link.
+   *
+   * This returns a URL instead of bytes because the browser is better at
+   * downloading a file than the app is: it streams, it names the file from
+   * `Content-Disposition`, and it never holds a PDF in memory. But the address
+   * is still built here rather than in a screen — a screen that spells its own
+   * endpoint is a screen a Tauri or remote client cannot host, which is the
+   * whole reason this interface exists.
+   */
+  exportUrl(report: ReportSlug, format: ExportFormat, params?: ExportParams): string;
 
   getAccounts(): Promise<Account[]>;
   getCategories(): Promise<CategoryRow[]>;
@@ -318,6 +345,35 @@ export class FetchApiClient implements ApiClient {
       'GET',
       `/reports/register${query(params)}`,
     );
+  }
+
+  getExpenses(params: ExpenseParams = {}): Promise<ReportEnvelope<ExpenseBreakdown>> {
+    return this.request<ReportEnvelope<ExpenseBreakdown>>(
+      'GET',
+      `/reports/expenses${query(params)}`,
+    );
+  }
+
+  getTax(params: YearParams = {}): Promise<ReportEnvelope<TaxSummary>> {
+    return this.request<ReportEnvelope<TaxSummary>>(
+      'GET',
+      `/reports/tax${query(params)}`,
+    );
+  }
+
+  getK1(params: YearParams = {}): Promise<ReportEnvelope<K1PrepReport>> {
+    return this.request<ReportEnvelope<K1PrepReport>>(
+      'GET',
+      `/reports/k1${query(params)}`,
+    );
+  }
+
+  exportUrl(
+    report: ReportSlug,
+    format: ExportFormat,
+    params: ExportParams = {},
+  ): string {
+    return `${this.baseUrl}/exports/${report}${query({ format, ...params })}`;
   }
 
   getAccounts(): Promise<Account[]> {

@@ -280,6 +280,29 @@ describe('FetchApiClient', () => {
       expect(answer.report).toEqual(rows);
     });
 
+    it('asks for a month of expenses', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(wrapped({ categories: [], total: 0, topVendors: [] }));
+      await clientFor(fetchImpl).getExpenses({ month: '2025-03' });
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/expenses?month=2025-03');
+    });
+
+    it('asks for a year of tax summary', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(wrapped({ lineItems: [] }, 'yearOnly'));
+      const answer = await clientFor(fetchImpl).getTax({ year: 2025 });
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/tax?year=2025');
+      expect(answer.granularity).toBe('yearOnly');
+    });
+
+    it('asks for a year of the K-1 worksheet', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(wrapped({ grossReceipts: 0 }, 'yearOnly'));
+      await clientFor(fetchImpl).getK1({ year: 2025 });
+      expect(fetchImpl.mock.calls[0][0]).toBe('/api/reports/k1?year=2025');
+    });
+
     it('raises the lock signal when a report is refused', async () => {
       const fetchImpl = vi
         .fn()
@@ -290,6 +313,48 @@ describe('FetchApiClient', () => {
         ApiError,
       );
       expect(appLocked.get()).toBe(true);
+    });
+  });
+
+  describe('export urls', () => {
+    // No fetch here on purpose: these are addresses handed to a download link,
+    // and the point of building them in the client is that a screen never has
+    // to know the shape.
+    const client = new FetchApiClient({ fetchImpl: vi.fn() });
+
+    it('names the report and the format', () => {
+      expect(client.exportUrl('pnl', 'pdf')).toBe('/api/exports/pnl?format=pdf');
+      expect(client.exportUrl('pnl', 'text')).toBe('/api/exports/pnl?format=text');
+    });
+
+    it('carries the period', () => {
+      expect(client.exportUrl('k1', 'pdf', { year: 2025 })).toBe(
+        '/api/exports/k1?format=pdf&year=2025',
+      );
+      expect(client.exportUrl('expenses', 'text', { month: '2025-03' })).toBe(
+        '/api/exports/expenses?format=text&month=2025-03',
+      );
+    });
+
+    it('encodes an account name with a space in it', () => {
+      expect(
+        client.exportUrl('register', 'text', { year: 2025, account: 'BofA Checking' }),
+      ).toBe('/api/exports/register?format=text&year=2025&account=BofA+Checking');
+    });
+
+    it('sends nothing but the format for a report that takes no period', () => {
+      expect(client.exportUrl('balance', 'text')).toBe('/api/exports/balance?format=text');
+      expect(client.exportUrl('flagged', 'pdf')).toBe('/api/exports/flagged?format=pdf');
+    });
+
+    it('follows a custom base url, as a remote client would need', () => {
+      const remote = new FetchApiClient({
+        fetchImpl: vi.fn(),
+        baseUrl: 'http://127.0.0.1:5731/api',
+      });
+      expect(remote.exportUrl('pnl', 'pdf', { year: 2025 })).toBe(
+        'http://127.0.0.1:5731/api/exports/pnl?format=pdf&year=2025',
+      );
     });
   });
 

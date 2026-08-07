@@ -1,8 +1,10 @@
 import type {
   ApiClient,
   CashflowParams,
+  ExpenseParams,
   RegisterParams,
   ReportDateParams,
+  YearParams,
 } from '../api/client.js';
 import type {
   Account,
@@ -14,12 +16,16 @@ import type {
   CompanyNameResponse,
   ConfirmImportRequest,
   CsvProfile,
+  ExpenseBreakdown,
+  ExportFormat,
+  ExportParams,
   FlaggedTransaction,
   FlaggedTxn,
   ImportConfirmation,
   ImporterFormat,
   ImportPreview,
   ImportRequest,
+  K1PrepReport,
   PasswordStateResponse,
   PingResponse,
   PnlReport,
@@ -27,6 +33,7 @@ import type {
   RegisterRow,
   RemovePasswordRequest,
   ReportEnvelope,
+  ReportSlug,
   ReviewApplyRequest,
   ReviewApplyResponse,
   ReviewUndoRequest,
@@ -34,6 +41,7 @@ import type {
   RuleTestResult,
   SetPasswordRequest,
   StatusResponse,
+  TaxSummary,
   TransactionPatch,
   UnlockResponse,
   UpdateAppSettingsRequest,
@@ -68,6 +76,35 @@ export const EMPTY_BALANCE: BalanceReport = {
   accounts: [],
   total: 0,
   ytdNetIncome: 0,
+};
+
+export const EMPTY_EXPENSES: ExpenseBreakdown = {
+  categories: [],
+  total: 0,
+  topVendors: [],
+};
+
+export const EMPTY_TAX: TaxSummary = { lineItems: [] };
+
+export const EMPTY_K1: K1PrepReport = {
+  grossReceipts: 0,
+  cogs: 0,
+  grossProfit: 0,
+  otherIncome: 0,
+  totalDeductions: 0,
+  ordinaryBusinessIncome: 0,
+  deductionLines: [],
+  scheduleKItems: [],
+  otherDeductions: [],
+  otherDeductionsTotal: 0,
+  autoMapped: [],
+  unmapped: [],
+  validation: {
+    uncategorizedCount: 0,
+    officerComp: 0,
+    distributions: 0,
+    compDistRatio: null,
+  },
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -183,6 +220,57 @@ export class FakeApiClient implements ApiClient {
     this.calls.push('getFlagged');
     if (this.flaggedError) throw this.flaggedError;
     return { granularity: 'none', report: this.flagged };
+  }
+
+  expenses: ExpenseBreakdown = EMPTY_EXPENSES;
+  tax: TaxSummary = EMPTY_TAX;
+  k1: K1PrepReport = EMPTY_K1;
+
+  expensesError: Error | null = null;
+  taxError: Error | null = null;
+  k1Error: Error | null = null;
+
+  async getExpenses(
+    params: ExpenseParams = {},
+  ): Promise<ReportEnvelope<ExpenseBreakdown>> {
+    this.calls.push(`getExpenses:${registerQuery(params)}`);
+    if (this.expensesError) throw this.expensesError;
+    return { granularity: 'monthAndYear', report: this.expenses };
+  }
+
+  async getTax(params: YearParams = {}): Promise<ReportEnvelope<TaxSummary>> {
+    this.calls.push(`getTax:${registerQuery(params)}`);
+    if (this.taxError) throw this.taxError;
+    return { granularity: 'yearOnly', report: this.tax };
+  }
+
+  async getK1(params: YearParams = {}): Promise<ReportEnvelope<K1PrepReport>> {
+    this.calls.push(`getK1:${registerQuery(params)}`);
+    if (this.k1Error) throw this.k1Error;
+    return { granularity: 'yearOnly', report: this.k1 };
+  }
+
+  /**
+   * Deliberately not the real address, and deliberately not recorded in
+   * `calls`.
+   *
+   * A screen puts whatever this returns into an href without caring what it
+   * looks like, so the fake hands back something no server would serve: a
+   * screen test then proves the href came from the client, and the real
+   * `/api/exports/...` shape is asserted where it belongs, against
+   * `FetchApiClient` inside the seam.
+   *
+   * It stays out of the call log because it reaches no server — logging it
+   * would put an entry in the log on every render and make "issued exactly one
+   * request" impossible to assert.
+   */
+  exportUrl(report: ReportSlug, format: ExportFormat, params: ExportParams = {}): string {
+    const search = new URLSearchParams({ format });
+    for (const key of ['year', 'month', 'from', 'to', 'account'] as const) {
+      const value = params[key];
+      if (value !== undefined) search.set(key, String(value));
+    }
+    return `fake-export:/${report}?${search.toString()}`;
   }
 
   // -- register -------------------------------------------------------------

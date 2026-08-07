@@ -107,6 +107,122 @@ export interface FlaggedTransaction {
   accountName: string;
 }
 
+/** One category's spending, in `ExpenseBreakdown`. */
+export interface ExpenseItem {
+  name: string;
+  /** Negative, as stored. */
+  total: number;
+  count: number;
+  /** Share of the period's spending, 0-100. */
+  pct: number;
+}
+
+/** One vendor's spending, in `ExpenseBreakdown`. */
+export interface VendorItem {
+  vendor: string;
+  total: number;
+  count: number;
+}
+
+/** `GET /api/reports/expenses` */
+export interface ExpenseBreakdown {
+  categories: ExpenseItem[];
+  total: number;
+  topVendors: VendorItem[];
+}
+
+/** One category mapped to its tax line, in `TaxSummary`. */
+export interface TaxItem {
+  name: string;
+  taxLine: string | null;
+  categoryType: string;
+  total: number;
+}
+
+/** `GET /api/reports/tax` */
+export interface TaxSummary {
+  lineItems: TaxItem[];
+}
+
+/** A category on one 1120-S line, in the K-1 worksheet. */
+export interface K1LineItem {
+  formLine: string;
+  categoryName: string;
+  total: number;
+}
+
+/**
+ * A line 19 deduction, where what is deductible can be less than what was
+ * spent — meals are limited to half.
+ */
+export interface K1OtherDeduction {
+  categoryName: string;
+  total: number;
+  deductible: number;
+}
+
+/** The worksheet's sanity checks. */
+export interface K1Validation {
+  uncategorizedCount: number;
+  officerComp: number;
+  distributions: number;
+  /** Null when there are no distributions to compare against. */
+  compDistRatio: number | null;
+}
+
+/**
+ * `GET /api/reports/k1`
+ *
+ * `autoMapped` names income categories with no `formLine`, which fall back to
+ * gross receipts. `unmapped` holds expense categories with no `formLine`: they
+ * have activity but no line to sit on, so they are excluded from every total
+ * above and surfaced for the user to map.
+ */
+export interface K1PrepReport {
+  grossReceipts: number;
+  cogs: number;
+  grossProfit: number;
+  otherIncome: number;
+  totalDeductions: number;
+  ordinaryBusinessIncome: number;
+  deductionLines: K1LineItem[];
+  scheduleKItems: K1LineItem[];
+  otherDeductions: K1OtherDeduction[];
+  otherDeductionsTotal: number;
+  autoMapped: string[];
+  unmapped: K1LineItem[];
+  validation: K1Validation;
+}
+
+/** The eight reports, as each is spelled in its route. */
+export const REPORT_SLUGS = [
+  'pnl',
+  'expenses',
+  'tax',
+  'cashflow',
+  'balance',
+  'flagged',
+  'register',
+  'k1',
+] as const;
+
+export type ReportSlug = (typeof REPORT_SLUGS)[number];
+
+export type ExportFormat = 'pdf' | 'text';
+
+/**
+ * Everything an export route can be given. Which of these a given report
+ * accepts is the report's business — sending one it does not take is a `400`,
+ * not a silently ignored parameter.
+ */
+export interface ExportParams {
+  year?: number;
+  month?: string;
+  from?: string;
+  to?: string;
+  account?: string;
+}
+
 /** One transaction in the register, and what a transaction edit answers with. */
 export interface RegisterRow {
   id: number;
