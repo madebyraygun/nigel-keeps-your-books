@@ -80,6 +80,7 @@ structured context to give:
 | `forbidden` | 403 | Host/Origin check failed |
 | `not_found` | 404 | No such route or record |
 | `conflict` | 409 | A guardrail blocked the change; `details` carries a reason code |
+| `payload_too_large` | 413 | An upload exceeded the size limit |
 | `locked` | 423 | The database is encrypted and not yet unlocked |
 | `internal` | 500 | Unexpected server-side failure |
 | `feature_disabled` | 501 | The build lacks the required cargo feature |
@@ -184,6 +185,7 @@ read-only.
 | `/api/categories` | — | `CategoryRow[]` |
 | `/api/rules` | — | `RuleRow[]` |
 | `/api/imports` | — | `ImportListItem[]` |
+| `/api/imports/formats` | — | `ImporterFormat[]` |
 | `/api/csv-profiles` | — | `CsvProfile[]` |
 
 ### Date parameters
@@ -399,6 +401,130 @@ an optional `?account=`, returns that history newest month first.
 record — the way `nigel undo` rolls back the most recent one. It answers with
 `{ "id": 3, "deletedTransactions": 42 }`. An import that is already gone is
 `404`, not a successful undo of nothing.
+
+## Running an import
+
+Importing over HTTP takes three calls, because a browser has no file path to
+hand over and no chance to look at a statement before committing it:
+
+| Step | Route | What it does |
+|---|---|---|
+| 1 | `POST /api/imports/upload` | Parks the file on the server and names it |
+| 2 | `POST /api/imports/preview` | Parses it and reports what would happen |
+| 3 | `POST /api/imports/confirm` | Snapshots, imports, and categorizes |
+
+Preview and confirm take the same request body, so the second is the first with
+the decision made. Nothing carries over between calls except the `uploadId`.
+
+### `POST /api/imports/upload`
+
+A `multipart/form-data` body with one file field, conventionally named `file`
+— the first field carrying a filename is the one that is read.
+
+```json
+{ "uploadId": "9f3c…", "filename": "april-2025.csv", "size": 8214 }
+```
+
+- The limit is **25 MB**; over it is `413 payload_too_large`.
+- The file must be a `.csv`, `.xlsx`, or `.xls`; anything else is `400`. The
+  extension is kept, because two importers dispatch on it.
+- The stored filename is the one you sent, reduced to safe characters. It is
+  what the `imports` record and the import history will show.
+- Uploads are private to the account running the server (mode `600` in a `700`
+  directory) and expire after **an hour**. A confirmed import deletes its
+  upload immediately; a failed one keeps it, so the same `uploadId` can be
+  retried.
+
+### `POST /api/imports/preview`
+
+```json
+{
+  "uploadId": "9f3c…",
+  "account": "BofA Checking",
+  "format": "bofa_checking",
+  "mapping": null
+}
+```
+
+`format` and `mapping` are both optional and **mutually exclusive** — sending
+both is `400` rather than a guess about which one you meant:
+
+- Neither: the format is detected from the account's type and the file itself,
+  exactly as `nigel import` does with no `--format`.
+- `format`: a built-in key from `GET /api/imports/formats`, or the name of a
+  saved profile from `GET /api/csv-profiles`. An unknown name is `400`. A
+  built-in key this binary was compiled without — `gusto_payroll` in a no-Gusto
+  build — is `501 feature_disabled`.
+- `mapping`: column positions for a CSV nothing built in can read, the same
+  four values a saved profile holds.
+
+```json
+{
+  "format": "bofa_checking",
+  "duplicateFile": false,
+  "imported": 42,
+  "skipped": 3,
+  "malformed": 1,
+  "importId": null,
+  "sample": [{ "date": "2025-04-01", "description": "ACME CORP", "amount": 3000.0 }]
+}
+```
+
+`format` is what actually resolved: a built-in key, a profile name, or
+`"generic"` for an inline `mapping`. `imported` and `skipped` are what *would*
+happen — preview writes nothing at all, and `sample` is the first five rows.
+
+### `POST /api/imports/confirm`
+
+The preview body plus an optional `saveProfile`, which remembers the `mapping`
+under that name for next time. It requires a `mapping` to save and refuses the
+name of a built-in importer; both are `400`. The profile is written only after
+the import succeeds.
+
+The sequence is the one the terminal UI has always used: a pre-import snapshot
+into `<data-dir>/snapshots/`, then the import, then auto-categorization.
+
+```json
+{
+  "format": "bofa_checking",
+  "duplicateFile": false,
+  "imported": 42,
+  "skipped": 3,
+  "malformed": 1,
+  "importId": 7,
+  "sample": [],
+  "categorized": 38,
+  "stillFlagged": 6,
+  "snapshot": "/home/you/Documents/nigel/snapshots/pre-import-20250401-120000.db"
+}
+```
+
+`importId` addresses the new batch — it is what `DELETE /api/imports/:id` undoes
+and what the review screen filters by. `stillFlagged` counts the whole ledger,
+not just this import.
+
+### What is data and what is an error
+
+Two outcomes look like failures and are not:
+
+- **A file that was already imported** is `200` with `duplicateFile: true`, zero
+  counts, and a null `format` and `importId` — the checksum is checked before
+  anything else, so nothing was parsed or written. This is what the CLI prints
+  as "This file has already been imported".
+- **Rows that could not be parsed** are counted in `malformed` and skipped. A
+  statement with a bad row still imports its good ones.
+
+Genuine failures:
+
+| Case | Status |
+|---|---|
+| `uploadId` unknown or expired | `404`, `details.reason` = `upload_not_found` |
+| Account does not exist | `404` |
+| Format name unknown | `400` |
+| Format needs a cargo feature this build lacks | `501` |
+| No importer can read this file for that account type | `400` |
+| The file will not parse at all | `400`, carrying the parser's message |
+| Upload over 25 MB | `413` |
 
 ### Conflict reasons
 

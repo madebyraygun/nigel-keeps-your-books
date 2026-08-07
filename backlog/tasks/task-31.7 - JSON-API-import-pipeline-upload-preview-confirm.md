@@ -1,11 +1,11 @@
 ---
 id: TASK-31.7
 title: 'JSON API: import pipeline (upload, preview, confirm)'
-status: In Progress
+status: Done
 assignee:
   - '@agent-31.7'
 created_date: '2026-08-06 16:26'
-updated_date: '2026-08-06 20:45'
+updated_date: '2026-08-07 11:41'
 labels:
   - web
   - backend
@@ -28,11 +28,11 @@ Browser import flow on top of import_file(): multipart upload to a temp file; a 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Upload plus preview returns detected format, sample rows, and counts with no database mutation
-- [ ] #2 Confirm performs snapshot, import, and auto-categorization, returning imported/skipped/malformed/flagged counts
-- [ ] #3 Duplicate files (checksum) and duplicate rows are reported the same way the CLI reports them
-- [ ] #4 Generic CSV column mapping and save-profile are supported
-- [ ] #5 Upload size limits are enforced and temp files are cleaned up
+- [x] #1 Upload plus preview returns detected format, sample rows, and counts with no database mutation
+- [x] #2 Confirm performs snapshot, import, and auto-categorization, returning imported/skipped/malformed/flagged counts
+- [x] #3 Duplicate files (checksum) and duplicate rows are reported the same way the CLI reports them
+- [x] #4 Generic CSV column mapping and save-profile are supported
+- [x] #5 Upload size limits are enforced and temp files are cleaned up
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -419,3 +419,56 @@ d. **`GET /api/imports/formats` is NOT in this plan.** Nothing exposes the
    Add it on your word; left out by default to keep to the spec's three
    endpoints.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+- Implemented the approved plan with the coordinator's four rulings: 413 `payload_too_large` added as a new `ApiErrorCode`; gusto-without-the-feature answers 501 `feature_disabled` (not the 400 the task spec asked for); per-upload directory spool; `GET /api/imports/formats` in scope.
+- `import_file`'s signature is unchanged. `ImportResult` gained `format: Option<String>` and `import_id: Option<i64>` instead, so all 17 call sites (cli/import.rs, cli/import_manager.rs, 15 tests) needed no edit and CLI/TUI output is byte-identical. `ResolvedImporter::Generic` now carries the name to report — a profile name, or `generic` for an inline mapping.
+- Spool is `<data_dir>/tmp/uploads/<32 hex>/<sanitized name>`, dirs 0700 and file 0600 via the existing `settings::restrict_*_permissions`. The directory carries the id so the file keeps the user's filename, which is what `import_file` writes into `imports.filename` — verified live: the history row reads `april-2025.csv`, not an id.
+- Confirm validates the account before snapshotting (`ensure_account_exists`), so a rejected confirm leaves no snapshot behind. This is a small, deliberate divergence from the CLI, which snapshots first and then fails.
+- No new crate. `axum`'s `multipart` feature only (pulls multer transitively); ids reuse `rand` + `hex` exactly as `auth::generate_token` does.
+- Verification (8 commands): fmt clean; build clean; `cargo test --test-threads=1` 460+25 pass (was 430+25 — 30 new tests); `--no-default-features` 334+26 pass; `--no-default-features --features serve` 454+25 pass; clippy default clean; clippy no-default-features reports exactly the 2 known task-34 `needless_return` lints (cli/dashboard.rs:852, cli/report/mod.rs:160) and nothing else.
+- Manual curl smoke against a live `nigel serve` on an isolated HOME: formats list, upload (0600 file confirmed), preview, confirm (snapshot file written, importId 1, tmp/uploads emptied), duplicate re-confirm, expired id 404 with `details.reason=upload_not_found`, unknown account 404, `.txt` 400, format+mapping 400, 30 MB upload 413 with nothing reaching disk, inline mapping + saveProfile round-tripping through `/api/csv-profiles`. A second run proved preview mutates nothing: 274 register rows before and after, imports count unchanged, upload still resolvable.
+- Known pre-existing limitation, not introduced here: two imports inside the same second write the same `pre-import-<YYYYmmdd-HHMMSS>.db` snapshot name and the later one clobbers the earlier. The CLI and TUI have always named snapshots this way; changing it would diverge from them, so it is left alone.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added the JSON API import pipeline, so a browser can do what `nigel import` does: upload a statement, look at what it would change, and then commit it.
+
+## Endpoints
+
+- `POST /api/imports/upload` — multipart, one file. Spools to `<data_dir>/tmp/uploads/<32 hex>/<sanitized name>` (dir 0700, file 0600) and answers `{uploadId, filename, size}`. 25 MB `DefaultBodyLimit`, `.csv`/`.xlsx`/`.xls` only — the extension is kept because two importers dispatch on it. Uploads expire after an hour, purged at startup and before each new upload.
+- `POST /api/imports/preview` — `import_file` with `dry_run`, returning the resolved format, five sample rows, and the imported/skipped/malformed counts. Writes nothing: no snapshot, no `imports` row, no transactions.
+- `POST /api/imports/confirm` — the terminal UI's sequence unchanged: pre-import snapshot, import, auto-categorize, then an optional `saveProfile`. Answers the preview shape plus `categorized`, `stillFlagged`, `importId`, and the snapshot path. Deletes the upload on success and keeps it on failure so the same id can be retried.
+- `GET /api/imports/formats` — the built-in importers this binary has (`{key, name, accountTypes}`). Approved as in-scope: nothing else exposed them, and 31.14's format picker has no other source.
+
+`format` and `mapping` are mutually exclusive (400 rather than a guess). A duplicate file and malformed rows are data, not errors — `duplicateFile: true` with zero counts, exactly what the CLI prints.
+
+## Data layer
+
+`import_file`'s signature is untouched; `ImportResult` gained `format` (the importer that actually ran — a built-in key, a profile name, or `generic`) and `import_id` (the batch created). That keeps all 17 call sites and the CLI's and TUI's output byte-identical, which changing the parameter list would not have. `built_in_formats()` is new next to `get_by_key`.
+
+## Error mapping
+
+New `payload_too_large` / 413 code for oversize uploads. An unknown or expired `uploadId` is a 404 carrying `details.reason: "upload_not_found"`, following the existing `conflict` precedent rather than adding a code for one case. A format key this build lacks (`gusto_payroll` without the feature) is 501 `feature_disabled`, matching the PDF precedent. Parse failures map to 400 through a route-scoped mapper — the global `From<NigelError>` sends `Csv`/`Other` to 500, which is right everywhere except here, where they mean "this file is not what you said it was".
+
+## Tests
+
+30 new: 13 unit tests over the spool (sanitizing, traversal, permissions, purge), 13 integration tests over the routes (happy path, preview-mutates-nothing, snapshot and filename provenance, duplicate re-confirm, inline mapping and saveProfile round-trip, 413, 404s, refused-request table, retry-after-failure, stale collection), and 4 in `importer.rs` covering the new fields under `--no-default-features`. The three POSTs joined the locked-guard table, so all of them are proven to refuse an un-unlocked database.
+
+- `cargo test --test-threads=1`: 460 + 25 pass (was 430 + 25)
+- `--no-default-features`: 334 + 26; `--no-default-features --features serve`: 454 + 25
+- fmt and clippy clean; clippy `--no-default-features` reports only the 2 known task-34 lints
+- Manual curl smoke against a live server covered every endpoint and every error case, including a 30 MB upload rejected without touching disk
+
+## Docs
+
+`docs/api.md` gains a "Running an import" section (the three steps, both request shapes, what is data versus an error, the failure table) plus the 413 row and the formats route. `CLAUDE.md` covers `server/uploads.rs`, the new `ImportResult` fields, and a design-constraint line for the pipeline.
+
+## Risks
+
+One pre-existing limitation is now easier to hit: two imports in the same second share a `pre-import-<timestamp>.db` snapshot name and the second clobbers the first. The CLI has always named snapshots this way, so it is left alone rather than diverging.
+<!-- SECTION:FINAL_SUMMARY:END -->

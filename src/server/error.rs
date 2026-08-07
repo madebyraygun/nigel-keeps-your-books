@@ -20,6 +20,7 @@ pub enum ApiErrorCode {
     Forbidden,
     NotFound,
     Conflict,
+    PayloadTooLarge,
     Locked,
     Internal,
     FeatureDisabled,
@@ -33,6 +34,7 @@ impl ApiErrorCode {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict => StatusCode::CONFLICT,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Locked => StatusCode::LOCKED,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::FeatureDisabled => StatusCode::NOT_IMPLEMENTED,
@@ -47,6 +49,7 @@ impl ApiErrorCode {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
+            Self::PayloadTooLarge => "payload_too_large",
             Self::Locked => "locked",
             Self::Internal => "internal",
             Self::FeatureDisabled => "feature_disabled",
@@ -112,6 +115,10 @@ impl ApiError {
 
     pub fn conflict(message: impl Into<String>, details: Value) -> Self {
         Self::new(ApiErrorCode::Conflict, message).with_details(details)
+    }
+
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::new(ApiErrorCode::PayloadTooLarge, message)
     }
 
     pub fn locked() -> Self {
@@ -214,6 +221,7 @@ mod tests {
             (ApiErrorCode::Forbidden, 403, "forbidden"),
             (ApiErrorCode::NotFound, 404, "not_found"),
             (ApiErrorCode::Conflict, 409, "conflict"),
+            (ApiErrorCode::PayloadTooLarge, 413, "payload_too_large"),
             (ApiErrorCode::Locked, 423, "locked"),
             (ApiErrorCode::Internal, 500, "internal"),
             (ApiErrorCode::FeatureDisabled, 501, "feature_disabled"),

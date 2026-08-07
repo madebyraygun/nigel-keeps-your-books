@@ -149,6 +149,42 @@ pub async fn delete_json(app: &Router, uri: &str, token: &str) -> (StatusCode, s
     send(app, session_request("DELETE", uri, token, None)).await
 }
 
+/// A `multipart/form-data` body with one file field, built by hand — the
+/// alternative is a client crate the production build has no use for.
+pub fn multipart_body(field: &str, filename: &str, content: &[u8]) -> (String, Vec<u8>) {
+    const BOUNDARY: &str = "----nigeltestboundary";
+    let mut body = format!(
+        "--{BOUNDARY}\r\n\
+         Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n\
+         Content-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+
+    (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
+/// POST a file to an upload route with a valid session.
+pub async fn upload_file(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    filename: &str,
+    content: &[u8],
+) -> (StatusCode, serde_json::Value) {
+    let (content_type, body) = multipart_body("file", filename, content);
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, format!("nigel_session={token}"))
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .expect("request");
+    send(app, request).await
+}
+
 pub fn unlock_body(password: &str) -> String {
     serde_json::json!({ "password": password }).to_string()
 }
@@ -188,7 +224,7 @@ pub async fn ok_json(app: &Router, uri: &str, token: &str) -> serde_json::Value 
 /// Every route that reads the database, for tests that must hold across all of
 /// them — the locked guard especially, where a route mounted in the wrong place
 /// would silently answer while the database is still encrypted.
-pub const DATA_ROUTES: [&str; 16] = [
+pub const DATA_ROUTES: [&str; 17] = [
     "/api/reports/pnl",
     "/api/reports/expenses",
     "/api/reports/tax",
@@ -201,6 +237,7 @@ pub const DATA_ROUTES: [&str; 16] = [
     "/api/categories",
     "/api/rules",
     "/api/imports",
+    "/api/imports/formats",
     "/api/csv-profiles",
     "/api/review/queue",
     "/api/review/1",
@@ -210,7 +247,7 @@ pub const DATA_ROUTES: [&str; 16] = [
 /// Every route that writes, as method, path, and a body good enough to reach
 /// the handler. The locked guard has to refuse all of them: a mutation that
 /// slipped past it would be changing a database nobody has unlocked.
-pub const WRITE_ROUTES: [(&str, &str, &str); 13] = [
+pub const WRITE_ROUTES: [(&str, &str, &str); 16] = [
     ("PATCH", "/api/transactions/1", r#"{"flag":true}"#),
     ("POST", "/api/categorize", "{}"),
     ("POST", "/api/review/1/apply", r#"{"categoryId":1}"#),
@@ -232,6 +269,19 @@ pub const WRITE_ROUTES: [(&str, &str, &str); 13] = [
     ("POST", "/api/rules", r#"{"pattern":"X","categoryId":1}"#),
     ("POST", "/api/rules/test", r#"{"pattern":"X"}"#),
     ("DELETE", "/api/imports/1", ""),
+    // The guard runs before the extractors, so these bodies only have to reach
+    // the router — the upload route never gets as far as wanting multipart.
+    ("POST", "/api/imports/upload", "{}"),
+    (
+        "POST",
+        "/api/imports/preview",
+        r#"{"uploadId":"x","account":"X"}"#,
+    ),
+    (
+        "POST",
+        "/api/imports/confirm",
+        r#"{"uploadId":"x","account":"X"}"#,
+    ),
 ];
 
 /// Send one entry of [`WRITE_ROUTES`].

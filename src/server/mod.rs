@@ -13,6 +13,7 @@ pub mod state;
 mod static_files;
 #[cfg(test)]
 pub mod testutil;
+pub mod uploads;
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -42,6 +43,9 @@ pub fn run(port: u16, no_open: bool) -> Result<()> {
 
 async fn serve(db_path: PathBuf, port: u16, no_open: bool) -> Result<()> {
     let state = AppState::new(db_path, auth::generate_token());
+
+    // A previous run may have been killed between an upload and its import.
+    uploads::purge_stale(&uploads::uploads_dir(&state.db_path), uploads::MAX_AGE);
 
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
     let addr = listener.local_addr()?;
