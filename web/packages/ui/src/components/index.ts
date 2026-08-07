@@ -71,3 +71,22 @@ export {
   type NcAccountChangeDetail,
   type NcSearchChangeDetail,
 } from './wc-register-toolbar.js';
+export {
+  WcDropzone,
+  DEFAULT_MAX_BYTES,
+  type NcFileErrorDetail,
+  type NcFileSelectDetail,
+} from './wc-dropzone.js';
+export {
+  WcImportForm,
+  DEFAULT_CSV_MAPPING,
+  EMPTY_IMPORT_FORM,
+  GENERIC_FORMAT_CHOICE,
+  type GenericCsvMapping,
+  type ImportAccountOption,
+  type ImportFormatOption,
+  type ImportFormValue,
+  type NcImportChangeDetail,
+} from './wc-import-form.js';
+export { WcSampleTable, type SampleTableRow } from './wc-sample-table.js';
+export { WcCountGrid, type CountEmphasis, type CountItem } from './wc-count-grid.js';
