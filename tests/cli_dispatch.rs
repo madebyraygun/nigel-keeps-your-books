@@ -324,17 +324,152 @@ fn report_all_text_export() {
         .success();
 
     assert!(output_dir.exists());
-    let entries: Vec<_> = std::fs::read_dir(&output_dir)
+    let names: Vec<String> = std::fs::read_dir(&output_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     // Should produce multiple report files (pnl, expenses, tax, cashflow, register, flagged, balance, k1)
     assert!(
-        entries.len() >= 5,
+        names.len() >= 5,
         "expected at least 5 report files, got {}",
-        entries.len()
+        names.len()
     );
+    // Business books include the K-1 worksheet — the half of the profile
+    // gating that a blanket "skip k1-prep" regression would break.
+    assert!(
+        names.iter().any(|n| n.starts_with("k1-prep")),
+        "business report all should include k1-prep, got {names:?}"
+    );
+}
+
+#[test]
+fn report_all_skips_k1_on_personal_books() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args([
+            "init",
+            "--data-dir",
+            &env.data_dir().to_string_lossy(),
+            "--profile",
+            "personal",
+        ])
+        .assert()
+        .success();
+
+    let output_dir = env.home.path().join("personal-reports");
+    env.cmd()
+        .args([
+            "report",
+            "all",
+            "--format",
+            "text",
+            "--output-dir",
+            &output_dir.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    let names: Vec<String> = std::fs::read_dir(&output_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names.iter().any(|n| n.starts_with("pnl")),
+        "expected the standard reports, got {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with("k1-prep")),
+        "personal report all must not write a K-1 worksheet, got {names:?}"
+    );
+}
+
+#[test]
+fn init_rejects_unknown_profile() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args([
+            "init",
+            "--data-dir",
+            &env.data_dir().to_string_lossy(),
+            "--profile",
+            "bogus",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown --profile"));
+    assert!(!env.data_dir().join("nigel.db").exists());
+}
+
+#[test]
+fn reinit_with_other_profile_warns_and_keeps_the_chart() {
+    let env = TestEnv::new();
+    let data_dir = env.data_dir().to_string_lossy().into_owned();
+    env.cmd()
+        .args(["init", "--data-dir", &data_dir])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["init", "--data-dir", &data_dir, "--profile", "personal"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("was ignored"));
+
+    // Still business books: the chart was neither reseeded nor restamped.
+    let has_business_chart: bool = env
+        .db()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM categories WHERE name = 'Client Services')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(has_business_chart);
+    let profile: String = env
+        .db()
+        .query_row(
+            "SELECT value FROM metadata WHERE key = 'profile'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(profile, "business");
+}
+
+#[test]
+fn demo_refuses_personal_books_and_writes_nothing() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args([
+            "init",
+            "--data-dir",
+            &env.data_dir().to_string_lossy(),
+            "--profile",
+            "personal",
+        ])
+        .assert()
+        .success();
+
+    env.cmd()
+        .arg("demo")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("personal"));
+
+    // The refusal must come before any insert: demo data has no import row,
+    // so anything written here would be un-undoable.
+    let accounts: i64 = env
+        .db()
+        .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))
+        .unwrap();
+    let transactions: i64 = env
+        .db()
+        .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!((accounts, transactions), (0, 0));
 }
 
 #[test]

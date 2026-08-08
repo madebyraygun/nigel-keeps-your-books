@@ -1052,6 +1052,23 @@ pub fn run() -> Result<()> {
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
     crate::db::init_db_with_profile(&conn, onboarding_profile)?;
 
+    // The chosen profile only takes effect on a fresh database. If onboarding
+    // ran against books that already exist (settings.json was deleted, or a
+    // prior run was skipped after the database was created), say so — the
+    // same courtesy `nigel init --profile` extends — instead of leaving the
+    // user believing they switched charts.
+    let mut profile_notice = None;
+    if post_setup_action.is_some() {
+        let seeded = crate::db::get_profile(&conn);
+        if seeded != onboarding_profile {
+            profile_notice = Some(format!(
+                "These books already keep {} records; the {} choice was ignored.",
+                seeded.as_str(),
+                onboarding_profile.as_str()
+            ));
+        }
+    }
+
     // Save company_name from onboarding to DB metadata
     if let Some(company) = onboarding_company {
         crate::db::set_metadata(&conn, "company_name", &company)?;
@@ -1105,6 +1122,9 @@ pub fn run() -> Result<()> {
         let conn = get_connection(&get_data_dir().join("nigel.db"))?;
         let mut dashboard = Dashboard::new(user_name.clone(), update_notification.clone());
         dashboard.load_data(&conn)?;
+        if let Some(notice) = profile_notice.take() {
+            dashboard.status_message = Some(notice);
+        }
 
         let mut terminal = ratatui::init();
 
@@ -1422,6 +1442,80 @@ pub fn run() -> Result<()> {
                 return Ok(());
             }
             Ok(false) => continue, // reload (data directory changed)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Profile;
+
+    #[test]
+    fn business_pickers_show_every_report() {
+        assert_eq!(
+            report_picker_items(Profile::Business, ReportPickerMode::View),
+            REPORT_TYPES
+        );
+        assert_eq!(
+            report_picker_items(Profile::Business, ReportPickerMode::Export),
+            EXPORT_TYPES
+        );
+    }
+
+    #[test]
+    fn personal_pickers_drop_only_the_k1_row() {
+        let view = report_picker_items(Profile::Personal, ReportPickerMode::View);
+        assert!(!view.contains(&"K-1 Prep (1120-S)"));
+        assert_eq!(view, &REPORT_TYPES[..REPORT_TYPES.len() - 1]);
+
+        let export = report_picker_items(Profile::Personal, ReportPickerMode::Export);
+        assert!(!export.contains(&"K-1 Prep (1120-S)"));
+        assert_eq!(export.last(), Some(&"All Reports"));
+        // Rows 0..=6 must be the canonical rows, because those selections are
+        // dispatched without translation.
+        assert_eq!(&export[..7], &EXPORT_TYPES[..7]);
+    }
+
+    /// The personal view list is built by truncation, which is only correct
+    /// while K-1 stays the last row of REPORT_TYPES.
+    #[test]
+    fn k1_is_the_last_view_row() {
+        assert_eq!(REPORT_TYPES.last(), Some(&"K-1 Prep (1120-S)"));
+        assert_eq!(EXPORT_TYPES[7], "K-1 Prep (1120-S)");
+        assert_eq!(EXPORT_TYPES[8], "All Reports");
+    }
+
+    #[test]
+    fn personal_export_all_reports_maps_to_canonical_index() {
+        // On the personal export picker "All Reports" sits where K-1 (7) used
+        // to be; dispatching it uncorrected would export the K-1 worksheet.
+        assert_eq!(
+            canonical_report_idx(Profile::Personal, ReportPickerMode::Export, 7),
+            8
+        );
+        // Every other selection, in every mode and profile, is identity.
+        for selection in 0..7 {
+            assert_eq!(
+                canonical_report_idx(Profile::Personal, ReportPickerMode::Export, selection),
+                selection
+            );
+        }
+        for selection in 0..9 {
+            assert_eq!(
+                canonical_report_idx(Profile::Business, ReportPickerMode::Export, selection),
+                selection
+            );
+        }
+        for selection in 0..8 {
+            assert_eq!(
+                canonical_report_idx(Profile::Business, ReportPickerMode::View, selection),
+                selection
+            );
+            assert_eq!(
+                canonical_report_idx(Profile::Personal, ReportPickerMode::View, selection),
+                selection
+            );
         }
     }
 }

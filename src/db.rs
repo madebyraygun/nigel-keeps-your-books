@@ -596,13 +596,18 @@ pub fn init_db_with_profile(conn: &Connection, profile: Profile) -> Result<()> {
             Profile::Business => BUSINESS_CATEGORIES,
             Profile::Personal => PERSONAL_CATEGORIES,
         };
+        // One transaction: a failure partway must not leave a non-empty
+        // categories table with no profile stamp, which would read as a
+        // half-seeded business database forever.
+        let tx = conn.unchecked_transaction()?;
         for cat in template {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO categories (name, parent_id, category_type, tax_line, form_line, description) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![cat.0, cat.1, cat.2, cat.3, cat.4, cat.5],
             )?;
         }
-        set_metadata(conn, PROFILE_KEY, profile.as_str())?;
+        set_metadata(&tx, PROFILE_KEY, profile.as_str())?;
+        tx.commit()?;
     }
 
     migrations::run_migrations(conn)?;
@@ -780,6 +785,9 @@ mod tests {
         let (_dir, conn) = test_db();
         conn.execute("DELETE FROM metadata WHERE key = ?1", [PROFILE_KEY])
             .unwrap();
+        assert_eq!(get_profile(&conn), Profile::Business);
+        // Unrecognized values read as business too, rather than erroring.
+        set_metadata(&conn, PROFILE_KEY, "cryptocurrency").unwrap();
         assert_eq!(get_profile(&conn), Profile::Business);
     }
 

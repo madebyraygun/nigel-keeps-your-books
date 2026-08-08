@@ -480,6 +480,8 @@ mod tests {
         assert_eq!(json["encrypted"], false);
         assert_eq!(json["locked"], false);
         assert_eq!(json["companyName"], serde_json::Value::Null);
+        // No database to read a profile from — business is the documented default.
+        assert_eq!(json["profile"], "business");
     }
 
     #[tokio::test]

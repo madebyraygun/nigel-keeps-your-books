@@ -343,6 +343,19 @@ mod tests {
     }
 
     #[test]
+    fn name_label_follows_the_books_profile() {
+        let (_dir, conn) = test_db();
+        let mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        assert_eq!(mgr.name_label, "Business Name");
+
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::get_connection(&dir.path().join("personal.db")).unwrap();
+        db::init_db_with_profile(&conn, db::Profile::Personal).unwrap();
+        let mgr = SettingsManager::new(&conn, "Hello").unwrap();
+        assert_eq!(mgr.name_label, "Household Name");
+    }
+
+    #[test]
     fn new_loads_company_name() {
         let (_dir, conn) = test_db();
         db::set_metadata(&conn, "company_name", "Acme LLC").unwrap();

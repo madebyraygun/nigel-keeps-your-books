@@ -122,7 +122,7 @@ export function isReportSlug(value: string | null): value is ReportSlug {
  *
  * Personal books drop the K-1 worksheet — a Form 1120-S artifact with nothing
  * to say about a chart of accounts that maps to no tax form. The route itself
- * stays reachable, exactly as `nigel report k1-prep` does in a terminal; only
+ * stays reachable, exactly as `nigel report k1` does in a terminal; only
  * the directory stops offering it.
  */
 export function reportDefs(profile: BooksProfile = 'business'): ReportDef[] {

@@ -129,7 +129,7 @@ was created with (`nigel init --profile`). The SPA hides the K-1 worksheet
 from the report directory and relabels the name field for personal books;
 while locked or uninitialized it reads `business`, since the profile lives in
 the database. The K-1 report and export routes stay reachable either way,
-exactly as `nigel report k1-prep` does in a terminal.
+exactly as `nigel report k1` does in a terminal.
 `pdfExport` is whether this binary was built with the `pdf` feature; a client
 uses it to decide whether to offer a PDF download at all (see
 [Exporting reports](#exporting-reports)).

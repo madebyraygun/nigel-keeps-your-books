@@ -915,6 +915,16 @@ mod tests {
         assert_eq!(finish_result(&ob).profile, Profile::Business);
     }
 
+    /// `make_onboarding` starts at NameInput for the older tests' convenience;
+    /// the real flow must start at the profile picker or the choice the docs
+    /// promise never appears.
+    #[test]
+    fn onboarding_starts_at_the_profile_picker() {
+        let ob = Onboarding::new();
+        assert!(matches!(ob.screen, Screen::ProfilePicker));
+        assert_eq!(ob.profile_selection, 0);
+    }
+
     #[test]
     fn profile_picker_selects_personal_and_advances() {
         let mut ob = make_onboarding();

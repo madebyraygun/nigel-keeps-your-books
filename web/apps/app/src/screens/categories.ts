@@ -25,6 +25,7 @@ import {
 } from './categories-data.js';
 import { guardrailAction, guardrailMessage } from './manager-errors.js';
 import { getAppStore } from '../state/app-store.js';
+import { SignalWatcher } from '../mixins/signal-watcher.js';
 import type { ScreenContext } from './context.js';
 import type { ScreenId } from './registry.js';
 
@@ -56,7 +57,9 @@ interface Editor {
  * here would make this the one screen where the chart looks different.
  */
 @customElement('nigel-categories-screen')
-export class NigelCategoriesScreen extends LitElement {
+// SignalWatcher because render() reads the status signal for the books
+// profile — a late-arriving status must repaint the description.
+export class NigelCategoriesScreen extends SignalWatcher(LitElement) {
   static styles = css`
     :host {
       display: block;
