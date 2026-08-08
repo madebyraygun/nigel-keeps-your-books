@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 use crate::models::Client;
 
 pub fn add_client(
@@ -18,7 +18,7 @@ pub fn add_client(
 }
 
 pub fn get_client(conn: &Connection, id: i64) -> Result<Client> {
-    let c = conn.query_row(
+    conn.query_row(
         "SELECT id, name, email, billing_address, notes FROM clients WHERE id = ?1",
         [id],
         |r| {
@@ -30,8 +30,27 @@ pub fn get_client(conn: &Connection, id: i64) -> Result<Client> {
                 notes: r.get(4)?,
             })
         },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("Client not found: id {id}"))
+        }
+        other => NigelError::Db(other),
+    })
+}
+
+/// Cheap existence probe for callers that only need the id to be real.
+pub fn ensure_client_exists(conn: &Connection, id: i64) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM clients WHERE id = ?1)",
+        [id],
+        |r| r.get(0),
     )?;
-    Ok(c)
+    if exists {
+        Ok(())
+    } else {
+        Err(NigelError::NotFound(format!("Client not found: id {id}")))
+    }
 }
 
 pub fn list_clients(conn: &Connection) -> Result<Vec<Client>> {
@@ -55,6 +74,7 @@ pub fn list_clients(conn: &Connection) -> Result<Vec<Client>> {
 mod tests {
     use super::*;
     use crate::db::{get_connection, init_db};
+    use crate::error::NigelError;
     use crate::migrations::run_migrations;
 
     fn test_conn() -> (tempfile::TempDir, rusqlite::Connection) {
@@ -63,6 +83,25 @@ mod tests {
         init_db(&conn).unwrap();
         run_migrations(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn unknown_client_id_is_not_found() {
+        let (_d, conn) = test_conn();
+        let err = get_client(&conn, 99).map(|_| ()).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Client not found: id 99");
+    }
+
+    #[test]
+    fn ensure_client_exists_passes_for_a_real_client_and_fails_otherwise() {
+        let (_d, conn) = test_conn();
+        let id = add_client(&conn, "Acme Co", None, None, None).unwrap();
+        assert!(ensure_client_exists(&conn, id).is_ok());
+
+        let err = ensure_client_exists(&conn, 99).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Client not found: id 99");
     }
 
     #[test]

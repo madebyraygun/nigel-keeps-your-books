@@ -5,6 +5,7 @@ use rusqlite::Connection;
 
 use crate::db::{get_metadata, set_metadata};
 use crate::error::Result;
+use crate::invoicing::clients::ensure_client_exists;
 use crate::models::{Invoice, InvoiceLineItem, InvoiceStatus};
 
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
@@ -42,6 +43,7 @@ pub fn create_invoice(
     notes: Option<&str>,
     terms: Option<&str>,
 ) -> Result<i64> {
+    ensure_client_exists(conn, client_id)?;
     let tx = conn.unchecked_transaction()?;
 
     let number = next_number(&tx)?;
@@ -370,6 +372,31 @@ mod tests {
         let id2 =
             create_invoice(&conn, cid, "2026-08-05", None, "USD", &items, None, None).unwrap();
         assert_eq!(get_invoice(&conn, id2).unwrap().number, 1249);
+    }
+
+    #[test]
+    fn creating_an_invoice_for_an_unknown_client_is_not_found_and_writes_nothing() {
+        let (_d, conn) = test_conn();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 10.0,
+        }];
+
+        let err = create_invoice(&conn, 99, "2026-08-04", None, "USD", &items, None, None)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::NigelError::NotFound(_)),
+            "got: {err:?}"
+        );
+        assert!(err.to_string().contains("id 99"), "got: {err}");
+
+        let invoices: i64 = conn
+            .query_row("SELECT COUNT(*) FROM invoices", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(invoices, 0);
+        assert_eq!(next_number(&conn).unwrap(), 1248);
     }
 
     #[test]
