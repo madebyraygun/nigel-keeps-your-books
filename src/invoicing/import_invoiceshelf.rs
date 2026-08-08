@@ -9,11 +9,14 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
+use serde::Serialize;
 
 use crate::db::set_metadata;
 use crate::error::{NigelError, Result};
 use crate::invoicing::invoices::gen_token;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportSummary {
     pub clients: u32,
     pub invoices: u32,

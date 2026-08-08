@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::{get_metadata, set_metadata};
 use crate::error::{NigelError, Result};
@@ -12,7 +12,10 @@ use crate::models::{Invoice, InvoiceLineItem, InvoicePayment, InvoiceStatus};
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
 const NEXT_NUMBER_DEFAULT: i64 = 1248;
 
-#[derive(Debug, Clone)]
+/// Also `Deserialize`: a line item is a request input as well as a response
+/// field, unlike every other struct in this module.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewLineItem {
     pub description: String,
     pub quantity: f64,
@@ -510,7 +513,8 @@ pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineI
 
 /// One row of the invoice list: everything a list screen prints, including the
 /// balance, without a second query per invoice.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InvoiceListRow {
     pub id: i64,
     pub number: i64,
@@ -697,6 +701,19 @@ mod tests {
         init_db(&conn).unwrap();
         run_migrations(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn a_line_item_reads_and_writes_camel_case_json() {
+        let item: NewLineItem =
+            serde_json::from_str(r#"{"description":"Design","quantity":2,"unitAmount":100}"#)
+                .unwrap();
+        assert_eq!(item.description, "Design");
+        assert_eq!(item.unit_amount, 100.0);
+        assert_eq!(
+            serde_json::to_value(&item).unwrap()["unitAmount"],
+            serde_json::json!(100.0)
+        );
     }
 
     #[test]

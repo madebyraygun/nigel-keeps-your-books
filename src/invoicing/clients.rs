@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::error::{NigelError, Result};
 use crate::models::Client;
@@ -137,7 +138,8 @@ pub fn list_clients(conn: &Connection) -> Result<Vec<Client>> {
 }
 
 /// One row of a client's invoice history, for `client show`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientInvoiceRow {
     pub number: i64,
     pub status: String,
@@ -148,7 +150,8 @@ pub struct ClientInvoiceRow {
 }
 
 /// A client plus everything `client show` prints, in one round trip.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientSummary {
     pub client: Client,
     /// Newest invoice number first.
