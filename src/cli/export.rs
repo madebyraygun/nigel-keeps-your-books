@@ -56,6 +56,7 @@ pub fn dispatch_pdf(cmd: ReportCommands, output: Option<String>) -> Result<Strin
         } => register(month, year, from_date, to_date, account, output),
         ReportCommands::Flagged { .. } => flagged(output),
         ReportCommands::Balance { .. } => balance(output),
+        ReportCommands::Aging { .. } => aging(output),
         ReportCommands::K1 { year, .. } => k1(year, output),
         ReportCommands::All {
             year, output_dir, ..

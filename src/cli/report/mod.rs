@@ -91,6 +91,7 @@ pub(crate) fn dispatch_text(cmd: &ReportCommands) -> Result<String> {
         ),
         ReportCommands::Flagged { .. } => text::flagged(),
         ReportCommands::Balance { .. } => text::balance(),
+        ReportCommands::Aging { .. } => text::aging(&crate::cli::today()),
         ReportCommands::K1 { year, .. } => text::k1(*year),
         ReportCommands::All { .. } => Err(crate::error::NigelError::Other(
             "`report all` is export-only".into(),

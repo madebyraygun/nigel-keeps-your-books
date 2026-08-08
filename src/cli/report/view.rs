@@ -76,6 +76,7 @@ pub(crate) fn build_view(cmd: &ReportCommands) -> Result<Box<dyn ReportView>> {
         ReportCommands::Cashflow { month, year, .. } => build_cashflow(month.clone(), *year),
         ReportCommands::Flagged { .. } => build_flagged(),
         ReportCommands::Balance { .. } => build_balance(),
+        ReportCommands::Aging { .. } => build_aging(),
         ReportCommands::K1 { year, .. } => build_k1(*year),
         _ => Err(crate::error::NigelError::Other(
             "Unsupported report for view mode".into(),
@@ -869,6 +870,85 @@ pub(crate) fn build_k1(year: Option<i32>) -> Result<Box<dyn ReportView>> {
     ))
 }
 
+pub(crate) fn build_aging() -> Result<Box<dyn ReportView>> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let data = crate::invoicing::invoices::ar_aging_detail(&conn, &crate::cli::today())?;
+    Ok(Box::new(aging_view(&data)))
+}
+
+fn aging_view(data: &crate::invoicing::invoices::AgingReport) -> TableReportView {
+    let widths = vec![
+        Constraint::Fill(1),
+        Constraint::Length(22),
+        Constraint::Length(12),
+        Constraint::Length(6),
+        Constraint::Length(14),
+    ];
+    let header = Row::new(["Invoice", "Client", "Due", "Days", "Balance"])
+        .style(HEADER_ROW_STYLE)
+        .bottom_margin(1);
+
+    let mut rows = vec![section_row("SUMMARY", 5)];
+    for b in &data.buckets {
+        let label = format!("  {} ({})", b.label, b.count);
+        let label_cell = if b.label != "current" && b.total > 0.005 {
+            Cell::from(Span::styled(label, Style::default().fg(Color::Yellow)))
+        } else {
+            text_cell(label)
+        };
+        rows.push(Row::new([
+            label_cell,
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            money_cell(b.total),
+        ]));
+    }
+    let count: usize = data.buckets.iter().map(|b| b.count).sum();
+    rows.push(Row::new([
+        bold_cell(format!("  Total Outstanding ({count})")),
+        Cell::from(""),
+        Cell::from(""),
+        Cell::from(""),
+        money_cell(data.outstanding),
+    ]));
+
+    rows.push(blank_row(5));
+    rows.push(section_row("OPEN INVOICES", 5));
+
+    if data.invoices.is_empty() {
+        rows.push(Row::new([
+            text_cell("No open invoices."),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(""),
+        ]));
+    } else {
+        for i in &data.invoices {
+            let days = if i.days_past_due > 0 {
+                i.days_past_due.to_string()
+            } else {
+                "\u{2014}".to_string()
+            };
+            rows.push(Row::new([
+                text_cell(format!("#{}", i.number)),
+                text_cell(truncate(&i.client, 22)),
+                text_cell(&i.due_date),
+                text_cell(days),
+                money_cell(i.balance),
+            ]));
+        }
+    }
+
+    TableReportView::new(
+        format!("A/R Aging \u{2014} as of {}", data.as_of),
+        header,
+        rows,
+        widths,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Register (standalone — delegates to RegisterBrowser)
 // ---------------------------------------------------------------------------
@@ -976,5 +1056,79 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         let truncated: String = s.chars().take(max - 1).collect();
         format!("{truncated}\u{2026}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::invoicing::invoices::{AgingBucket, AgingInvoice, AgingReport};
+
+    fn aging_fixture(invoice_count: i64) -> AgingReport {
+        let invoices: Vec<AgingInvoice> = (0..invoice_count)
+            .map(|n| AgingInvoice {
+                number: 1248 + n,
+                client: "Acme Co".into(),
+                due_date: "2026-06-20".into(),
+                days_past_due: 45 - n,
+                bucket: "31-60",
+                total: 100.0,
+                paid: 0.0,
+                balance: 100.0,
+            })
+            .collect();
+        AgingReport {
+            as_of: "2026-08-04".into(),
+            buckets: vec![
+                AgingBucket {
+                    label: "current",
+                    count: 0,
+                    total: 0.0,
+                },
+                AgingBucket {
+                    label: "31-60",
+                    count: invoices.len(),
+                    total: 100.0 * invoice_count as f64,
+                },
+            ],
+            invoices,
+            outstanding: 100.0 * invoice_count as f64,
+        }
+    }
+
+    #[test]
+    fn aging_view_has_no_date_navigation() {
+        let view = aging_view(&aging_fixture(2));
+        assert_eq!(view.date_params(), (None, None));
+    }
+
+    #[test]
+    fn aging_view_ignores_period_keys() {
+        let mut view = aging_view(&aging_fixture(30));
+        for key in [KeyCode::Left, KeyCode::Right, KeyCode::Char('m')] {
+            assert!(
+                matches!(
+                    ReportView::handle_key(&mut view, key),
+                    ReportViewAction::Continue
+                ),
+                "{key:?} should not navigate"
+            );
+        }
+        assert_eq!(view.offset, 0);
+    }
+
+    #[test]
+    fn aging_view_scrolls() {
+        let mut view = aging_view(&aging_fixture(30));
+        ReportView::handle_key(&mut view, KeyCode::Down);
+        assert_eq!(view.offset, 1);
+        ReportView::handle_key(&mut view, KeyCode::Up);
+        assert_eq!(view.offset, 0);
+    }
+
+    #[test]
+    fn aging_view_titles_the_as_of_date() {
+        let view = aging_view(&aging_fixture(1));
+        assert_eq!(view.title, "A/R Aging \u{2014} as of 2026-08-04");
     }
 }
