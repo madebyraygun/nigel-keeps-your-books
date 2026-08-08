@@ -48,7 +48,7 @@ fn parse_items(items: &[String]) -> Result<Vec<NewLineItem>> {
 
 fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
     get_invoice_by_number(conn, number).map_err(|e| match e {
-        NigelError::Db(rusqlite::Error::QueryReturnedNoRows) => NigelError::Other(format!(
+        NigelError::Db(rusqlite::Error::QueryReturnedNoRows) => NigelError::NotFound(format!(
             "No invoice #{number}. Run `nigel invoice list` to see invoice numbers."
         )),
         other => other,
@@ -57,10 +57,13 @@ fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
 
 fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
     if invoice.status == InvoiceStatus::Void.as_str() {
-        return Err(NigelError::Other(format!(
-            "Invoice #{} is void and cannot be {action}.",
-            invoice.number
-        )));
+        return Err(NigelError::Conflict {
+            code: "void",
+            message: format!(
+                "Invoice #{} is void and cannot be {action}.",
+                invoice.number
+            ),
+        });
     }
     Ok(())
 }
@@ -385,11 +388,9 @@ mod tests {
     #[test]
     fn unknown_invoice_number_gets_a_readable_error() {
         let (_d, conn) = test_conn();
-        let err = find_invoice(&conn, 9999)
-            .map(|_| ())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("No invoice #9999"), "got: {err}");
+        let err = find_invoice(&conn, 9999).map(|_| ()).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert!(err.to_string().contains("No invoice #9999"), "got: {err}");
     }
 
     #[test]
@@ -410,14 +411,22 @@ mod tests {
             .unwrap();
         let invoice = find_invoice(&conn, 1248).unwrap();
 
-        let send_err = ensure_not_void(&invoice, "sent").unwrap_err().to_string();
+        let send_err = ensure_not_void(&invoice, "sent").unwrap_err();
         assert!(
-            send_err.contains("void and cannot be sent"),
+            matches!(send_err, NigelError::Conflict { code: "void", .. }),
+            "got: {send_err:?}"
+        );
+        assert!(
+            send_err.to_string().contains("void and cannot be sent"),
             "got: {send_err}"
         );
-        let pay_err = ensure_not_void(&invoice, "paid").unwrap_err().to_string();
+        let pay_err = ensure_not_void(&invoice, "paid").unwrap_err();
         assert!(
-            pay_err.contains("void and cannot be paid"),
+            matches!(pay_err, NigelError::Conflict { code: "void", .. }),
+            "got: {pay_err:?}"
+        );
+        assert!(
+            pay_err.to_string().contains("void and cannot be paid"),
             "got: {pay_err}"
         );
     }

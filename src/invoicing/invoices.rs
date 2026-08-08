@@ -4,7 +4,7 @@ use rand::Rng;
 use rusqlite::Connection;
 
 use crate::db::{get_metadata, set_metadata};
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 use crate::invoicing::clients::ensure_client_exists;
 use crate::models::{Invoice, InvoiceLineItem, InvoiceStatus};
 
@@ -205,6 +205,58 @@ fn is_overdue(due_date: Option<&str>, today: &str) -> bool {
         Some(d) => today > d,
         None => false,
     }
+}
+
+/// May this invoice be edited? Draft, not void, and with no recorded payments —
+/// a payment against it means the client has settled against these figures.
+pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
+    if invoice.voided_at.is_some() {
+        return Err(NigelError::Conflict {
+            code: "void",
+            message: format!("Invoice #{} is void and cannot be edited.", invoice.number),
+        });
+    }
+    if invoice.status != InvoiceStatus::Draft.as_str() {
+        return Err(NigelError::Conflict {
+            code: "not_draft",
+            message: format!(
+                "Invoice #{} has already been sent and cannot be edited. Void it and issue a new one.",
+                invoice.number
+            ),
+        });
+    }
+    let paid = paid_amount(conn, invoice.id)?;
+    if paid > 0.0 {
+        return Err(NigelError::Conflict {
+            code: "has_payments",
+            message: format!(
+                "Invoice #{} has {paid:.2} in recorded payments and cannot be edited.",
+                invoice.number
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// May this invoice be voided? Not already void, and with no recorded payments.
+pub fn ensure_voidable(conn: &Connection, invoice: &Invoice) -> Result<()> {
+    if invoice.voided_at.is_some() {
+        return Err(NigelError::Conflict {
+            code: "already_void",
+            message: format!("Invoice #{} is already void.", invoice.number),
+        });
+    }
+    let paid = paid_amount(conn, invoice.id)?;
+    if paid > 0.0 {
+        return Err(NigelError::Conflict {
+            code: "has_payments",
+            message: format!(
+                "Invoice #{} has {paid:.2} in recorded payments and cannot be voided.",
+                invoice.number
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub fn set_payment_link(conn: &Connection, id: i64, link_id: &str, url: &str) -> Result<()> {
@@ -615,6 +667,110 @@ mod tests {
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
         record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
         assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    /// One 100.00 draft invoice (number 1248) and its row id.
+    fn seed_draft(conn: &Connection) -> i64 {
+        let cid = add_client(conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        create_invoice(conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap()
+    }
+
+    fn conflict_code(err: &crate::error::NigelError) -> &'static str {
+        match err {
+            crate::error::NigelError::Conflict { code, .. } => code,
+            other => panic!("expected a Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_clean_draft_is_editable_and_voidable() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        assert!(ensure_editable(&conn, &invoice).is_ok());
+        assert!(ensure_voidable(&conn, &invoice).is_ok());
+    }
+
+    #[test]
+    fn a_published_invoice_refuses_edits() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "not_draft");
+        assert!(
+            err.to_string()
+                .contains("has already been sent and cannot be edited"),
+            "got: {err}"
+        );
+        assert!(ensure_voidable(&conn, &invoice).is_ok());
+    }
+
+    #[test]
+    fn a_void_invoice_refuses_edits() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_at(&conn, id, "2026-08-06");
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "void");
+        assert_eq!(
+            err.to_string(),
+            "Invoice #1248 is void and cannot be edited."
+        );
+    }
+
+    #[test]
+    fn an_invoice_with_payments_refuses_edit_and_void() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        record_payment(&conn, id, 50.0, "2026-08-10", "ach", None).unwrap();
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let edit_err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&edit_err), "has_payments");
+        assert_eq!(
+            edit_err.to_string(),
+            "Invoice #1248 has 50.00 in recorded payments and cannot be edited."
+        );
+
+        let void_err = ensure_voidable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&void_err), "has_payments");
+        assert_eq!(
+            void_err.to_string(),
+            "Invoice #1248 has 50.00 in recorded payments and cannot be voided."
+        );
+    }
+
+    #[test]
+    fn voiding_a_void_invoice_is_already_void() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_at(&conn, id, "2026-08-06");
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let err = ensure_voidable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "already_void");
+        assert_eq!(err.to_string(), "Invoice #1248 is already void.");
+    }
+
+    /// Void by hand, the way migration v5 leaves a voided row.
+    fn void_at(conn: &Connection, id: i64, on: &str) {
+        conn.execute(
+            "UPDATE invoices SET voided_at = ?1 WHERE id = ?2",
+            rusqlite::params![on, id],
+        )
+        .unwrap();
+        refresh_status(conn, id, on).unwrap();
     }
 
     #[test]
