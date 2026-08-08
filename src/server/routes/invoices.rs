@@ -79,15 +79,7 @@ struct NextNumber {
 
 /// The invoice behind a number, or a 404 that says it was the invoice missing.
 fn find_invoice(conn: &Connection, number: i64) -> ApiResult<Invoice> {
-    // `get_invoice_by_number` reports an absent row as a rusqlite error, which
-    // the global mapping would call a 500. The CLI narrows it the same way.
-    match inv::get_invoice_by_number(conn, number) {
-        Ok(invoice) => Ok(invoice),
-        Err(crate::error::NigelError::Db(rusqlite::Error::QueryReturnedNoRows)) => Err(
-            ApiError::not_found_because(format!("No invoice #{number}."), "invoice_not_found"),
-        ),
-        Err(other) => Err(ApiError::from(other)),
-    }
+    inv::get_invoice_by_number(conn, number).map_err(|e| not_found_because(e, "invoice_not_found"))
 }
 
 fn detail_for(conn: &Connection, invoice: Invoice) -> ApiResult<InvoiceDetail> {
@@ -257,8 +249,15 @@ async fn preview_html(
     State(state): State<AppState>,
     ApiPath(number): ApiPath<i64>,
 ) -> ApiResult<Response> {
-    let data_dir = state.data_dir();
-    let rendered = with_conn_api(&state, move |conn| render(conn, &data_dir, number)).await?;
+    let rendered = with_conn_api(&state, {
+        let state = state.clone();
+        // The data directory is read inside the closure, under the same guard
+        // the connection is opened under: a data-directory switch landing
+        // between the two would render the new database's invoice through the
+        // old directory's template.
+        move |conn| render(conn, &state.data_dir(), number)
+    })
+    .await?;
     Ok((
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
@@ -266,7 +265,10 @@ async fn preview_html(
             // openable in a tab, where the document would otherwise be a
             // same-origin page rendering database text.
             (header::CONTENT_SECURITY_POLICY, "sandbox"),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            // Overriding the blanket `DENY`, which blocks same-origin framing
+            // too and would leave the SPA's preview iframe blank. `nosniff`
+            // comes from that same middleware and is not restated here.
+            (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
         ],
         rendered.html,
     )
@@ -277,13 +279,16 @@ async fn preview_pdf(
     State(state): State<AppState>,
     ApiPath(number): ApiPath<i64>,
 ) -> ApiResult<Response> {
-    let data_dir = state.data_dir();
-    let bytes = with_conn_api(&state, move |conn| {
-        // The same sentence the CLI prints, answered the way `exports.rs`
-        // answers it: HTML still renders in such a build, only the PDF cannot.
-        render(conn, &data_dir, number)?
-            .pdf
-            .ok_or_else(|| ApiError::feature_disabled(crate::cli::report::PDF_DISABLED_MESSAGE))
+    let bytes = with_conn_api(&state, {
+        let state = state.clone();
+        move |conn| {
+            // The same sentence the CLI prints, answered the way `exports.rs`
+            // answers it: HTML still renders in such a build, only the PDF
+            // cannot.
+            render(conn, &state.data_dir(), number)?
+                .pdf
+                .ok_or_else(|| ApiError::feature_disabled(crate::cli::report::PDF_DISABLED_MESSAGE))
+        }
     })
     .await?;
 

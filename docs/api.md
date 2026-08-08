@@ -432,10 +432,14 @@ takes a gateway: no network call is possible from either route. Preview needs no
 invoicing config at all; with `from_email` unset the direct-deposit contact line
 renders the same visible placeholder the CLI prints a notice about.
 
-The HTML response also carries `Content-Security-Policy: sandbox` and
-`X-Content-Type-Options: nosniff`. The SPA frames it in an `<iframe sandbox>`
-with no `allow-same-origin`, and the header is what covers the case of the route
-being opened directly in a tab.
+The HTML response also carries `Content-Security-Policy: sandbox`, which covers
+the case of the route being opened directly in a tab rather than framed. It is
+the one response on this server that answers `X-Frame-Options: SAMEORIGIN`
+instead of the blanket `DENY`: the SPA renders the preview in an
+`<iframe sandbox>` with no `allow-same-origin`, and `DENY` blocks same-origin
+framing too, so the frame would otherwise be blank. Everything else — including
+`preview.pdf` and this route's own error responses — keeps `DENY`.
+`X-Content-Type-Options: nosniff` is on every response this server sends.
 
 The PDF response is a download named `invoice-{number}.pdf`. Without the `pdf`
 feature it is `501 feature_disabled`, carrying the same sentence the CLI prints,

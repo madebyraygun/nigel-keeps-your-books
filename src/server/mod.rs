@@ -147,14 +147,21 @@ async fn shutdown_signal() {
 /// it outright costs a header and removes the question. `nosniff` holds the
 /// browser to the content type each response states — the API's `application/
 /// json` error envelopes echo request values, and a sniffed one is HTML.
+///
+/// Both are **defaults**, not overrides: a handler that set either one keeps its
+/// value. `DENY` blocks same-origin framing as well as cross-origin, so the
+/// invoice preview — a document the SPA renders in a sandboxed `<iframe>` of its
+/// own page — answers `SAMEORIGIN` for itself. Deciding that per route beats
+/// loosening the blanket value for every response.
 async fn security_headers(req: Request, next: Next) -> Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers
+        .entry(header::X_CONTENT_TYPE_OPTIONS)
+        .or_insert(HeaderValue::from_static("nosniff"));
+    headers
+        .entry(header::X_FRAME_OPTIONS)
+        .or_insert(HeaderValue::from_static("DENY"));
     response
 }
 
@@ -861,5 +868,32 @@ mod tests {
             );
             assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
         }
+    }
+
+    /// The blanket headers are defaults a handler may override, and the invoice
+    /// preview is the one route that does: `DENY` would blank the `<iframe>` the
+    /// SPA renders it in, same-origin or not.
+    #[tokio::test]
+    async fn the_preview_route_frames_same_origin_and_keeps_nosniff() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = get_response(&app, "/api/invoices/1248/preview", &token).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "SAMEORIGIN");
+        // The middleware's other default still applies — it was never overridden.
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+
+        // Its sibling and its own error responses keep the blanket default.
+        let pdf = get_response(&app, "/api/invoices/1248/preview.pdf", &token).await;
+        assert_eq!(pdf.headers()[header::X_FRAME_OPTIONS], "DENY");
+
+        let missing = get_response(&app, "/api/invoices/9999/preview", &token).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.headers()[header::X_FRAME_OPTIONS], "DENY");
     }
 }
