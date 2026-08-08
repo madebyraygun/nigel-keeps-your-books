@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 07:20'
+updated_date: '2026-08-08 08:58'
 labels:
   - invoicing
   - web
@@ -51,4 +51,6 @@ Plan approved by orchestrator. Rulings on open questions:
 Stage 1 merged (PR #189): Serialize derives with token skip_serializing, payment_amount+void guards in the data layer, wire-shaped list_invoices, formatters extracted and routed through fmt::money (the one intentional CLI output change). Stage-2 notes: ClientSummary needs serde(flatten) at the route wrapper; publicUrl computed at the route; OPEN_STATUSES/PAYMENT_METHODS consts are the legal-set source; clientName is Option. Orphaned-invoice detail deferred to stage 3 with delete_client.
 
 Stage 2 merged (PR #190): read API complete (clients, invoices, aging, next-number, preview HTML/PDF, status invoicing block omitted while locked). Security headers now defer to handler-set values; preview frames SAMEORIGIN, everything else stays DENY. get_invoice_by_number retyped NotFound in the data layer. Stage-5 note: preview iframe sandbox must NOT include allow-same-origin. serve-without-pdf test run added to the standing gate.
+
+Stage 3 merged (PR #191): write API (clients CRUD incl. delete_client with has_invoices guard, invoice create/edit/void/pay). validate_items lives in the data layer — CLI and API refuse NaN/inf/zero-total items with one voice; overflow-to-infinity checked per line and on the sum. clients.name UNIQUE decision → TASK-70; refresh_status issue-date quirk → TASK-71. Stage-4 note: /api/invoices/sync literal must mount safely beside /{number}/send.
 <!-- SECTION:NOTES:END -->
