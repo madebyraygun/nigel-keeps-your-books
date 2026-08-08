@@ -15,6 +15,28 @@ because there is no PDF to upload or attach. `nigel invoice preview` is the
 exception: without the feature it writes the HTML and says why there is no PDF,
 rather than stopping.
 
+## From the dashboard
+
+Everything below is a terminal command, but the day-to-day half of it is on the
+dashboard as well. Run `nigel` and press:
+
+- `k` — **Clients.** The list, `a` to add one, `e` to edit the selected one.
+  There is no delete: a client with invoices must not disappear from under them.
+- `n` — **Invoices.** The list (number, status, client, total, balance, due) with
+  `Enter` to open one. The actions live on the open invoice, not the list: `s`
+  sends it, `p` records a payment against it, `v` voids it — each with a
+  confirmation, and each refused in the same words the CLI would use.
+
+The dashboard **cannot draft an invoice**: `nigel invoice new` is still the only
+way to create one, and the empty invoice list says so. The list also shows the
+stored status, exactly as `nigel invoice list` does, so an invoice that crossed
+its due date since it was last written still reads `sent` rather than `overdue`
+until something touches it.
+
+Sending from the dashboard blocks the terminal for the few seconds the three
+network hops take. The screen says so while it waits, and keys pressed during
+the wait are discarded rather than dismissing the result.
+
 ## Configuration
 
 Secrets and endpoints resolve from the environment first, then from
