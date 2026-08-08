@@ -9,15 +9,15 @@ use ratatui::{
 use rusqlite::Connection;
 
 use crate::cli::invoice::{
-    build_clients, company_name, ensure_not_void, is_void, payment_amount, PUBLISHED_VOID_WARNING,
+    build_clients, company_name, ensure_not_void, is_void, PUBLISHED_VOID_WARNING,
 };
 use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{
-    ensure_voidable, get_invoice, line_items, list_invoices, paid_amount, payments, record_payment,
-    validate_date, void_invoice, InvoiceListRow,
+    ensure_voidable, get_invoice, line_items, list_invoices, paid_amount, payment_amount, payments,
+    record_payment, validate_date, void_invoice, InvoiceListRow,
 };
 use crate::invoicing::render_html::{load_template, Branding};
 use crate::invoicing::send::send_invoice;

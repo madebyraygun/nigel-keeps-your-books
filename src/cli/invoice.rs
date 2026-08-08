@@ -10,7 +10,7 @@ use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
     create_invoice, ensure_voidable, get_invoice, get_invoice_by_number, line_items, paid_amount,
-    record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
+    payment_amount, record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
@@ -100,31 +100,6 @@ pub(crate) fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
         });
     }
     Ok(())
-}
-
-/// Resolve the amount to record: the explicit `--amount`, or the whole
-/// outstanding balance. Rejects amounts that would write a junk payment row.
-pub(crate) fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
-    match requested {
-        // Negated positive test, not `amount <= 0.0`: NaN compares false against
-        // every bound, and a NaN payment row poisons every later SUM.
-        Some(amount) if !(amount.is_finite() && amount > 0.0) => Err(NigelError::Other(format!(
-            "--amount must be a finite number greater than zero, got {amount:.2}."
-        ))),
-        Some(amount) => Ok(amount),
-        None => {
-            let outstanding = invoice.total - paid;
-            // Same half-cent slack `refresh_status` settles with: anything under
-            // it is already paid in full, not a balance worth recording.
-            if outstanding < 0.005 {
-                return Err(NigelError::Other(format!(
-                    "Invoice #{} has no outstanding balance (total {:.2}, paid {:.2}). Pass --amount to record a payment anyway.",
-                    invoice.number, invoice.total, paid
-                )));
-            }
-            Ok(outstanding)
-        }
-    }
 }
 
 fn require(value: Option<String>, what: &str) -> Result<String> {
@@ -838,59 +813,5 @@ mod tests {
     fn preview_requires_no_invoicing_config_at_all() {
         assert!(build_clients(test_config()).is_err()); // send cannot run
         assert!(!contact_email_for_preview(&test_config()).0.is_empty()); // preview can
-    }
-
-    #[test]
-    fn default_payment_is_the_outstanding_balance() {
-        let (_d, conn) = test_conn();
-        seed_invoice(&conn);
-        let invoice = find_invoice(&conn, 1248).unwrap();
-
-        assert_eq!(payment_amount(&invoice, 0.0, None).unwrap(), 100.0);
-        assert_eq!(payment_amount(&invoice, 40.0, None).unwrap(), 60.0);
-    }
-
-    #[test]
-    fn settled_invoices_have_nothing_left_to_pay() {
-        let (_d, conn) = test_conn();
-        seed_invoice(&conn);
-        let invoice = find_invoice(&conn, 1248).unwrap();
-
-        for paid in [100.0, 100.001, 150.0] {
-            let err = payment_amount(&invoice, paid, None)
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("no outstanding balance"), "got: {err}");
-        }
-    }
-
-    #[test]
-    fn explicit_amount_must_be_positive() {
-        let (_d, conn) = test_conn();
-        seed_invoice(&conn);
-        let invoice = find_invoice(&conn, 1248).unwrap();
-
-        for amount in [0.0, -25.0] {
-            let err = payment_amount(&invoice, 0.0, Some(amount))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("greater than zero"), "got: {err}");
-        }
-        // An overpayment is a real thing a bank does; only zero and negative are junk.
-        assert_eq!(payment_amount(&invoice, 0.0, Some(250.0)).unwrap(), 250.0);
-    }
-
-    #[test]
-    fn explicit_amount_must_be_finite() {
-        let (_d, conn) = test_conn();
-        seed_invoice(&conn);
-        let invoice = find_invoice(&conn, 1248).unwrap();
-
-        for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let err = payment_amount(&invoice, 0.0, Some(amount))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("finite number"), "got: {err}");
-        }
     }
 }

@@ -452,6 +452,39 @@ pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the amount to record against an invoice: the explicit request, or
+/// the whole outstanding balance. Rejects amounts that would write a junk
+/// payment row.
+///
+/// It lives here rather than in `cli/invoice.rs` so both front ends refuse the
+/// same amounts with the same words, and so the refusals are typed: "already
+/// settled" is a conflict, not an internal error.
+pub fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
+    match requested {
+        // Negated positive test, not `amount <= 0.0`: NaN compares false against
+        // every bound, and a NaN payment row poisons every later SUM.
+        Some(amount) if !(amount.is_finite() && amount > 0.0) => Err(NigelError::Invalid(format!(
+            "--amount must be a finite number greater than zero, got {amount:.2}."
+        ))),
+        Some(amount) => Ok(amount),
+        None => {
+            let outstanding = invoice.total - paid;
+            // Same half-cent slack `refresh_status` settles with: anything under
+            // it is already paid in full, not a balance worth recording.
+            if outstanding < 0.005 {
+                return Err(NigelError::Conflict {
+                    code: "no_balance",
+                    message: format!(
+                        "Invoice #{} has no outstanding balance (total {:.2}, paid {:.2}). Pass --amount to record a payment anyway.",
+                        invoice.number, invoice.total, paid
+                    ),
+                });
+            }
+            Ok(outstanding)
+        }
+    }
+}
+
 /// May this invoice be voided? Not already void, and with no recorded payments.
 pub fn ensure_voidable(conn: &Connection, invoice: &Invoice) -> Result<()> {
     if invoice.voided_at.is_some() {
@@ -1020,6 +1053,50 @@ mod tests {
             crate::error::NigelError::Conflict { code, .. } => code,
             other => panic!("expected a Conflict, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn default_payment_is_the_outstanding_balance() {
+        let (_d, conn) = test_conn();
+        let invoice = get_invoice(&conn, seed_draft(&conn)).unwrap();
+
+        assert_eq!(payment_amount(&invoice, 0.0, None).unwrap(), 100.0);
+        assert_eq!(payment_amount(&invoice, 40.0, None).unwrap(), 60.0);
+    }
+
+    #[test]
+    fn no_outstanding_balance_is_a_conflict_not_an_internal_error() {
+        let (_d, conn) = test_conn();
+        let invoice = get_invoice(&conn, seed_draft(&conn)).unwrap();
+
+        for paid in [100.0, 100.001, 150.0] {
+            let err = payment_amount(&invoice, paid, None).unwrap_err();
+            assert_eq!(conflict_code(&err), "no_balance");
+            // The CLI's sentence is unchanged, verbatim.
+            assert!(
+                err.to_string().contains("no outstanding balance"),
+                "got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nan_or_negative_amount_is_invalid_not_a_junk_payment_row() {
+        let (_d, conn) = test_conn();
+        let invoice = get_invoice(&conn, seed_draft(&conn)).unwrap();
+
+        for amount in [0.0, -25.0] {
+            let err = payment_amount(&invoice, 0.0, Some(amount)).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+            assert!(err.to_string().contains("greater than zero"), "got: {err}");
+        }
+        for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = payment_amount(&invoice, 0.0, Some(amount)).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+            assert!(err.to_string().contains("finite number"), "got: {err}");
+        }
+        // An overpayment is a real thing a bank does; only zero and negative are junk.
+        assert_eq!(payment_amount(&invoice, 0.0, Some(250.0)).unwrap(), 250.0);
     }
 
     #[test]
