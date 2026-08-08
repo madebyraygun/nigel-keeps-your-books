@@ -326,10 +326,22 @@ pub const EXPORT_ROUTES: [&str; 8] = [
 /// — `rules/test` and `imports/preview` are dry runs — and a rule stated as
 /// "the ones that write" invites the next dry run to be left out of a list the
 /// guard still has to cover.
-pub const WRITE_ROUTES: [(&str, &str, &str); 28] = [
+pub const WRITE_ROUTES: [(&str, &str, &str); 32] = [
     ("POST", "/api/clients", r#"{"name":"X"}"#),
     ("PATCH", "/api/clients/1", r#"{"name":"X"}"#),
     ("DELETE", "/api/clients/1", ""),
+    (
+        "POST",
+        "/api/invoices",
+        r#"{"clientId":1,"issueDate":"2026-04-01","items":[{"description":"X","quantity":1,"unitAmount":1}]}"#,
+    ),
+    ("PATCH", "/api/invoices/1252", r#"{"notes":"X"}"#),
+    ("POST", "/api/invoices/1252/void", "{}"),
+    (
+        "POST",
+        "/api/invoices/1252/pay",
+        r#"{"amount":1,"date":"2026-04-01"}"#,
+    ),
     ("PATCH", "/api/rules/1", r#"{"priority":5}"#),
     ("DELETE", "/api/rules/1", ""),
     (

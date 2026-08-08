@@ -8,33 +8,37 @@
 
 use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::header;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use crate::error::NigelError;
 use crate::invoicing::clients::get_client;
-use crate::invoicing::invoices::{self as inv, AgingReport, InvoiceListRow};
+use crate::invoicing::invoices::NewLineItem;
+use crate::invoicing::invoices::{self as inv, AgingReport, InvoiceListRow, InvoiceUpdate};
 use crate::invoicing::render::{render_invoice, RenderedInvoice};
 use crate::invoicing::render_html::{load_template, Branding};
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 
 use super::super::error::{ApiError, ApiResult};
-use super::super::extract::ApiPath;
+use super::super::extract::{ApiJson, ApiPath};
 use super::super::state::AppState;
-use super::{not_found_because, with_conn, with_conn_api};
+use super::{double_option, not_found_because, with_conn, with_conn_api};
 
 pub fn routes() -> Router<AppState> {
     // The two literal paths are mounted before the `{number}` pattern. axum
     // prefers a literal segment either way; the order is here so that reading
     // the file cannot suggest otherwise, and a test pins the behaviour.
     Router::new()
-        .route("/invoices", get(list))
+        .route("/invoices", get(list).post(create))
         .route("/invoices/aging", get(aging))
         .route("/invoices/next-number", get(next_number))
-        .route("/invoices/{number}", get(detail))
+        .route("/invoices/{number}", get(detail).patch(update))
+        .route("/invoices/{number}/void", post(void))
+        .route("/invoices/{number}/pay", post(pay))
         .route("/invoices/{number}/preview", get(preview_html))
         .route("/invoices/{number}/preview.pdf", get(preview_pdf))
 }
@@ -204,6 +208,256 @@ async fn aging(
 async fn next_number(State(state): State<AppState>) -> ApiResult<Json<NextNumber>> {
     let number = with_conn(&state, inv::next_number).await?;
     Ok(Json(NextNumber { number }))
+}
+
+// ---------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------
+
+/// The data layer's conflict with the figures a screen would otherwise have to
+/// read out of the sentence.
+///
+/// The code and the message stay exactly as the data layer wrote them — only
+/// `details` grows, and only for the codes that carry a number worth rendering.
+/// The enrichment lives here rather than in `NigelError::Conflict` because that
+/// variant carries a code and a message and nothing else, and widening it for
+/// three call sites that already hold the invoice is not worth it.
+fn enrich_conflict(err: NigelError, invoice: &Invoice, paid: f64) -> ApiError {
+    let details = match &err {
+        NigelError::Conflict { code, .. } => match *code {
+            "not_draft" => Some(serde_json::json!({
+                "reason": code, "status": invoice.status,
+            })),
+            "has_payments" | "no_balance" => Some(serde_json::json!({
+                "reason": code, "total": invoice.total, "paid": paid,
+            })),
+            _ => None,
+        },
+        _ => None,
+    };
+    match details {
+        Some(details) => ApiError::conflict(err.to_string(), details),
+        None => ApiError::from(err),
+    }
+}
+
+/// The line items a create or an edit is asking for, refused before they reach
+/// a row.
+///
+/// `create_invoice` and `update_invoice` sum these into `subtotal`/`total`, so a
+/// non-finite figure here poisons every later aggregate over the column — the
+/// same reasoning `payment_amount` rejects a NaN amount with. JSON cannot spell
+/// `NaN`, but an overflowing literal deserializes to infinity.
+fn checked_items(items: Vec<NewLineItem>) -> ApiResult<Vec<NewLineItem>> {
+    if items.is_empty() {
+        return Err(ApiError::bad_request(
+            "An invoice needs at least one line item.",
+        ));
+    }
+    for item in &items {
+        if !item.quantity.is_finite() || !item.unit_amount.is_finite() {
+            return Err(ApiError::bad_request(format!(
+                "Line item \"{}\" needs a finite quantity and unit amount.",
+                item.description
+            )));
+        }
+    }
+    // Every figure is finite by now, so a plain comparison says what it means.
+    let total: f64 = items.iter().map(|i| i.quantity * i.unit_amount).sum();
+    if total <= 0.0 {
+        return Err(ApiError::bad_request(format!(
+            "An invoice must total more than zero, got {total:.2}."
+        )));
+    }
+    Ok(items)
+}
+
+fn default_currency() -> String {
+    "USD".to_string()
+}
+
+/// Every date on this API is zero-padded `YYYY-MM-DD`.
+///
+/// This is the same parser `/api/reports` and the aging route use, not a second
+/// one: the data layer's `validate_date` goes through chrono, which accepts
+/// `2026-4-1`, and the HTTP API is deliberately stricter with dates than the
+/// CLI is. `create_invoice` and `record_payment` validate again on the way in.
+fn checked_date(param: &str, value: &str) -> ApiResult<()> {
+    super::reports::parse_date(param, value).map(|_| ())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewInvoiceRequest {
+    client_id: i64,
+    issue_date: String,
+    due_date: Option<String>,
+    #[serde(default = "default_currency")]
+    currency: String,
+    items: Vec<NewLineItem>,
+    notes: Option<String>,
+    terms: Option<String>,
+}
+
+/// A new draft. The client, the dates and the currency are `create_invoice`'s
+/// own checks; the number comes from the counter it advances in the same
+/// transaction, so a refused create reserves nothing.
+async fn create(
+    State(state): State<AppState>,
+    ApiJson(new): ApiJson<NewInvoiceRequest>,
+) -> ApiResult<(StatusCode, Json<InvoiceDetail>)> {
+    let items = checked_items(new.items)?;
+    checked_date("issueDate", &new.issue_date)?;
+    if let Some(ref due) = new.due_date {
+        checked_date("dueDate", due)?;
+    }
+    let detail = with_conn_api(&state, move |conn| {
+        let id = inv::create_invoice(
+            conn,
+            new.client_id,
+            &new.issue_date,
+            new.due_date.as_deref(),
+            &new.currency,
+            &items,
+            new.notes.as_deref(),
+            new.terms.as_deref(),
+        )
+        // The only thing `create_invoice` looks up is the client.
+        .map_err(|e| not_found_because(e, "client_not_found"))?;
+        detail_for(conn, inv::get_invoice(conn, id)?)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(detail)))
+}
+
+/// `items` is a whole-list replacement, matching the CLI's repeatable `--item`:
+/// a per-row API would mean a client reconciling positions across two requests
+/// and a server holding a half-edited invoice between them.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InvoicePatch {
+    issue_date: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    due_date: Option<Option<String>>,
+    currency: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    terms: Option<Option<String>>,
+    items: Option<Vec<NewLineItem>>,
+}
+
+impl InvoicePatch {
+    /// Field for field into 68.1's update struct, with the line items checked
+    /// on the way through.
+    fn into_update(self) -> ApiResult<InvoiceUpdate> {
+        if let Some(ref issue) = self.issue_date {
+            checked_date("issueDate", issue)?;
+        }
+        if let Some(Some(ref due)) = self.due_date {
+            checked_date("dueDate", due)?;
+        }
+        Ok(InvoiceUpdate {
+            issue_date: self.issue_date,
+            due_date: self.due_date,
+            currency: self.currency,
+            notes: self.notes,
+            terms: self.terms,
+            items: self.items.map(checked_items).transpose()?,
+        })
+    }
+}
+
+async fn update(
+    State(state): State<AppState>,
+    ApiPath(number): ApiPath<i64>,
+    ApiJson(patch): ApiJson<InvoicePatch>,
+) -> ApiResult<Json<InvoiceDetail>> {
+    let update = patch.into_update()?;
+    if update.is_empty() {
+        return Err(ApiError::bad_request(
+            "Nothing to update — provide at least one of `issueDate`, `dueDate`, `currency`, `notes`, `terms`, or `items`.",
+        ));
+    }
+
+    let detail = with_conn_api(&state, move |conn| {
+        let invoice = find_invoice(conn, number)?;
+        let paid = inv::paid_amount(conn, invoice.id)?;
+        // `update_invoice` re-reads the row and runs `ensure_editable` inside
+        // its own transaction, so draft-only is enforced against the current
+        // status rather than anything the client sent — and this route must not
+        // open a transaction of its own around it.
+        inv::update_invoice(conn, invoice.id, &update)
+            .map_err(|e| enrich_conflict(e, &invoice, paid))?;
+        detail_for(conn, find_invoice(conn, number)?)
+    })
+    .await?;
+    Ok(Json(detail))
+}
+
+/// Cancel an invoice. `void_invoice` writes `voided_at` and lets
+/// `refresh_status` derive the status from it, so the route passes the server's
+/// own today — the value `pay` passes too.
+async fn void(
+    State(state): State<AppState>,
+    ApiPath(number): ApiPath<i64>,
+) -> ApiResult<Json<InvoiceDetail>> {
+    let today = crate::cli::today();
+    let detail = with_conn_api(&state, move |conn| {
+        let invoice = find_invoice(conn, number)?;
+        let paid = inv::paid_amount(conn, invoice.id)?;
+        inv::void_invoice(conn, invoice.id, &today)
+            .map_err(|e| enrich_conflict(e, &invoice, paid))?;
+        detail_for(conn, find_invoice(conn, number)?)
+    })
+    .await?;
+    Ok(Json(detail))
+}
+
+/// `amount` omitted means the whole outstanding balance, exactly as `--amount`
+/// omitted does. `method` defaults to the one a bank transfer arrives as.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PayRequest {
+    amount: Option<f64>,
+    date: String,
+    #[serde(default = "default_method")]
+    method: String,
+}
+
+fn default_method() -> String {
+    "direct_deposit".to_string()
+}
+
+async fn pay(
+    State(state): State<AppState>,
+    ApiPath(number): ApiPath<i64>,
+    ApiJson(request): ApiJson<PayRequest>,
+) -> ApiResult<Json<InvoiceDetail>> {
+    // The method refusal is the data layer's, so the CLI and the API name the
+    // same legal set. `record_payment` checks it again; asking here is what
+    // keeps a request that cannot succeed from opening a connection at all.
+    inv::validate_payment_method(&request.method)?;
+    checked_date("date", &request.date)?;
+
+    let detail = with_conn_api(&state, move |conn| {
+        let invoice = find_invoice(conn, number)?;
+        let paid = inv::paid_amount(conn, invoice.id)?;
+        let amount = inv::payment_amount(&invoice, paid, request.amount)
+            .map_err(|e| enrich_conflict(e, &invoice, paid))?;
+        inv::record_payment(
+            conn,
+            invoice.id,
+            amount,
+            &request.date,
+            &request.method,
+            None,
+        )
+        .map_err(|e| enrich_conflict(e, &invoice, paid))?;
+        detail_for(conn, find_invoice(conn, number)?)
+    })
+    .await?;
+    Ok(Json(detail))
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +806,645 @@ mod tests {
         let first = ok_json(&app, "/api/invoices/next-number", &token).await;
         let second = ok_json(&app, "/api/invoices/next-number", &token).await;
         assert_eq!(first, second);
+    }
+
+    // -----------------------------------------------------------------------
+    // Create and edit
+    // -----------------------------------------------------------------------
+
+    /// A body good enough to create an invoice, so a test that varies one field
+    /// says what it is varying.
+    fn new_invoice() -> serde_json::Value {
+        serde_json::json!({
+            "clientId": 1,
+            "issueDate": "2026-04-01",
+            "dueDate": "2026-05-01",
+            "items": [
+                { "description": "Consulting: April", "quantity": 10.0, "unitAmount": 150.0 },
+                { "description": "Hosting", "quantity": 1.0, "unitAmount": 50.0 },
+            ],
+            "notes": "Thanks",
+            "terms": "Net 30",
+        })
+    }
+
+    #[tokio::test]
+    async fn an_invoice_can_be_created_with_line_items() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let next = ok_json(&app, "/api/invoices/next-number", &token).await;
+        let (status, created) = post_json(&app, "/api/invoices", &token, &new_invoice()).await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+
+        assert_eq!(created["number"], next["number"]);
+        assert_eq!(created["status"], "draft");
+        assert_eq!(created["total"], 1550.0);
+        assert_eq!(created["subtotal"], 1550.0);
+        assert_eq!(created["currency"], "USD", "the default");
+        assert_eq!(created["client"]["name"], "Acme Co");
+        assert_eq!(created["items"].as_array().unwrap().len(), 2);
+        assert_eq!(created["items"][0]["lineTotal"], 1500.0);
+        assert_eq!(created["notes"], "Thanks");
+        assert_eq!(created["terms"], "Net 30");
+        assert_eq!(created["paid"], 0.0);
+        assert_eq!(created["balance"], 1550.0);
+        // A draft has been published nowhere, so there is no address for it.
+        assert!(created["publicUrl"].is_null(), "{created}");
+        assert!(created.get("token").is_none(), "token leaked: {created}");
+        assert_eq!(created["canEdit"], true);
+
+        // And the counter moved, so the next draft gets the next number.
+        let after = ok_json(&app, "/api/invoices/next-number", &token).await;
+        assert_eq!(
+            after["number"].as_i64().unwrap(),
+            next["number"].as_i64().unwrap() + 1
+        );
+    }
+
+    /// The CLI's `desc:qty:unit` splitting is an argv artifact; JSON has no such
+    /// ambiguity, so a description reads as a description.
+    #[tokio::test]
+    async fn a_line_item_description_may_contain_a_colon() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (_, created) = post_json(&app, "/api/invoices", &token, &new_invoice()).await;
+        assert_eq!(created["items"][0]["description"], "Consulting: April");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_invoice_is_a_400_before_anything_is_written() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let cases: [(&str, serde_json::Value); 5] = [
+            ("no items", serde_json::json!({ "items": [] })),
+            (
+                "a zero total",
+                serde_json::json!({ "items": [
+                    { "description": "Work", "quantity": 0.0, "unitAmount": 150.0 }
+                ] }),
+            ),
+            (
+                "a malformed issue date",
+                serde_json::json!({ "issueDate": "2026-4-1" }),
+            ),
+            (
+                "a malformed due date",
+                serde_json::json!({ "dueDate": "April" }),
+            ),
+            (
+                "a bad currency",
+                serde_json::json!({ "currency": "dollars" }),
+            ),
+        ];
+
+        for (what, overrides) in cases {
+            let mut body = new_invoice();
+            for (key, value) in overrides.as_object().unwrap() {
+                body[key] = value.clone();
+            }
+            let (status, json) = post_json(&app, "/api/invoices", &token, &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{what}: {json}");
+        }
+
+        // A quantity that overflows an f64 — JSON cannot spell NaN, and this is
+        // how a non-finite figure actually arrives — never reaches a row, one
+        // way or the other: either serde refuses the literal or `checked_items`
+        // does. Sent as raw text because the literal will not compile in Rust.
+        let body = r#"{"clientId":1,"issueDate":"2026-04-01",
+            "items":[{"description":"Work","quantity":1e400,"unitAmount":10.0}]}"#;
+        let (status, json) = send(
+            &app,
+            session_request("POST", "/api/invoices", &token, Some(body)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+
+        // Nothing above reserved a number.
+        let next = ok_json(&app, "/api/invoices/next-number", &token).await;
+        assert_eq!(next["number"], 1253);
+    }
+
+    /// The unit half of the same rule, where a non-finite figure can actually
+    /// be constructed.
+    #[test]
+    fn checked_items_refuses_an_empty_list_a_non_finite_figure_and_a_zero_total() {
+        use super::checked_items;
+
+        let line = |quantity: f64, unit_amount: f64| {
+            vec![crate::invoicing::invoices::NewLineItem {
+                description: "Work".into(),
+                quantity,
+                unit_amount,
+            }]
+        };
+
+        assert!(checked_items(vec![]).is_err());
+        assert!(checked_items(line(f64::NAN, 10.0)).is_err());
+        assert!(checked_items(line(1.0, f64::INFINITY)).is_err());
+        assert!(checked_items(line(0.0, 150.0)).is_err(), "a zero total");
+        assert!(
+            checked_items(line(-1.0, 150.0)).is_err(),
+            "a negative total"
+        );
+        assert!(checked_items(line(2.0, 150.0)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn creating_an_invoice_for_an_unknown_client_is_a_404() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let mut body = new_invoice();
+        body["clientId"] = serde_json::json!(999999);
+        let (status, json) = post_json(&app, "/api/invoices", &token, &body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "client_not_found");
+    }
+
+    #[tokio::test]
+    async fn patching_items_replaces_the_whole_list_and_recomputes_the_total() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        // 1252 is the seeded draft: one line at 2,400.
+        let (status, patched) = patch_json(
+            &app,
+            "/api/invoices/1252",
+            &token,
+            &serde_json::json!({ "items": [
+                { "description": "Brand refresh - deposit", "quantity": 1.0, "unitAmount": 3000.0 },
+                { "description": "Rush fee", "quantity": 1.0, "unitAmount": 500.0 },
+            ] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{patched}");
+
+        let items = patched["items"].as_array().expect("items");
+        assert_eq!(items.len(), 2, "replaced, not appended: {patched}");
+        assert_eq!(items[0]["position"], 0);
+        assert_eq!(items[1]["position"], 1);
+        assert_eq!(patched["subtotal"], 3500.0);
+        assert_eq!(patched["total"], 3500.0);
+        assert_eq!(patched["balance"], 3500.0);
+    }
+
+    /// A link is priced in the amount it was created with, so an edit that
+    /// moves the total leaves it billing the wrong figure.
+    #[tokio::test]
+    async fn editing_the_total_clears_a_stale_stripe_payment_link() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = crate::db::open_connection(&db_path, None).expect("open db");
+        let draft = crate::invoicing::invoices::get_invoice_by_number(&conn, 1252).unwrap();
+        crate::invoicing::invoices::set_payment_link(
+            &conn,
+            draft.id,
+            "plink_seed_1252",
+            "https://buy.stripe.com/test_seed_1252",
+        )
+        .unwrap();
+        drop(conn);
+
+        let (app, token) = app_for(&db_path);
+        let before = ok_json(&app, "/api/invoices/1252", &token).await;
+        assert_eq!(
+            before["stripePaymentLinkUrl"],
+            "https://buy.stripe.com/test_seed_1252"
+        );
+
+        let (status, patched) = patch_json(
+            &app,
+            "/api/invoices/1252",
+            &token,
+            &serde_json::json!({ "items": [
+                { "description": "Brand refresh - deposit", "quantity": 1.0, "unitAmount": 999.0 }
+            ] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{patched}");
+        assert!(
+            patched["stripePaymentLinkUrl"].is_null(),
+            "a link billing 2,400 must not survive an edit to 999: {patched}"
+        );
+        assert!(patched["stripePaymentLinkId"].is_null(), "{patched}");
+    }
+
+    #[tokio::test]
+    async fn a_patch_can_clear_a_due_date_and_omitting_it_leaves_it() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, dated) = patch_json(
+            &app,
+            "/api/invoices/1252",
+            &token,
+            &serde_json::json!({ "dueDate": "2026-04-12" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{dated}");
+        assert_eq!(dated["dueDate"], "2026-04-12");
+
+        // Absent leaves it.
+        let (_, renoted) = patch_json(
+            &app,
+            "/api/invoices/1252",
+            &token,
+            &serde_json::json!({ "notes": "Deposit only" }),
+        )
+        .await;
+        assert_eq!(renoted["dueDate"], "2026-04-12");
+        assert_eq!(renoted["notes"], "Deposit only");
+
+        // Null clears it, so the invoice can never go overdue.
+        let (_, cleared) = patch_json(
+            &app,
+            "/api/invoices/1252",
+            &token,
+            &serde_json::json!({ "dueDate": null }),
+        )
+        .await;
+        assert!(cleared["dueDate"].is_null(), "{cleared}");
+        assert_eq!(cleared["notes"], "Deposit only");
+    }
+
+    #[tokio::test]
+    async fn an_all_absent_invoice_patch_is_a_400() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) =
+            patch_json(&app, "/api/invoices/1252", &token, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    #[tokio::test]
+    async fn patching_an_unknown_invoice_is_a_404_with_a_reason() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = patch_json(
+            &app,
+            "/api/invoices/9999",
+            &token,
+            &serde_json::json!({ "notes": "hello" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "invoice_not_found");
+    }
+
+    #[tokio::test]
+    async fn patching_a_published_invoice_is_a_409_naming_its_status() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = patch_json(
+            &app,
+            "/api/invoices/1251",
+            &token,
+            &serde_json::json!({ "notes": "too late" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "not_draft");
+        assert_eq!(body["error"]["details"]["status"], "sent");
+    }
+
+    #[tokio::test]
+    async fn patching_a_void_invoice_is_a_409_void() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = patch_json(
+            &app,
+            "/api/invoices/1247",
+            &token,
+            &serde_json::json!({ "notes": "cancelled" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "void");
+    }
+
+    /// An edit is blocked by recorded payments as well as by status, which is
+    /// why `canEdit` is the guard called and not a status comparison.
+    #[tokio::test]
+    async fn patching_a_draft_that_has_payments_is_a_409_has_payments() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        // A payment against an unpublished draft leaves it a draft.
+        let (status, paid) = post_json(
+            &app,
+            "/api/invoices/1252/pay",
+            &token,
+            &serde_json::json!({ "amount": 400.0, "date": "2026-03-14" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{paid}");
+        assert_eq!(paid["status"], "draft");
+        assert_eq!(paid["canEdit"], false);
+
+        let (status, body) = patch_json(
+            &app,
+            "/api/invoices/1252",
+            &token,
+            &serde_json::json!({ "notes": "too late" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "has_payments");
+        assert_eq!(body["error"]["details"]["paid"], 400.0);
+        assert_eq!(body["error"]["details"]["total"], 2400.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Void and pay
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn voiding_an_invoice_makes_it_refuse_send_and_pay() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, voided) = post_json(
+            &app,
+            "/api/invoices/1252/void",
+            &token,
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{voided}");
+        assert_eq!(voided["status"], "void");
+        assert!(voided["voidedAt"].as_str().is_some(), "{voided}");
+        for flag in ["canEdit", "canSend", "canVoid", "canPay"] {
+            assert_eq!(voided[flag], false, "{flag} after a void: {voided}");
+        }
+
+        let (status, body) = post_json(
+            &app,
+            "/api/invoices/1252/pay",
+            &token,
+            &serde_json::json!({ "amount": 100.0, "date": "2026-03-20" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "void");
+    }
+
+    #[tokio::test]
+    async fn voiding_a_void_invoice_is_a_409_already_void() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = post_json(
+            &app,
+            "/api/invoices/1247/void",
+            &token,
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "already_void");
+    }
+
+    #[tokio::test]
+    async fn voiding_a_paid_invoice_is_a_409_carrying_paid_and_total() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = post_json(
+            &app,
+            "/api/invoices/1248/void",
+            &token,
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "has_payments");
+        assert_eq!(body["error"]["details"]["paid"], 4000.0);
+        assert_eq!(body["error"]["details"]["total"], 4000.0);
+    }
+
+    #[tokio::test]
+    async fn voiding_an_unknown_invoice_is_a_404_with_a_reason() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        for uri in ["/api/invoices/9999/void", "/api/invoices/9999/pay"] {
+            let (status, body) = post_json(
+                &app,
+                uri,
+                &token,
+                &serde_json::json!({ "date": "2026-03-20" }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
+            assert_eq!(body["error"]["details"]["reason"], "invoice_not_found");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_payment_defaults_to_the_whole_outstanding_balance() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        // 1250: 3,200 total, 2,000 already paid.
+        let (status, paid) = post_json(
+            &app,
+            "/api/invoices/1250/pay",
+            &token,
+            &serde_json::json!({ "date": "2026-03-14" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{paid}");
+        assert_eq!(paid["paid"], 3200.0);
+        assert_eq!(paid["balance"], 0.0);
+        assert_eq!(paid["status"], "paid");
+        assert_eq!(paid["canPay"], false);
+
+        let payments = paid["payments"].as_array().expect("payments");
+        assert_eq!(payments.len(), 2);
+        assert_eq!(payments[1]["amount"], 1200.0);
+        assert_eq!(payments[1]["method"], "direct_deposit", "the default");
+        assert_eq!(payments[1]["paidDate"], "2026-03-14");
+    }
+
+    #[tokio::test]
+    async fn a_partial_payment_moves_the_status_to_partial_and_a_full_one_to_paid() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        // 1251: sent, 1,850 outstanding.
+        let (status, partial) = post_json(
+            &app,
+            "/api/invoices/1251/pay",
+            &token,
+            &serde_json::json!({ "amount": 500.0, "date": "2026-03-14", "method": "ach" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{partial}");
+        assert_eq!(partial["status"], "partial");
+        assert_eq!(partial["balance"], 1350.0);
+        assert_eq!(partial["payments"][0]["method"], "ach");
+
+        let (_, settled) = post_json(
+            &app,
+            "/api/invoices/1251/pay",
+            &token,
+            &serde_json::json!({ "amount": 1350.0, "date": "2026-03-15" }),
+        )
+        .await;
+        assert_eq!(settled["status"], "paid");
+        assert_eq!(settled["balance"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn paying_with_nothing_outstanding_is_a_409_no_balance() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = post_json(
+            &app,
+            "/api/invoices/1248/pay",
+            &token,
+            &serde_json::json!({ "date": "2026-03-14" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["details"]["reason"], "no_balance");
+        assert_eq!(body["error"]["details"]["total"], 4000.0);
+        assert_eq!(body["error"]["details"]["paid"], 4000.0);
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no outstanding balance"),
+            "{body}"
+        );
+    }
+
+    /// Not a rusqlite CHECK violation surfacing as a 500.
+    #[tokio::test]
+    async fn an_unknown_payment_method_is_a_400_naming_the_legal_set() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = post_json(
+            &app,
+            "/api/invoices/1251/pay",
+            &token,
+            &serde_json::json!({ "date": "2026-03-14", "method": "bitcoin" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let message = body["error"]["message"].as_str().unwrap();
+        for method in crate::invoicing::invoices::PAYMENT_METHODS {
+            assert!(message.contains(method), "{method} missing from {message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bad_payment_amount_or_date_is_a_400() {
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let cases = [
+            serde_json::json!({ "amount": -5.0, "date": "2026-03-14" }),
+            serde_json::json!({ "amount": 0.0, "date": "2026-03-14" }),
+            serde_json::json!({ "date": "2026-3-14" }),
+            serde_json::json!({ "date": "March" }),
+        ];
+
+        for body in cases {
+            let (status, json) = post_json(&app, "/api/invoices/1251/pay", &token, &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {json}");
+        }
+
+        // An amount that overflows an f64: `payment_amount`'s NaN rejection is
+        // a negated positive test for exactly this, since a non-finite row
+        // poisons every later SUM.
+        let (status, json) = send(
+            &app,
+            session_request(
+                "POST",
+                "/api/invoices/1251/pay",
+                &token,
+                Some(r#"{"amount":1e400,"date":"2026-03-14"}"#),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+
+        // None of them recorded anything.
+        let invoice = ok_json(&app, "/api/invoices/1251", &token).await;
+        assert_eq!(invoice["paid"], 0.0);
+    }
+
+    /// A due-date patch can flip a derived status, so a body that echoed only
+    /// the field that was sent would be showing the old one.
+    #[tokio::test]
+    async fn every_invoice_write_answers_with_the_whole_detail() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let writes: [(&str, serde_json::Value); 3] = [
+            (
+                "/api/invoices/1252",
+                serde_json::json!({ "notes": "Deposit only" }),
+            ),
+            (
+                "/api/invoices/1251/pay",
+                serde_json::json!({ "date": AS_OF }),
+            ),
+            ("/api/invoices/1252/void", serde_json::json!({})),
+        ];
+
+        for (uri, body) in writes {
+            let (status, json) = if uri.ends_with("1252") {
+                patch_json(&app, uri, &token, &body).await
+            } else {
+                post_json(&app, uri, &token, &body).await
+            };
+            assert_eq!(status, StatusCode::OK, "{uri}: {json}");
+            for key in [
+                "number",
+                "status",
+                "client",
+                "items",
+                "payments",
+                "paid",
+                "balance",
+                "publicUrl",
+                "canEdit",
+                "canSend",
+                "canVoid",
+                "canPay",
+            ] {
+                assert!(
+                    json.get(key).is_some(),
+                    "{uri} answered without {key}: {json}"
+                );
+            }
+            assert!(
+                json.get("token").is_none(),
+                "{uri} leaked the token: {json}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
