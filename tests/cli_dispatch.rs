@@ -476,10 +476,10 @@ fn init_with_client_and_invoice(env: &TestEnv) {
 }
 
 /// The three commands whose printing moved into pure formatters, pinned as
-/// whole stdout rather than as substrings: the extraction is only correct if a
-/// terminal sees the same bytes it saw before.
+/// whole stdout rather than as substrings. Money reads as `$1,500.00` here,
+/// which is what `nigel invoice aging` and the browser have always printed.
 #[test]
-fn invoice_and_client_listings_print_byte_for_byte_what_they_always_did() {
+fn invoice_and_client_listings_print_money_the_way_every_other_report_does() {
     let env = TestEnv::new();
     init_with_client_and_invoice(&env);
 
@@ -492,28 +492,28 @@ fn invoice_and_client_listings_print_byte_for_byte_what_they_always_did() {
         stdout(&["invoice", "list"]),
         concat!(
             "Invoices\n",
-            "+------+--------+---------+---------+-----+\n",
-            "| #    | Status | Client  | Total   | Due |\n",
-            "+=========================================+\n",
-            "| 1248 | draft  | Acme Co | 1500.00 |     |\n",
-            "+------+--------+---------+---------+-----+\n",
+            "+------+--------+---------+-----------+-----+\n",
+            "| #    | Status | Client  | Total     | Due |\n",
+            "+===========================================+\n",
+            "| 1248 | draft  | Acme Co | $1,500.00 |     |\n",
+            "+------+--------+---------+-----------+-----+\n",
         )
     );
 
     assert_eq!(
         stdout(&["invoice", "show", "1248"]),
         concat!(
-            "Invoice #1248  [draft]  USD 1500.00\n",
+            "Invoice #1248  [draft]  USD $1,500.00\n",
             "Client:   Acme Co\n",
             "Issued:   2026-08-04\n",
             "Due:      -\n",
-            "+-------------+-------+--------+---------+\n",
-            "| Description | Qty   | Unit   | Amount  |\n",
-            "+========================================+\n",
-            "| Consulting  | 10.00 | 150.00 | 1500.00 |\n",
-            "+-------------+-------+--------+---------+\n",
-            "Paid:     0.00\n",
-            "Balance:  1500.00\n",
+            "+-------------+-------+---------+-----------+\n",
+            "| Description | Qty   | Unit    | Amount    |\n",
+            "+===========================================+\n",
+            "| Consulting  | 10.00 | $150.00 | $1,500.00 |\n",
+            "+-------------+-------+---------+-----------+\n",
+            "Paid:     $0.00\n",
+            "Balance:  $1,500.00\n",
         )
     );
 

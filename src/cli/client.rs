@@ -78,7 +78,9 @@ pub fn format_client_list(clients: &[Client]) -> String {
         table.add_row(vec![
             Cell::new(c.id),
             Cell::new(&c.name),
-            Cell::new(c.email.as_deref().unwrap_or_default()),
+            // A client with no email reads as an em dash, never an empty cell —
+            // the missing address is the reason a send will refuse.
+            Cell::new(c.email.as_deref().unwrap_or("\u{2014}")),
         ]);
     }
     format!("Clients\n{table}")
@@ -104,10 +106,9 @@ mod tests {
         }
     }
 
-    /// Byte-for-byte what `nigel client list` printed before the formatter was
-    /// pulled out of it. A change here is a change to the CLI's output.
+    /// Byte-for-byte what `nigel client list` prints.
     #[test]
-    fn format_client_list_prints_what_the_cli_always_printed() {
+    fn format_client_list_prints_the_columns_it_always_has() {
         let out = format_client_list(&[
             client(1, "Acme Co", Some("ap@acme.test")),
             client(2, "Globex", None),
@@ -121,9 +122,21 @@ mod tests {
                 "+=============================+\n",
                 "| 1  | Acme Co | ap@acme.test |\n",
                 "|----+---------+--------------|\n",
-                "| 2  | Globex  |              |\n",
+                "| 2  | Globex  | \u{2014}            |\n",
                 "+----+---------+--------------+",
             )
+        );
+    }
+
+    #[test]
+    fn format_client_list_prints_an_em_dash_for_a_client_with_no_email() {
+        let out = format_client_list(&[client(2, "Globex", None)]);
+        assert!(out.contains('\u{2014}'), "want an em dash, got:\n{out}");
+
+        let out = format_client_list(&[client(1, "Acme Co", Some("ap@acme.test"))]);
+        assert!(
+            !out.contains('\u{2014}'),
+            "a client with an email gets no dash, got:\n{out}"
         );
     }
 

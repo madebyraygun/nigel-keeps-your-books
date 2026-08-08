@@ -6,6 +6,7 @@ use rusqlite::Connection;
 
 use crate::db::get_connection;
 use crate::error::{NigelError, Result};
+use crate::fmt::money;
 use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
@@ -235,7 +236,7 @@ pub fn format_invoice_list(rows: &[InvoiceListRow]) -> String {
             Cell::new(&row.status),
             // An invoice whose client row is gone still belongs on the list.
             Cell::new(row.client_name.as_deref().unwrap_or("\u{2014}")),
-            Cell::new(format!("{:.2}", row.total)),
+            Cell::new(money(row.total)),
             Cell::new(row.due_date.as_deref().unwrap_or_default()),
         ]);
     }
@@ -250,8 +251,11 @@ pub fn format_invoice_show(
     paid: f64,
 ) -> String {
     let mut out = format!(
-        "Invoice #{}  [{}]  {} {:.2}\n",
-        invoice.number, invoice.status, invoice.currency, invoice.total
+        "Invoice #{}  [{}]  {} {}\n",
+        invoice.number,
+        invoice.status,
+        invoice.currency,
+        money(invoice.total)
     );
     out.push_str(&format!("Client:   {}\n", client.name));
     out.push_str(&format!("Issued:   {}\n", invoice.issue_date));
@@ -265,15 +269,16 @@ pub fn format_invoice_show(
     for item in items {
         table.add_row(vec![
             Cell::new(&item.description),
+            // Quantity is a count, not an amount — it keeps its plain decimals.
             Cell::new(format!("{:.2}", item.quantity)),
-            Cell::new(format!("{:.2}", item.unit_amount)),
-            Cell::new(format!("{:.2}", item.line_total)),
+            Cell::new(money(item.unit_amount)),
+            Cell::new(money(item.line_total)),
         ]);
     }
     out.push_str(&format!("{table}\n"));
 
-    out.push_str(&format!("Paid:     {paid:.2}\n"));
-    out.push_str(&format!("Balance:  {:.2}\n", invoice.total - paid));
+    out.push_str(&format!("Paid:     {}\n", money(paid)));
+    out.push_str(&format!("Balance:  {}\n", money(invoice.total - paid)));
     if let Some(url) = invoice.stripe_payment_link_url.as_deref() {
         out.push_str(&format!("Pay:      {url}\n"));
     }
@@ -548,10 +553,10 @@ mod tests {
         }
     }
 
-    /// Byte-for-byte what `nigel invoice list` printed before the formatter was
-    /// pulled out of it. A change here is a change to the CLI's output.
+    /// Byte-for-byte what `nigel invoice list` prints. Money goes through
+    /// `fmt::money`, the same format `format_aging` and `wc-money` use.
     #[test]
-    fn format_invoice_list_prints_what_the_cli_always_printed() {
+    fn format_invoice_list_prints_money_the_way_every_other_report_does() {
         let out = format_invoice_list(&[
             list_row(1250, "partial", "Acme Co", 3200.0, Some("2026-08-20")),
             list_row(1249, "overdue", "Globex", 960.0, Some("2026-06-30")),
@@ -561,15 +566,15 @@ mod tests {
             out,
             concat!(
                 "Invoices\n",
-                "+------+---------+-------------------+---------+------------+\n",
-                "| #    | Status  | Client            | Total   | Due        |\n",
-                "+===========================================================+\n",
-                "| 1250 | partial | Acme Co           | 3200.00 | 2026-08-20 |\n",
-                "|------+---------+-------------------+---------+------------|\n",
-                "| 1249 | overdue | Globex            | 960.00  | 2026-06-30 |\n",
-                "|------+---------+-------------------+---------+------------|\n",
-                "| 1248 | draft   | Northwind Traders | 1850.50 |            |\n",
-                "+------+---------+-------------------+---------+------------+",
+                "+------+---------+-------------------+-----------+------------+\n",
+                "| #    | Status  | Client            | Total     | Due        |\n",
+                "+=============================================================+\n",
+                "| 1250 | partial | Acme Co           | $3,200.00 | 2026-08-20 |\n",
+                "|------+---------+-------------------+-----------+------------|\n",
+                "| 1249 | overdue | Globex            | $960.00   | 2026-06-30 |\n",
+                "|------+---------+-------------------+-----------+------------|\n",
+                "| 1248 | draft   | Northwind Traders | $1,850.50 |            |\n",
+                "+------+---------+-------------------+-----------+------------+",
             )
         );
     }
@@ -583,9 +588,10 @@ mod tests {
         assert!(out.contains('\u{2014}'), "want an em dash, got: {out}");
     }
 
-    /// Byte-for-byte what `nigel invoice show` printed before the extraction.
+    /// Byte-for-byte what `nigel invoice show` prints. Quantity keeps its plain
+    /// decimals — it is a count, not an amount.
     #[test]
-    fn format_invoice_show_prints_what_the_cli_always_printed() {
+    fn format_invoice_show_prints_money_the_way_every_other_report_does() {
         let invoice = Invoice {
             id: 7,
             number: 1250,
@@ -634,19 +640,19 @@ mod tests {
         assert_eq!(
             out,
             concat!(
-                "Invoice #1250  [partial]  USD 3200.00\n",
+                "Invoice #1250  [partial]  USD $3,200.00\n",
                 "Client:   Acme Co\n",
                 "Issued:   2026-03-01\n",
                 "Due:      2026-08-20\n",
-                "+---------------------+-------+---------+---------+\n",
-                "| Description         | Qty   | Unit    | Amount  |\n",
-                "+=================================================+\n",
-                "| Consulting — August | 10.00 | 150.00  | 1500.00 |\n",
-                "|---------------------+-------+---------+---------|\n",
-                "| Hosting             | 1.00  | 1700.00 | 1700.00 |\n",
-                "+---------------------+-------+---------+---------+\n",
-                "Paid:     2000.00\n",
-                "Balance:  1200.00\n",
+                "+---------------------+-------+-----------+-----------+\n",
+                "| Description         | Qty   | Unit      | Amount    |\n",
+                "+=====================================================+\n",
+                "| Consulting — August | 10.00 | $150.00   | $1,500.00 |\n",
+                "|---------------------+-------+-----------+-----------|\n",
+                "| Hosting             | 1.00  | $1,700.00 | $1,700.00 |\n",
+                "+---------------------+-------+-----------+-----------+\n",
+                "Paid:     $2,000.00\n",
+                "Balance:  $1,200.00\n",
                 "Pay:      https://pay/x\n",
             )
         );
