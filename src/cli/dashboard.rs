@@ -441,16 +441,16 @@ impl Dashboard {
             // YTD summary — 1-space indent to align with "N" in " Nigel:"
             let mut stats_lines = vec![
                 Line::from(vec![
-                    Span::raw(" YTD Income     "),
+                    Span::raw(" YTD Income      "),
                     money_span(data.total_income),
                 ]),
                 Line::from(vec![
-                    Span::raw(" YTD Expenses   "),
+                    Span::raw(" YTD Expenses    "),
                     money_span(data.total_expenses),
                 ]),
-                Line::from(vec![Span::raw(" Net Profit     "), money_span(data.net)]),
-                Line::from(format!(" Transactions   {}", number(data.txn_count))),
-                Line::from(format!(" Flagged        {}", data.flagged_count)),
+                Line::from(vec![Span::raw(" Net Profit      "), money_span(data.net)]),
+                Line::from(format!(" Transactions    {}", number(data.txn_count))),
+                Line::from(format!(" Flagged         {}", data.flagged_count)),
             ];
 
             if let Some(ar) = &data.ar {
@@ -460,9 +460,9 @@ impl Dashboard {
                     Style::default().fg(Color::Yellow)
                 };
                 stats_lines.push(Line::from(vec![
-                    Span::raw(" A/R Outstanding"),
+                    Span::raw(" A/R Outstanding "),
                     money_span(ar.outstanding),
-                    Span::styled(format!("  oldest {}", ar.oldest_bucket), oldest_style),
+                    Span::styled(format!("  ({})", ar.oldest_bucket), oldest_style),
                 ]));
             }
             frame.render_widget(Paragraph::new(stats_lines), left_area);
@@ -920,7 +920,7 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
             8 => super::export::aging(None)?,
-            9 => return super::export::all(year, None),
+            n if n == REPORT_SLUGS.len() => return super::export::all(year, None),
             _ => return Ok(String::new()),
         };
         Ok(format!("Exported {path}"))
@@ -1466,9 +1466,13 @@ mod tests {
     }
 
     fn home_with(ar: Option<ArSummary>) -> Dashboard {
+        home_with_income(ar, 184_200.0)
+    }
+
+    fn home_with_income(ar: Option<ArSummary>, total_income: f64) -> Dashboard {
         let mut dash = Dashboard::new(Some("Dalton".into()), None);
         dash.home_data = Some(HomeData {
-            total_income: 184_200.0,
+            total_income,
             total_expenses: -121_455.0,
             net: 62_745.0,
             txn_count: 1_284,
@@ -1498,18 +1502,70 @@ mod tests {
             .join("\n")
     }
 
+    /// The stats row as rendered, trailing blanks trimmed.
+    fn stats_row(screen: &str, label: &str) -> String {
+        screen
+            .lines()
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("no row for {label} in:\n{screen}"))
+            .trim_end()
+            .to_string()
+    }
+
     #[test]
     fn home_shows_the_ar_line_only_when_money_is_owed() {
         let owed = rendered(&home_with(Some(ArSummary {
             outstanding: 8_900.0,
             oldest_bucket: "61-90",
         })));
-        assert!(owed.contains("A/R Outstanding"), "{owed}");
+        // The label field is padded, so the amount never abuts the wording.
+        assert!(owed.contains("A/R Outstanding "), "{owed}");
         assert!(owed.contains("$8,900.00"), "{owed}");
-        assert!(owed.contains("oldest 61-90"), "{owed}");
+        assert!(owed.contains("(61-90)"), "{owed}");
 
         let clear = rendered(&home_with(None));
         assert!(!clear.contains("A/R"), "{clear}");
+    }
+
+    #[test]
+    fn stats_amounts_share_one_column() {
+        let screen = rendered(&home_with(Some(ArSummary {
+            outstanding: 8_900.0,
+            oldest_bucket: "61-90",
+        })));
+        for label in [
+            "YTD Income",
+            "YTD Expenses",
+            "Net Profit",
+            "A/R Outstanding",
+        ] {
+            let row = stats_row(&screen, label);
+            assert_eq!(
+                row.find('$'),
+                Some(17),
+                "amount column moved on the {label} row: {row:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ar_line_fits_the_left_half_at_eighty_columns() {
+        // Widest case: a six-figure balance and the longest bucket label.
+        let screen = rendered(&home_with_income(
+            Some(ArSummary {
+                outstanding: 999_999.99,
+                oldest_bucket: "current",
+            }),
+            999_999.99,
+        ));
+        let row = stats_row(&screen, "A/R Outstanding");
+        assert!(
+            row.chars().count() <= 40,
+            "row is {} cols, over the 40-col left half: {row:?}",
+            row.chars().count()
+        );
+        assert!(row.contains("$999,999.99"), "amount truncated: {row:?}");
+        assert!(row.contains("(current)"), "hint truncated: {row:?}");
     }
 
     #[test]
@@ -1520,5 +1576,17 @@ mod tests {
         assert_eq!(EXPORT_TYPES[8], "A/R Aging");
         assert_eq!(REPORT_SLUGS[8], "aging");
         assert_eq!(EXPORT_TYPES[REPORT_SLUGS.len()], "All Reports");
+    }
+
+    #[test]
+    fn report_slugs_are_the_report_kinds_own_slugs() {
+        use crate::reports::ReportKind::*;
+        let kinds = [
+            Pnl, Expenses, Tax, Cashflow, Register, Flagged, Balance, K1, Aging,
+        ];
+        assert_eq!(kinds.len(), REPORT_SLUGS.len());
+        for (slug, kind) in REPORT_SLUGS.iter().zip(kinds) {
+            assert_eq!(*slug, kind.as_str());
+        }
     }
 }

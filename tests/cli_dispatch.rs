@@ -329,11 +329,13 @@ fn report_all_text_export() {
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
         .collect();
-    // Should produce multiple report files (pnl, expenses, tax, cashflow, register, flagged, balance, k1)
-    assert!(
-        entries.len() >= 5,
-        "expected at least 5 report files, got {}",
-        entries.len()
+    // pnl, expenses, tax, cashflow, register, flagged, balance, k1-prep, aging
+    assert_eq!(
+        entries.len(),
+        9,
+        "expected 9 report files, got {}: {:?}",
+        entries.len(),
+        entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
     );
 }
 
