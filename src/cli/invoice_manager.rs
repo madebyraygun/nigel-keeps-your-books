@@ -13,8 +13,8 @@ use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
 use crate::invoicing::invoices::{
-    get_invoice, line_items, list_invoices, paid_amount, payments, record_payment, validate_date,
-    InvoiceListRow,
+    ensure_voidable, get_invoice, line_items, list_invoices, paid_amount, payments, record_payment,
+    validate_date, void_invoice, InvoiceListRow,
 };
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 use crate::tui::{FOOTER_STYLE, GREEN, HEADER_STYLE};
@@ -31,6 +31,7 @@ enum Screen {
     List,
     Detail,
     PayForm(PayForm),
+    ConfirmVoid,
 }
 
 /// The four methods `invoice_payments.method` allows. A fifth option would be
@@ -183,7 +184,7 @@ impl InvoiceManager {
     pub fn draw(&mut self, frame: &mut Frame) {
         match &self.screen {
             Screen::List => self.draw_list(frame),
-            Screen::Detail => self.draw_detail(frame),
+            Screen::Detail | Screen::ConfirmVoid => self.draw_detail(frame),
             Screen::PayForm(form) => self.draw_pay_form(frame, form),
         }
     }
@@ -339,6 +340,24 @@ impl InvoiceManager {
             lines.push(Line::from(format!("   Pay link  {url}")));
         }
 
+        // The invoice stays on screen while the confirmation is answered.
+        if let Screen::ConfirmVoid = &self.screen {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "   Void invoice #{} for {} ({})?",
+                    invoice.number,
+                    detail.client.name,
+                    money(invoice.total)
+                ),
+                Style::default().fg(Color::Yellow),
+            )));
+            lines.push(Line::from(Span::styled(
+                "   Void is permanent. A void invoice can never be sent or paid.",
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+
         let visible = (content_area.height as usize).max(1);
         let start = self.detail_scroll.min(lines.len().saturating_sub(1));
         let end = (start + visible).min(lines.len());
@@ -347,6 +366,11 @@ impl InvoiceManager {
         if let Some(msg) = &self.status_message {
             frame.render_widget(
                 Paragraph::new(format!(" {msg}")).style(Style::default().fg(Color::Yellow)),
+                hints_area,
+            );
+        } else if let Screen::ConfirmVoid = &self.screen {
+            frame.render_widget(
+                Paragraph::new(" y=void  n=cancel").style(FOOTER_STYLE),
                 hints_area,
             );
         } else {
@@ -473,6 +497,47 @@ impl InvoiceManager {
             Screen::List => self.handle_list_key(code, conn),
             Screen::Detail => self.handle_detail_key(code, conn),
             Screen::PayForm(_) => self.handle_pay_key(code, conn),
+            Screen::ConfirmVoid => self.handle_void_key(code, conn),
+        }
+    }
+
+    /// `v` on the detail view, pre-flighted through the data layer's own guard
+    /// so the dialog is never offered for an invoice that would refuse it.
+    fn open_void_confirmation(&mut self, conn: &Connection) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        match ensure_voidable(conn, &detail.invoice) {
+            Ok(()) => self.screen = Screen::ConfirmVoid,
+            Err(e) => self.set_status(e.to_string()),
+        }
+    }
+
+    fn handle_void_key(&mut self, code: KeyCode, conn: &Connection) -> InvoiceAction {
+        match code {
+            KeyCode::Char('y') => self.do_void(conn, &crate::cli::today()),
+            KeyCode::Char('n') | KeyCode::Esc => self.screen = Screen::Detail,
+            _ => {}
+        }
+        InvoiceAction::Continue
+    }
+
+    fn do_void(&mut self, conn: &Connection, today: &str) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let (invoice_id, number) = (detail.invoice.id, detail.invoice.number);
+        // The date is the fact refresh_status derives `void` from, so it is
+        // today's, never an empty string.
+        match void_invoice(conn, invoice_id, today) {
+            Ok(()) => {
+                self.after_mutation(conn, invoice_id);
+                self.set_status(format!("Voided invoice #{number}."));
+            }
+            Err(e) => {
+                self.screen = Screen::Detail;
+                self.set_status(e.to_string());
+            }
         }
     }
 
@@ -592,13 +657,14 @@ impl InvoiceManager {
         }
     }
 
-    fn handle_detail_key(&mut self, code: KeyCode, _conn: &Connection) -> InvoiceAction {
+    fn handle_detail_key(&mut self, code: KeyCode, conn: &Connection) -> InvoiceAction {
         match code {
             KeyCode::Up => self.detail_scroll = self.detail_scroll.saturating_sub(1),
             KeyCode::Down => self.detail_scroll += 1,
             KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(10),
             KeyCode::PageDown => self.detail_scroll += 10,
             KeyCode::Char('p') => self.open_pay_form(&crate::cli::today()),
+            KeyCode::Char('v') => self.open_void_confirmation(conn),
             KeyCode::Esc => self.close_detail(),
             KeyCode::Char('q') => return InvoiceAction::Close,
             _ => {}
@@ -1312,6 +1378,131 @@ mod tests {
         for row in screen.lines() {
             assert!(row.chars().count() <= 80, "row overflows: {row:?}");
         }
+    }
+
+    fn open_void(mgr: &mut InvoiceManager, conn: &Connection) {
+        mgr.handle_key(KeyCode::Enter, conn);
+        mgr.handle_key(KeyCode::Char('v'), conn);
+    }
+
+    fn voided_at(conn: &Connection) -> Option<String> {
+        conn.query_row("SELECT voided_at FROM invoices LIMIT 1", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn v_opens_the_confirmation_naming_the_invoice_client_and_total() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Acme Co", 1_250.0);
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+
+        assert!(matches!(mgr.screen, Screen::ConfirmVoid));
+        let screen = rendered(&mut mgr);
+        assert!(
+            screen.contains("Void invoice #1248 for Acme Co ($1,250.00)?"),
+            "{screen}"
+        );
+        assert!(screen.contains("Void is permanent."), "{screen}");
+        assert!(screen.contains("y=void  n=cancel"), "{screen}");
+    }
+
+    #[test]
+    fn n_and_esc_cancel_without_writing() {
+        for key in [KeyCode::Char('n'), KeyCode::Esc] {
+            let (_d, conn) = test_conn();
+            seed_invoice(&conn, "Acme Co", 100.0);
+            let mut mgr = manager(&conn);
+            open_void(&mut mgr, &conn);
+            mgr.handle_key(key, &conn);
+
+            assert!(matches!(mgr.screen, Screen::Detail), "{key:?}");
+            assert_eq!(voided_at(&conn), None, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn y_voids_and_reloads_the_detail() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Acme Co", 100.0);
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+        mgr.handle_key(KeyCode::Char('y'), &conn);
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(detail_of(&mgr).invoice.status, "void");
+        assert_eq!(mgr.rows[0].status, "void", "the list reloaded too");
+        assert_eq!(mgr.status_message.as_deref(), Some("Voided invoice #1248."));
+
+        let screen = rendered(&mut mgr);
+        assert!(
+            !screen.contains("s=send"),
+            "the actions are gone:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn void_writes_todays_date_as_voided_at() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Acme Co", 100.0);
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+        mgr.handle_key(KeyCode::Char('y'), &conn);
+
+        // refresh_status derives `void` from this column, so a wrong or empty
+        // date produces an invoice that will not stay void.
+        assert_eq!(voided_at(&conn), Some(crate::cli::today()));
+    }
+
+    #[test]
+    fn v_on_an_already_void_invoice_is_refused_before_the_dialog() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Acme Co", 100.0);
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Invoice #1248 is already void.")
+        );
+    }
+
+    #[test]
+    fn v_on_an_invoice_with_payments_is_refused_before_the_dialog() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        record_payment(&conn, id, 1_250.0, "2026-08-01", "ach", None).unwrap();
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Invoice #1248 has 1250.00 in recorded payments and cannot be voided.")
+        );
+        assert_eq!(voided_at(&conn), None);
+    }
+
+    #[test]
+    fn a_void_invoice_cannot_then_be_paid() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Acme Co", 100.0);
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+        mgr.handle_key(KeyCode::Char('y'), &conn);
+
+        mgr.handle_key(KeyCode::Char('p'), &conn);
+        assert!(
+            matches!(mgr.screen, Screen::Detail),
+            "no payment form opened"
+        );
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Invoice #1248 is void and cannot be paid.")
+        );
+        assert_eq!(payment_rows(&conn), 0);
     }
 
     /// The screen as an 80x24 terminal renders it, one string per row.
