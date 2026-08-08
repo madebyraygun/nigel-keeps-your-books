@@ -8,11 +8,13 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
+use crate::cli::invoice::{ensure_not_void, payment_amount};
 use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
 use crate::invoicing::invoices::{
-    get_invoice, line_items, list_invoices, paid_amount, payments, InvoiceListRow,
+    get_invoice, line_items, list_invoices, paid_amount, payments, record_payment, validate_date,
+    InvoiceListRow,
 };
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 use crate::tui::{FOOTER_STYLE, GREEN, HEADER_STYLE};
@@ -28,7 +30,65 @@ pub enum InvoiceAction {
 enum Screen {
     List,
     Detail,
+    PayForm(PayForm),
 }
+
+/// The four methods `invoice_payments.method` allows. A fifth option would be
+/// a CHECK-constraint failure at insert time, not a compile error.
+const METHODS: &[&str] = &["direct_deposit", "ach", "stripe", "other"];
+
+struct PayForm {
+    amount: String,
+    date: String,
+    method: usize,
+    focused: usize,
+}
+
+impl PayForm {
+    /// Prefilled with the outstanding balance and today; a settled invoice
+    /// opens with an empty amount rather than a zero to delete.
+    fn new(balance: f64, today: &str) -> Self {
+        Self {
+            amount: if balance < 0.005 {
+                String::new()
+            } else {
+                format!("{balance:.2}")
+            },
+            date: today.to_string(),
+            method: 0,
+            focused: 0,
+        }
+    }
+
+    fn method(&self) -> &'static str {
+        METHODS[self.method]
+    }
+
+    fn push(&mut self, c: char) {
+        match self.focused {
+            AMOUNT_IDX if c.is_ascii_digit() || c == '.' || c == ',' => self.amount.push(c),
+            DATE_IDX if c.is_ascii_digit() || c == '-' => self.date.push(c),
+            _ => {}
+        }
+    }
+
+    fn backspace(&mut self) {
+        match self.focused {
+            AMOUNT_IDX => {
+                self.amount.pop();
+            }
+            DATE_IDX => {
+                self.date.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
+const AMOUNT_IDX: usize = 0;
+const DATE_IDX: usize = 1;
+const METHOD_IDX: usize = 2;
+const PAY_FIELDS: usize = 3;
 
 /// Everything the detail view shows, loaded on entry and reloaded after every
 /// mutation.
@@ -124,7 +184,79 @@ impl InvoiceManager {
         match &self.screen {
             Screen::List => self.draw_list(frame),
             Screen::Detail => self.draw_detail(frame),
+            Screen::PayForm(form) => self.draw_pay_form(frame, form),
         }
+    }
+
+    fn draw_pay_form(&self, frame: &mut Frame, form: &PayForm) {
+        let (content_area, hints_area) = self.draw_chrome(frame);
+        let Some(detail) = &self.detail else {
+            return;
+        };
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(
+                    " Record a Payment \u{2014} invoice #{}",
+                    detail.invoice.number
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(format!("   Client     {}", detail.client.name)),
+            Line::from(format!(
+                "   Total      {:<14} Paid  {:<14} Balance  {}",
+                money(detail.invoice.total),
+                money(detail.paid),
+                money(detail.balance()),
+            )),
+            Line::from(""),
+        ];
+
+        for (idx, label, value) in [
+            (AMOUNT_IDX, "Amount", format!("$ {}", form.amount)),
+            (DATE_IDX, "Date", format!("  {}", form.date)),
+            (
+                METHOD_IDX,
+                "Method",
+                if form.focused == METHOD_IDX {
+                    format!("< {} >", form.method())
+                } else {
+                    format!("  {}  ", form.method())
+                },
+            ),
+        ] {
+            let focused = form.focused == idx;
+            let (label_style, value_style, cursor) = if focused {
+                (
+                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Cyan),
+                    if idx == METHOD_IDX { "" } else { "_" },
+                )
+            } else {
+                (Style::default(), Style::default(), "")
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {label:<10} "), label_style),
+                Span::styled(format!("{value}{cursor}"), value_style),
+            ]));
+        }
+
+        if let Some(msg) = &self.status_message {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("   {msg}"),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+
+        frame.render_widget(Paragraph::new(lines), content_area);
+        frame.render_widget(
+            Paragraph::new(" Tab=next field  Left/Right=method  Enter=record  Esc=cancel")
+                .style(FOOTER_STYLE),
+            hints_area,
+        );
     }
 
     fn draw_detail(&self, frame: &mut Frame) {
@@ -340,6 +472,123 @@ impl InvoiceManager {
         match &self.screen {
             Screen::List => self.handle_list_key(code, conn),
             Screen::Detail => self.handle_detail_key(code, conn),
+            Screen::PayForm(_) => self.handle_pay_key(code, conn),
+        }
+    }
+
+    /// `p` on the detail view: refused outright for a void invoice, in
+    /// `cli::invoice`'s own words, before the form is ever offered.
+    fn open_pay_form(&mut self, today: &str) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        if let Err(e) = ensure_not_void(&detail.invoice, "paid") {
+            self.set_status(e.to_string());
+            return;
+        }
+        self.screen = Screen::PayForm(PayForm::new(detail.balance(), today));
+    }
+
+    fn handle_pay_key(&mut self, code: KeyCode, conn: &Connection) -> InvoiceAction {
+        let Screen::PayForm(form) = &mut self.screen else {
+            return InvoiceAction::Continue;
+        };
+        match code {
+            KeyCode::Esc => self.screen = Screen::Detail,
+            KeyCode::Tab | KeyCode::Down => form.focused = (form.focused + 1) % PAY_FIELDS,
+            KeyCode::BackTab | KeyCode::Up => {
+                form.focused = if form.focused == 0 {
+                    PAY_FIELDS - 1
+                } else {
+                    form.focused - 1
+                };
+            }
+            KeyCode::Left => {
+                if form.focused == METHOD_IDX {
+                    form.method = if form.method == 0 {
+                        METHODS.len() - 1
+                    } else {
+                        form.method - 1
+                    };
+                }
+            }
+            KeyCode::Right => {
+                if form.focused == METHOD_IDX {
+                    form.method = (form.method + 1) % METHODS.len();
+                }
+            }
+            KeyCode::Char(c) => form.push(c),
+            KeyCode::Backspace => form.backspace(),
+            KeyCode::Enter => self.record_pay_form(conn),
+            _ => {}
+        }
+        InvoiceAction::Continue
+    }
+
+    fn record_pay_form(&mut self, conn: &Connection) {
+        let (Screen::PayForm(form), Some(detail)) = (&self.screen, &self.detail) else {
+            return;
+        };
+        let raw = form.amount.trim().replace(',', "");
+        let date = form.date.trim().to_string();
+        let method = form.method();
+
+        if raw.is_empty() {
+            self.set_status("Amount is required".into());
+            return;
+        }
+        let Ok(typed) = raw.parse::<f64>() else {
+            self.set_status("Amount must be a number".into());
+            return;
+        };
+        // The CLI's own rule, so an overpayment stays allowed and only junk is
+        // refused; its message names --amount, which this form does not have.
+        let amount = match payment_amount(&detail.invoice, detail.paid, Some(typed)) {
+            Ok(amount) => amount,
+            Err(e) => {
+                self.set_status(field_wording(e.to_string()));
+                return;
+            }
+        };
+        if date.is_empty() {
+            self.set_status("Date is required (YYYY-MM-DD)".into());
+            return;
+        }
+        // A malformed date poisons refresh_status and ar_aging, so it is checked
+        // through the data layer's own rule rather than one invented here.
+        if let Err(e) = validate_date(&date, "payment") {
+            self.set_status(e.to_string());
+            return;
+        }
+
+        let invoice_id = detail.invoice.id;
+        let number = detail.invoice.number;
+        if let Err(e) = record_payment(conn, invoice_id, amount, &date, method, None) {
+            self.set_status(e.to_string());
+            return;
+        }
+        self.after_mutation(conn, invoice_id);
+        let status = self
+            .detail
+            .as_ref()
+            .map(|d| d.invoice.status.clone())
+            .unwrap_or_default();
+        self.set_status(format!(
+            "Recorded {} against invoice #{number} ({status}).",
+            money(amount)
+        ));
+    }
+
+    /// Reload both the row list and the open detail after a write.
+    fn after_mutation(&mut self, conn: &Connection, invoice_id: i64) {
+        self.reload_list(conn);
+        match self.load_detail(conn, invoice_id) {
+            Ok(()) => self.screen = Screen::Detail,
+            Err(e) => {
+                self.detail = None;
+                self.screen = Screen::List;
+                self.set_status(e.to_string());
+            }
         }
     }
 
@@ -349,6 +598,7 @@ impl InvoiceManager {
             KeyCode::Down => self.detail_scroll += 1,
             KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(10),
             KeyCode::PageDown => self.detail_scroll += 10,
+            KeyCode::Char('p') => self.open_pay_form(&crate::cli::today()),
             KeyCode::Esc => self.close_detail(),
             KeyCode::Char('q') => return InvoiceAction::Close,
             _ => {}
@@ -399,6 +649,14 @@ impl InvoiceManager {
         }
         self.ensure_visible(self.last_visible_rows);
         InvoiceAction::Continue
+    }
+}
+
+/// The CLI names the flag it wants; a form names the field that was typed in.
+fn field_wording(message: String) -> String {
+    match message.strip_prefix("--amount ") {
+        Some(rest) => format!("Amount {rest}"),
+        None => message,
     }
 }
 
@@ -740,6 +998,320 @@ mod tests {
             screen.contains("Up/Down=scroll  Esc=back  q=quit"),
             "{screen}"
         );
+    }
+
+    fn pay_form(mgr: &InvoiceManager) -> &PayForm {
+        match &mgr.screen {
+            Screen::PayForm(form) => form,
+            _ => panic!("not on the payment form"),
+        }
+    }
+
+    /// Open the detail for the only invoice and press `p`.
+    fn open_pay(mgr: &mut InvoiceManager, conn: &Connection) {
+        mgr.handle_key(KeyCode::Enter, conn);
+        mgr.handle_key(KeyCode::Char('p'), conn);
+    }
+
+    fn type_str(mgr: &mut InvoiceManager, conn: &Connection, text: &str) {
+        for ch in text.chars() {
+            mgr.handle_key(KeyCode::Char(ch), conn);
+        }
+    }
+
+    fn clear_field(mgr: &mut InvoiceManager, conn: &Connection) {
+        for _ in 0..40 {
+            mgr.handle_key(KeyCode::Backspace, conn);
+        }
+    }
+
+    fn payment_rows(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM invoice_payments", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn p_on_a_void_invoice_is_refused_before_the_form_opens() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 100.0);
+        void_invoice(&conn, id, "2026-08-07").unwrap();
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Invoice #1248 is void and cannot be paid.")
+        );
+    }
+
+    #[test]
+    fn p_prefills_the_amount_with_the_outstanding_balance_and_today() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        record_payment(&conn, id, 1_250.0, "2026-08-01", "ach", None).unwrap();
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+
+        let form = pay_form(&mgr);
+        assert_eq!(form.amount, "750.00");
+        assert_eq!(form.date, crate::cli::today());
+    }
+
+    #[test]
+    fn p_on_a_settled_invoice_prefills_an_empty_amount() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 100.0);
+        record_payment(&conn, id, 100.0, "2026-08-01", "ach", None).unwrap();
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+
+        assert_eq!(pay_form(&mgr).amount, "");
+    }
+
+    #[test]
+    fn method_options_are_exactly_the_four_the_schema_allows() {
+        assert_eq!(METHODS, ["direct_deposit", "ach", "stripe", "other"]);
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        assert_eq!(pay_form(&mgr).method(), "direct_deposit");
+    }
+
+    #[test]
+    fn every_method_option_is_actually_insertable() {
+        // invoice_payments.method carries a CHECK constraint; a fifth option
+        // would fail at insert time, not at compile time.
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 1_000.0);
+        for method in METHODS {
+            record_payment(&conn, id, 1.0, "2026-08-01", method, None)
+                .unwrap_or_else(|e| panic!("method {method} is not insertable: {e}"));
+        }
+    }
+
+    #[test]
+    fn left_and_right_cycle_the_method() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        for _ in 0..METHOD_IDX {
+            mgr.handle_key(KeyCode::Tab, &conn);
+        }
+        mgr.handle_key(KeyCode::Tab, &conn);
+        mgr.handle_key(KeyCode::Tab, &conn);
+        while pay_form(&mgr).focused != METHOD_IDX {
+            mgr.handle_key(KeyCode::Tab, &conn);
+        }
+
+        mgr.handle_key(KeyCode::Right, &conn);
+        assert_eq!(pay_form(&mgr).method(), "ach");
+        mgr.handle_key(KeyCode::Left, &conn);
+        assert_eq!(pay_form(&mgr).method(), "direct_deposit");
+        mgr.handle_key(KeyCode::Left, &conn);
+        assert_eq!(pay_form(&mgr).method(), "other", "the selector wraps");
+    }
+
+    /// Type an amount and a date into a freshly opened form, then Enter.
+    fn submit_payment(mgr: &mut InvoiceManager, conn: &Connection, amount: &str, date: &str) {
+        clear_field(mgr, conn);
+        type_str(mgr, conn, amount);
+        mgr.handle_key(KeyCode::Tab, conn);
+        clear_field(mgr, conn);
+        type_str(mgr, conn, date);
+        mgr.handle_key(KeyCode::Enter, conn);
+    }
+
+    #[test]
+    fn the_validation_table_refuses_and_writes_nothing() {
+        // Only what the fields actually accept: they take digits, `.` and `,`
+        // for the amount and digits and `-` for the date, so a letter never
+        // reaches validation.
+        let cases: [(&str, &str, &str); 6] = [
+            ("", "2026-08-07", "Amount is required"),
+            (".", "2026-08-07", "Amount must be a number"),
+            ("0", "2026-08-07", "Amount must be a finite number"),
+            ("0.00", "2026-08-07", "Amount must be a finite number"),
+            ("100", "", "Date is required (YYYY-MM-DD)"),
+            (
+                "100",
+                "2026-13-45",
+                "Invalid payment date: 2026-13-45 (expected YYYY-MM-DD)",
+            ),
+        ];
+        for (amount, date, expected) in cases {
+            let (_d, conn) = test_conn();
+            seed_invoice(&conn, "Cedar Systems", 2_000.0);
+            let mut mgr = manager(&conn);
+            open_pay(&mut mgr, &conn);
+            submit_payment(&mut mgr, &conn, amount, date);
+
+            let message = mgr.status_message.clone().unwrap_or_default();
+            assert!(
+                message.contains(expected),
+                "amount {amount:?} date {date:?}: expected {expected:?}, got {message:?}"
+            );
+            assert!(matches!(mgr.screen, Screen::PayForm(_)), "form stayed open");
+            assert_eq!(payment_rows(&conn), 0, "amount {amount:?} date {date:?}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_date_is_refused_in_the_data_layers_wording() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        submit_payment(&mut mgr, &conn, "100", "2026-13-45");
+
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Invalid payment date: 2026-13-45 (expected YYYY-MM-DD)")
+        );
+        assert_eq!(payment_rows(&conn), 0);
+    }
+
+    #[test]
+    fn a_negative_or_non_finite_amount_is_refused_in_the_cli_s_words() {
+        // Unreachable by typing — the field takes no `-` and no letters — but
+        // the rule is the CLI's, so the screen cannot disagree about it.
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let invoice = get_invoice(&conn, list_invoices(&conn).unwrap()[0].id).unwrap();
+
+        for amount in [-25.0, f64::NAN, f64::INFINITY] {
+            let message = field_wording(
+                payment_amount(&invoice, 0.0, Some(amount))
+                    .unwrap_err()
+                    .to_string(),
+            );
+            assert!(
+                message.starts_with("Amount must be a finite number greater than zero"),
+                "got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_amount_refusal_names_the_field_not_the_cli_flag() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        submit_payment(&mut mgr, &conn, "0", "2026-08-07");
+
+        let message = mgr.status_message.clone().unwrap();
+        assert!(!message.contains("--amount"), "got: {message}");
+        assert!(message.starts_with("Amount must be"), "got: {message}");
+    }
+
+    #[test]
+    fn a_valid_payment_is_recorded_and_returns_to_detail() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        record_payment(&conn, id, 1_250.0, "2026-08-01", "ach", None).unwrap();
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        submit_payment(&mut mgr, &conn, "750.00", "2026-08-20");
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        let (amount, date, method): (f64, String, String) = conn
+            .query_row(
+                "SELECT amount, paid_date, method FROM invoice_payments ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (amount, date.as_str(), method.as_str()),
+            (750.0, "2026-08-20", "direct_deposit")
+        );
+
+        let detail = detail_of(&mgr);
+        assert_eq!(detail.paid, 2_000.0);
+        assert_eq!(detail.balance(), 0.0);
+        assert_eq!(detail.invoice.status, "paid");
+        assert_eq!(mgr.rows[0].paid, 2_000.0, "the list reloaded too");
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Recorded $750.00 against invoice #1248 (paid).")
+        );
+    }
+
+    #[test]
+    fn an_overpayment_is_allowed() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        submit_payment(&mut mgr, &conn, "250", "2026-08-07");
+
+        assert_eq!(payment_rows(&conn), 1);
+        assert_eq!(detail_of(&mgr).invoice.status, "paid");
+    }
+
+    #[test]
+    fn commas_are_stripped_from_the_amount() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        submit_payment(&mut mgr, &conn, "1,250.00", "2026-08-07");
+
+        assert_eq!(detail_of(&mgr).paid, 1_250.0);
+    }
+
+    #[test]
+    fn the_amount_field_refuses_letters_and_the_date_field_refuses_slashes() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        clear_field(&mut mgr, &conn);
+        type_str(&mut mgr, &conn, "1a2");
+        mgr.handle_key(KeyCode::Tab, &conn);
+        clear_field(&mut mgr, &conn);
+        type_str(&mut mgr, &conn, "2026/08/07");
+
+        assert_eq!(pay_form(&mgr).amount, "12");
+        assert_eq!(pay_form(&mgr).date, "20260807");
+    }
+
+    #[test]
+    fn esc_cancels_the_payment_without_writing() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+        mgr.handle_key(KeyCode::Esc, &conn);
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(payment_rows(&conn), 0);
+    }
+
+    #[test]
+    fn the_pay_form_renders_the_balance_line_and_the_fields() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        record_payment(&conn, id, 1_250.0, "2026-08-01", "ach", None).unwrap();
+        let mut mgr = manager(&conn);
+        open_pay(&mut mgr, &conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Record a Payment"), "{screen}");
+        assert!(screen.contains("#1248"), "{screen}");
+        assert!(screen.contains("$1,250.00"), "{screen}");
+        assert!(screen.contains("$750.00"), "{screen}");
+        assert!(screen.contains("direct_deposit"), "{screen}");
+        assert!(
+            screen.contains("Tab=next field  Left/Right=method  Enter=record  Esc=cancel"),
+            "{screen}"
+        );
+        for row in screen.lines() {
+            assert!(row.chars().count() <= 80, "row overflows: {row:?}");
+        }
     }
 
     /// The screen as an 80x24 terminal renders it, one string per row.
