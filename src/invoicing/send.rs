@@ -42,7 +42,10 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
 
     let public_url = publisher.publish(&invoice.token, rendered.html.as_bytes(), &pdf)?;
 
-    let subject = format!("Invoice #{} from Raygun", invoice.number);
+    let subject = match branding.company.trim() {
+        "" => format!("Invoice #{}", invoice.number),
+        company => format!("Invoice #{} from {company}", invoice.number),
+    };
     mailer.send_invoice(&email, &subject, &rendered.html, &pdf)?;
 
     mark_published(conn, invoice_id, today)?;
@@ -118,12 +121,15 @@ mod tests {
             Err(NigelError::Other("upload down".into()))
         }
     }
+    #[derive(Default)]
     struct FakeMail {
         sent: RefCell<u32>,
+        subject: RefCell<String>,
     }
     impl Mailer for FakeMail {
-        fn send_invoice(&self, _to: &str, _s: &str, _h: &str, _p: &[u8]) -> Result<()> {
+        fn send_invoice(&self, _to: &str, s: &str, _h: &str, _p: &[u8]) -> Result<()> {
             *self.sent.borrow_mut() += 1;
+            *self.subject.borrow_mut() = s.to_string();
             Ok(())
         }
     }
@@ -145,9 +151,7 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let url = send_invoice(
             &conn,
             id,
@@ -172,9 +176,7 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let err = send_invoice(
             &conn,
             id,
@@ -196,9 +198,7 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let publisher = CapturePub {
             html: RefCell::new(String::new()),
         };
@@ -222,9 +222,7 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let publisher = CapturePub {
             html: RefCell::new(String::new()),
         };
@@ -241,15 +239,51 @@ mod tests {
     }
 
     #[test]
+    fn the_subject_names_the_company_when_there_is_one() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail::default();
+        let branding = Branding {
+            template: DEFAULT_TEMPLATE,
+            company: "Acme LLC",
+            contact_email: "billing@example.test",
+        };
+        send_invoice(&conn, id, "2026-08-04", &branding, &gw, &FakePub, &mail).unwrap();
+        assert_eq!(*mail.subject.borrow(), "Invoice #1248 from Acme LLC");
+    }
+
+    #[test]
+    fn the_subject_omits_the_from_clause_when_there_is_no_company() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail::default();
+        send_invoice(
+            &conn,
+            id,
+            "2026-08-04",
+            &brand("billing@example.test"),
+            &gw,
+            &FakePub,
+            &mail,
+        )
+        .unwrap();
+        assert_eq!(*mail.subject.borrow(), "Invoice #1248");
+    }
+
+    #[test]
     fn resend_reuses_existing_payment_link() {
         let (_d, conn) = test_conn();
         let id = seed(&conn);
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         send_invoice(
             &conn,
             id,

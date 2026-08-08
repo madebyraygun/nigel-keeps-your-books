@@ -10,7 +10,7 @@ pub const DEFAULT_TEMPLATE: &str = include_str!("templates/invoice.html");
 /// Every `{{KEY}}` a template may use. Anything else shaped like a placeholder
 /// is a typo and is refused at load time.
 pub const PLACEHOLDERS: &[&str] = &[
-    "NUMBER", "CLIENT", "ISSUE", "DUE", "ROWS", "CURRENCY", "TOTAL", "PAY", "CONTACT",
+    "NUMBER", "CLIENT", "COMPANY", "ISSUE", "DUE", "ROWS", "CURRENCY", "TOTAL", "PAY", "CONTACT",
 ];
 
 /// What an invoice is: which invoice, who owes, for what, how much. A template
@@ -241,6 +241,7 @@ pub fn render_invoice_html(
         &[
             ("NUMBER", &invoice.number.to_string()),
             ("CLIENT", &esc(&client.name)),
+            ("COMPANY", &esc(branding.company)),
             ("ISSUE", &esc(&invoice.issue_date)),
             ("DUE", &due),
             ("ROWS", &rows),
@@ -618,6 +619,34 @@ mod tests {
         );
         assert!(html.contains("&quot;"), "got: {html}");
         assert!(!html.contains(r#"" onmouseover=""#), "got: {html}");
+    }
+
+    #[test]
+    fn company_renders_and_is_escaped() {
+        let (inv, client, items) = sample();
+        let branding = Branding {
+            template: "<h1>{{COMPANY}}</h1>{{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}",
+            company: "A & B <Co>",
+            contact_email: "b@e.test",
+        };
+        let html = render_invoice_html(&branding, &inv, &client, &items, PayButton::Omitted);
+        assert!(html.contains("A &amp; B &lt;Co&gt;"), "got: {html}");
+    }
+
+    #[test]
+    fn company_renders_empty_when_unset() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(
+            &brand_with(
+                "<h1>{{COMPANY}}</h1>{{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}",
+                "b@e.test",
+            ),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(html.starts_with("<h1></h1>"), "got: {html}");
     }
 
     #[test]

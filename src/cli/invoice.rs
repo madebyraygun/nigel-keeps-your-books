@@ -129,6 +129,12 @@ fn require(value: Option<String>, what: &str) -> Result<String> {
     })
 }
 
+/// The business name the settings screen writes, as the invoice page and the
+/// email subject want it: a plain string, empty when nobody has set one.
+fn company_name(conn: &Connection) -> String {
+    crate::db::get_metadata(conn, "company_name").unwrap_or_default()
+}
+
 fn build_gateway(cfg: &InvoicingConfig) -> Result<StripeClient> {
     Ok(StripeClient {
         secret_key: require(cfg.stripe_secret_key.clone(), "stripe_secret_key")?,
@@ -376,9 +382,10 @@ pub fn preview(number: i64, output_dir: Option<String>) -> Result<()> {
     }
 
     let template = load_template(&get_data_dir())?;
+    let company = company_name(&conn);
     let branding = Branding {
         template: &template,
-        company: "",
+        company: &company,
         contact_email: &contact_email,
     };
 
@@ -424,9 +431,10 @@ pub fn send(number: i64, today: &str) -> Result<()> {
     // one fails the send with no Stripe link made and nothing published.
     let template = load_template(&get_data_dir())?;
     let (stripe, r2, mail) = build_clients(invoicing_config())?;
+    let company = company_name(&conn);
     let branding = Branding {
         template: &template,
-        company: "",
+        company: &company,
         contact_email: &mail.from,
     };
     let url = send_invoice(&conn, invoice.id, today, &branding, &stripe, &r2, &mail)?;
