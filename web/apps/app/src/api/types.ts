@@ -550,6 +550,15 @@ export const CONFLICT_REASONS = [
   'no_transactions',
   'already_encrypted',
   'not_encrypted',
+  'has_invoices',
+  'void',
+  'not_draft',
+  'has_payments',
+  'already_void',
+  'no_balance',
+  'client_missing_email',
+  'invoice_not_payable',
+  'send_not_configured',
 ] as const;
 
 export type ConflictReason = (typeof CONFLICT_REASONS)[number];
@@ -562,6 +571,16 @@ export interface ConflictDetails {
   /** `no_transactions` names the account and month it found nothing in. */
   account?: string;
   month?: string;
+  /** `not_draft` names the status that blocked the edit. */
+  status?: string;
+  /** `has_payments` and `no_balance` carry the figures behind the refusal. */
+  total?: number;
+  paid?: number;
+  /** `client_missing_email` names the client whose record needs an address. */
+  clientId?: number;
+  clientName?: string;
+  /** `send_not_configured` names the unset settings — never their values. */
+  missing?: string[];
 }
 
 /**
@@ -604,6 +623,7 @@ export const API_ERROR_CODES = [
   'locked',
   'payload_too_large',
   'internal',
+  'upstream_failed',
   'feature_disabled',
 ] as const;
 
@@ -1036,4 +1056,90 @@ export interface PayInvoiceRequest {
   date: string;
   amount?: number;
   method?: PaymentMethod;
+}
+
+/**
+ * `POST /api/invoices/{number}/send`.
+ *
+ * The confirmation is part of the contract, not a convention of whichever
+ * screen sends it: without `confirm: true` the server answers 400
+ * `confirmation_required` and nothing happens.
+ */
+export interface SendInvoiceRequest {
+  confirm: true;
+}
+
+/** The stages of a send, in execution order. */
+export const SEND_STEPS = [
+  'config',
+  'load',
+  'precheck',
+  'payment_link',
+  'render',
+  'publish',
+  'email',
+  'record',
+] as const;
+
+export type SendStep = (typeof SEND_STEPS)[number];
+
+/** What a step that did not fail did. `reused` is a resend's Stripe link. */
+export type SendStepOutcome = 'ok' | 'reused';
+
+export interface SendStepResult {
+  step: SendStep;
+  outcome: SendStepOutcome;
+}
+
+/**
+ * What a completed send answers with.
+ *
+ * The invoice is the refreshed detail — the status has just moved — and the
+ * trace is what lets a screen say what happened rather than just "done".
+ */
+export interface SendResult {
+  invoice: InvoiceDetail;
+  publicUrl: string;
+  paymentLinkUrl: string | null;
+  steps: SendStepResult[];
+}
+
+/** One invoice the gateway refused during a sync. */
+export interface SyncFailure {
+  number: number;
+  message: string;
+}
+
+/**
+ * `POST /api/invoices/sync` — pull Stripe payments and record them.
+ *
+ * Per-invoice failures are data, not an error: a deleted payment link 404s
+ * forever and must not hide the payments the run did record. Only a run where
+ * every invoice failed answers with an error.
+ */
+export interface SyncResult {
+  recorded: number;
+  invoicesChecked: number;
+  failures: SyncFailure[];
+}
+
+/**
+ * `error.details` on a send that stopped, whatever status it came back as.
+ *
+ * `emailSent` is the field the wording turns on: every failure before the email
+ * is safe to retry, and one after it is not — the client already has the
+ * invoice. `missing` belongs to `send_not_configured` and is key names only.
+ */
+export interface SendErrorDetails {
+  reason?: ConflictReason | 'send_failed' | 'confirmation_required';
+  step?: SendStep;
+  /** `stripe`, `r2` or `mailgun` — set only on a 502. */
+  service?: string;
+  completed?: SendStep[];
+  emailSent?: boolean;
+  invoiceStatus?: string;
+  /** Unset invoicing settings, by name. */
+  missing?: string[];
+  clientId?: number;
+  clientName?: string;
 }

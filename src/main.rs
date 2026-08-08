@@ -16,11 +16,23 @@ fn sync_invoice_payments() {
     let gateway = nigel::invoicing::stripe::StripeClient { secret_key };
     let db_path = nigel::settings::get_data_dir().join("nigel.db");
     let result = nigel::db::get_connection(&db_path)
-        .and_then(|conn| nigel::invoicing::sync::sync_all(&conn, &cli::today(), &gateway));
+        .and_then(|conn| nigel::invoicing::sync::sync_all_report(&conn, &cli::today(), &gateway));
 
     match result {
-        Ok(0) => {}
-        Ok(n) => eprintln!("notice: recorded {n} new invoice payment(s)"),
+        Ok(report) => {
+            for failure in &report.failures {
+                eprintln!(
+                    "notice: invoice sync failed for #{}: {}",
+                    failure.number, failure.message
+                );
+            }
+            if report.recorded > 0 {
+                eprintln!(
+                    "notice: recorded {} new invoice payment(s)",
+                    report.recorded
+                );
+            }
+        }
         Err(e) => eprintln!("notice: invoice sync skipped: {e}"),
     }
 }

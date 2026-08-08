@@ -88,12 +88,15 @@ pub fn encrypt(db_path: &Path) {
     crate::cli::password::encrypt_database(db_path, PASSWORD).expect("encrypt db");
 }
 
-/// Redirect `~/.config/nigel` at a temporary directory for the life of the
-/// guard.
+/// Resolve settings from a temporary directory alone for the life of the guard
+/// — `~/.config/nigel` redirected, and the `NIGEL_*` environment layer off.
 ///
 /// Any test that reaches `settings::save_settings` — the whole settings-screen
 /// surface — would otherwise rewrite the developer's real settings.json and
-/// repoint their data directory at a tempdir that is about to be deleted.
+/// repoint their data directory at a tempdir that is about to be deleted. And
+/// any test of the send or sync routes would otherwise resolve whatever
+/// invoicing credentials the developer has exported, which on a configured
+/// machine means a real invoice to a real client.
 pub type TempConfig = crate::settings::TempConfigDir;
 
 pub fn app_for(db_path: &Path) -> (Router, String) {
@@ -326,7 +329,7 @@ pub const EXPORT_ROUTES: [&str; 8] = [
 /// — `rules/test` and `imports/preview` are dry runs — and a rule stated as
 /// "the ones that write" invites the next dry run to be left out of a list the
 /// guard still has to cover.
-pub const WRITE_ROUTES: [(&str, &str, &str); 32] = [
+pub const WRITE_ROUTES: [(&str, &str, &str); 34] = [
     ("POST", "/api/clients", r#"{"name":"X"}"#),
     ("PATCH", "/api/clients/1", r#"{"name":"X"}"#),
     ("DELETE", "/api/clients/1", ""),
@@ -342,6 +345,13 @@ pub const WRITE_ROUTES: [(&str, &str, &str); 32] = [
         "/api/invoices/1252/pay",
         r#"{"amount":1,"date":"2026-04-01"}"#,
     ),
+    // Confirmed, so the locked and session guards are what refuse it rather
+    // than the missing flag. Neither reaches a gateway here: both guards run as
+    // middleware, before the handler that would resolve the invoicing settings
+    // exists — which is the only reason a `confirm: true` body is safe to send
+    // from a table.
+    ("POST", "/api/invoices/1252/send", r#"{"confirm":true}"#),
+    ("POST", "/api/invoices/sync", "{}"),
     ("PATCH", "/api/rules/1", r#"{"priority":5}"#),
     ("DELETE", "/api/rules/1", ""),
     (

@@ -1,13 +1,22 @@
 //! Invoices: the list, one invoice in full, the A/R aging report, the number
-//! the next draft will get, and the writes — create, edit, void and pay.
+//! the next draft will get, and the writes — create, edit, void, pay, send and
+//! sync.
 //!
 //! Every write answers the whole refreshed detail, because the status is
 //! derived rather than set and almost every write moves it.
+//!
+//! Send and sync are the two that leave the machine. Both take their
+//! collaborators as the `PaymentGateway`/`AssetPublisher`/`Mailer` traits —
+//! `send_with` and `sync_with` are the seams — so the whole orchestration is
+//! exercised with fakes and no test in this file can reach the network. Only
+//! the two handlers build the real clients, from `invoicing_config()`.
 //!
 //! Every guard the detail response reports as a `can*` flag is 68.1's own
 //! function, called rather than re-derived — `ensure_editable` blocks on
 //! recorded payments as well as on status, and a status-only copy of that rule
 //! in a client would disagree with the 409 it is meant to predict.
+
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Query, State};
@@ -20,14 +29,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::NigelError;
 use crate::invoicing::clients::get_client;
+use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{
     self as inv, AgingReport, InvoiceListRow, InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::render::{render_invoice, RenderedInvoice};
 use crate::invoicing::render_html::{load_template, Branding};
+use crate::invoicing::send::{send_invoice_traced, SendFailure, SendStep, StepOutcome};
+use crate::invoicing::sync::{sync_all_report_within, SyncReport};
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 
-use super::super::error::{ApiError, ApiResult};
+use super::super::error::{ApiError, ApiErrorCode, ApiResult};
 use super::super::extract::{ApiJson, ApiPath};
 use super::super::state::AppState;
 use super::{double_option, not_found_because, with_conn, with_conn_api};
@@ -40,7 +52,9 @@ pub fn routes() -> Router<AppState> {
         .route("/invoices", get(list).post(create))
         .route("/invoices/aging", get(aging))
         .route("/invoices/next-number", get(next_number))
+        .route("/invoices/sync", post(sync))
         .route("/invoices/{number}", get(detail).patch(update))
+        .route("/invoices/{number}/send", post(send))
         .route("/invoices/{number}/void", post(void))
         .route("/invoices/{number}/pay", post(pay))
         .route("/invoices/{number}/preview", get(preview_html))
@@ -55,7 +69,7 @@ pub fn routes() -> Router<AppState> {
 ///
 /// The invoice's own fields are flattened, so `token` stays skipped and the
 /// computed `publicUrl` is the only address that crosses the wire.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InvoiceDetail {
     #[serde(flatten)]
@@ -434,6 +448,236 @@ async fn pay(
 }
 
 // ---------------------------------------------------------------------------
+// Send and sync
+// ---------------------------------------------------------------------------
+
+/// The whole body of a send request.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendRequest {
+    /// Absent or `false` refuses the request and sends nothing.
+    #[serde(default)]
+    confirm: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendStepResult {
+    step: SendStep,
+    outcome: StepOutcome,
+}
+
+/// What a completed send answers with: the refreshed invoice, because the
+/// status has just moved, and the trace, because "done" is not what a screen
+/// wants to say about an operation with seven steps and three third parties in
+/// it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendResult {
+    invoice: InvoiceDetail,
+    public_url: String,
+    payment_link_url: Option<String>,
+    steps: Vec<SendStepResult>,
+}
+
+/// The refusal a request that never named the invoicing settings gets.
+///
+/// Key names only — the values never leave the process, and the names are
+/// already public in `docs/invoicing.md`.
+fn not_configured(what: &str, missing: &[&'static str]) -> ApiError {
+    ApiError::conflict(
+        format!(
+            "{what} is not configured: missing {} (set each one in settings.json or the matching NIGEL_ env var)",
+            missing.join(", ")
+        ),
+        serde_json::json!({
+            "reason": "send_not_configured",
+            "step": SendStep::Config.as_str(),
+            "missing": missing,
+        }),
+    )
+}
+
+/// `POST /api/invoices/{number}/send` — the whole publish, inside the request.
+///
+/// The `confirm` flag is checked first and nothing else happens without it:
+/// "send requires explicit confirmation" is a property of the endpoint rather
+/// than a convention of whichever screen calls it, so an accidental `curl` is a
+/// no-op instead of an invoice in a client's inbox.
+///
+/// It blocks rather than queueing because there is nothing a job registry would
+/// hold that the invoice row does not: `published_at` and
+/// `stripe_payment_link_url` are the durable state, and two sources of truth for
+/// "did this go out" is how they drift. The gateway clients are synchronous
+/// `reqwest::blocking` and `with_conn_api` is already `spawn_blocking`, so the
+/// work lands on that pool either way; what makes the open request bounded is
+/// `invoicing::REQUEST_TIMEOUT` on each of the five calls it makes — two to
+/// Stripe, two to R2, one to Mailgun — for a ceiling of about 150s plus
+/// rendering. There is no deadline over the whole orchestration on purpose: a
+/// run cut off part-way would leave the caller unable to say which steps had
+/// happened, which is the one thing the trace exists to answer.
+async fn send(
+    State(state): State<AppState>,
+    ApiPath(number): ApiPath<i64>,
+    ApiJson(request): ApiJson<SendRequest>,
+) -> ApiResult<Json<SendResult>> {
+    if !request.confirm {
+        return Err(ApiError::bad_request(
+            "Sending an invoice requires an explicit confirmation: post {\"confirm\": true}.",
+        )
+        .with_details(serde_json::json!({ "reason": "confirmation_required" })));
+    }
+
+    let config = crate::settings::invoicing_config();
+    let status = crate::settings::invoicing_status(&config);
+    if !status.send_configured {
+        return Err(not_configured("Sending invoices", &status.missing));
+    }
+    // Every one of the nine keys is present, so this cannot fail — it is the
+    // same constructor `nigel invoice send` uses, kept rather than reimplemented
+    // so the two front ends build the same clients.
+    let (stripe, r2, mail) = crate::cli::invoice::build_clients(config)?;
+    let contact_email = mail.from.clone();
+    let today = crate::cli::today();
+
+    let result = with_conn_api(&state, {
+        let state = state.clone();
+        move |conn| {
+            send_with(
+                conn,
+                &state.data_dir(),
+                number,
+                &today,
+                &contact_email,
+                &stripe,
+                &r2,
+                &mail,
+            )
+        }
+    })
+    .await?;
+    Ok(Json(result))
+}
+
+/// The send with its three collaborators passed in, which is what makes the
+/// orchestration testable without a network: the handler resolves the settings
+/// and builds the real clients, and everything below this line takes traits.
+#[allow(clippy::too_many_arguments)]
+fn send_with<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
+    conn: &Connection,
+    data_dir: &std::path::Path,
+    number: i64,
+    today: &str,
+    contact_email: &str,
+    gateway: &G,
+    publisher: &P,
+    mailer: &M,
+) -> ApiResult<SendResult> {
+    // The only lookup this route owes the orchestration: `send_invoice_traced`
+    // works from an id, and the URL carries a number. Every *guard* below it —
+    // void, the client's address, an invoice with nothing to charge — is the
+    // traced precheck's, called once, and the precheck runs before any network
+    // call, so a refusal still costs nothing.
+    let invoice = find_invoice(conn, number).map_err(|e| e.at_step(SendStep::Load))?;
+    // Loaded before the Stripe link, so a broken override costs no link, no
+    // upload and no email.
+    let template = load_template(data_dir)?;
+    let company = crate::cli::invoice::company_name(conn);
+    let branding = Branding {
+        template: &template,
+        company: &company,
+        contact_email,
+    };
+
+    let outcome = send_invoice_traced(
+        conn, invoice.id, today, &branding, gateway, publisher, mailer,
+    )
+    .map_err(|failure| send_error(conn, &invoice, failure))?;
+
+    Ok(SendResult {
+        invoice: detail_for(conn, find_invoice(conn, number)?)?,
+        public_url: outcome.public_url,
+        payment_link_url: outcome.payment_link_url,
+        steps: outcome
+            .steps
+            .into_iter()
+            .map(|(step, outcome)| SendStepResult { step, outcome })
+            .collect(),
+    })
+}
+
+/// The step-to-status mapping is `From<SendFailure>`'s; this adds the one piece
+/// of context only the route holds — which client needs an email address —
+/// because that refusal is a link to a form, not a sentence to read.
+fn send_error(conn: &Connection, invoice: &Invoice, failure: SendFailure) -> ApiError {
+    if matches!(
+        failure.source,
+        NigelError::Conflict {
+            code: "client_missing_email",
+            ..
+        }
+    ) {
+        if let Ok(client) = get_client(conn, invoice.client_id) {
+            return ApiError::conflict(
+                failure.source.to_string(),
+                serde_json::json!({
+                    "reason": "client_missing_email",
+                    "step": failure.step.as_str(),
+                    "clientId": client.id,
+                    "clientName": client.name,
+                }),
+            );
+        }
+    }
+    ApiError::from(failure)
+}
+
+/// `POST /api/invoices/sync` — pull Stripe payments and record them.
+///
+/// No confirmation: the run is idempotent by checkout session id (it already
+/// happens at every CLI launch), and it writes only payments Stripe says were
+/// taken.
+async fn sync(State(state): State<AppState>) -> ApiResult<Json<SyncReport>> {
+    let Some(secret_key) = crate::settings::invoicing_config().stripe_secret_key else {
+        return Err(not_configured("Payment sync", &["stripe_secret_key"]));
+    };
+    let gateway = crate::invoicing::stripe::StripeClient { secret_key };
+    let today = crate::cli::today();
+
+    let report = with_conn_api(&state, move |conn| sync_with(conn, &today, &gateway)).await?;
+    Ok(Json(report))
+}
+
+/// How long a sync request may spend at the gateway in total.
+///
+/// One invoice is bounded by `invoicing::REQUEST_TIMEOUT`; without a deadline
+/// for the run, N open invoices would be N × 30s of an open request holding
+/// `db_gate` — which blocks encrypting, decrypting and switching data
+/// directories for as long as it lasts. Invoices the budget did not reach come
+/// back as failures, so the report still accounts for all of them and a second
+/// call picks up where this one stopped.
+const SYNC_BUDGET: Duration = Duration::from_secs(60);
+
+/// Sync with the gateway passed in, for the same reason [`send_with`] takes
+/// three: a test drives the whole route with fakes and no network.
+///
+/// Per-invoice failures ride back in the report — one deleted payment link must
+/// not hide the payments the run did record — and only a run where every
+/// invoice failed is an error.
+fn sync_with<G: PaymentGateway>(
+    conn: &Connection,
+    today: &str,
+    gateway: &G,
+) -> ApiResult<SyncReport> {
+    sync_all_report_within(conn, today, gateway, SYNC_BUDGET).map_err(|err| match err {
+        // A failure reading the books is ours, not Stripe's.
+        NigelError::Db(_) => ApiError::from(err),
+        other => ApiError::new(ApiErrorCode::UpstreamFailed, other.to_string())
+            .with_details(serde_json::json!({ "service": "stripe" })),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Preview
 // ---------------------------------------------------------------------------
 
@@ -758,7 +1002,8 @@ mod tests {
 
     /// axum prefers a literal segment over a pattern, and both of these would
     /// otherwise be read as invoice numbers — which `ApiPath<i64>` would refuse
-    /// with a 400 rather than answering the report.
+    /// with a 400 rather than answering the report. `/invoices/sync` is the
+    /// same shape and has a test of its own beside the send cases.
     #[tokio::test]
     async fn the_literal_paths_are_not_parsed_as_invoice_numbers() {
         let (_dir, db_path) = seeded_db();
@@ -1569,6 +1814,536 @@ mod tests {
 
         let html = get_response(&app, "/api/invoices/1248/preview", &token).await;
         assert_eq!(html.status(), StatusCode::OK, "HTML preview still works");
+    }
+
+    // -----------------------------------------------------------------------
+    // Send and sync
+    // -----------------------------------------------------------------------
+
+    // The two seams the fakes go through, taken by name: everything else in
+    // this module is exercised over HTTP.
+    use super::{send_with, sync_with};
+    use crate::error::{NigelError, Result as NigelResult};
+    use crate::invoicing::gateway::{
+        AssetPublisher, Mailer, PaidSession, PaymentGateway, PaymentLink,
+    };
+    use crate::models::{Client, Invoice};
+    use std::cell::RefCell;
+
+    #[derive(Default)]
+    struct FakeGw {
+        create_calls: RefCell<u32>,
+    }
+    impl PaymentGateway for FakeGw {
+        fn create_payment_link(&self, _i: &Invoice, _c: &Client) -> NigelResult<PaymentLink> {
+            *self.create_calls.borrow_mut() += 1;
+            Ok(PaymentLink {
+                id: "plink_fake".into(),
+                url: "https://buy.stripe.com/fake".into(),
+            })
+        }
+        fn paid_sessions(&self, _id: &str) -> NigelResult<Vec<PaidSession>> {
+            Ok(vec![])
+        }
+    }
+
+    struct FakePub;
+    impl AssetPublisher for FakePub {
+        fn publish(&self, token: &str, _h: &[u8], _p: &[u8]) -> NigelResult<String> {
+            Ok(format!("https://billing.example.test/i/{token}/"))
+        }
+    }
+
+    /// R2 refusing the way it does when the credentials are wrong.
+    struct ForbiddenPub;
+    impl AssetPublisher for ForbiddenPub {
+        fn publish(&self, _t: &str, _h: &[u8], _p: &[u8]) -> NigelResult<String> {
+            Err(NigelError::Other(
+                "r2 403: <Error><Code>SignatureDoesNotMatch</Code></Error>".into(),
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeMail {
+        sent: RefCell<u32>,
+    }
+    impl Mailer for FakeMail {
+        fn send_invoice(&self, _t: &str, _s: &str, _h: &str, _p: &[u8]) -> NigelResult<()> {
+            *self.sent.borrow_mut() += 1;
+            Ok(())
+        }
+    }
+
+    struct BrokenLinkGw;
+    impl PaymentGateway for BrokenLinkGw {
+        fn create_payment_link(&self, _i: &Invoice, _c: &Client) -> NigelResult<PaymentLink> {
+            unreachable!("no link is created for these invoices")
+        }
+        fn paid_sessions(&self, id: &str) -> NigelResult<Vec<PaidSession>> {
+            Err(NigelError::Other(format!(
+                "stripe 404: no such payment link {id}"
+            )))
+        }
+    }
+
+    struct PayingGw;
+    impl PaymentGateway for PayingGw {
+        fn create_payment_link(&self, _i: &Invoice, _c: &Client) -> NigelResult<PaymentLink> {
+            unreachable!("no link is created for these invoices")
+        }
+        fn paid_sessions(&self, id: &str) -> NigelResult<Vec<PaidSession>> {
+            Ok(vec![PaidSession {
+                session_id: format!("cs_{id}"),
+                amount: 100.0,
+            }])
+        }
+    }
+
+    fn open_db(db_path: &std::path::Path) -> rusqlite::Connection {
+        crate::db::open_connection(db_path, None).expect("open db")
+    }
+
+    /// Render an `ApiError` the way the router would, so a test asserts on the
+    /// wire form rather than on the struct behind it.
+    async fn error_json(err: super::ApiError) -> (StatusCode, serde_json::Value) {
+        use axum::response::IntoResponse;
+        let response = err.into_response();
+        let status = response.status();
+        (status, json_body(response).await)
+    }
+
+    #[tokio::test]
+    async fn send_without_confirmation_is_a_400_and_sends_nothing() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        for body in [
+            serde_json::json!({}),
+            serde_json::json!({ "confirm": false }),
+        ] {
+            let (status, json) = post_json(&app, "/api/invoices/1252/send", &token, &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {json}");
+            assert_eq!(json["error"]["details"]["reason"], "confirmation_required");
+        }
+
+        // Refused before the settings are even read, so nothing was published.
+        let invoice = ok_json(&app, "/api/invoices/1252", &token).await;
+        assert_eq!(invoice["status"], "draft");
+        assert!(invoice["publishedAt"].is_null(), "{invoice}");
+    }
+
+    #[tokio::test]
+    async fn send_with_no_invoicing_config_is_a_409_naming_the_missing_keys() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, json) = post_json(
+            &app,
+            "/api/invoices/1252/send",
+            &token,
+            &serde_json::json!({ "confirm": true }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "send_not_configured");
+        assert_eq!(json["error"]["details"]["step"], "config");
+        let missing = json["error"]["details"]["missing"]
+            .as_array()
+            .expect("the missing key names");
+        assert_eq!(missing.len(), 9, "{json}");
+        assert!(missing.contains(&serde_json::json!("r2_bucket")), "{json}");
+        assert!(
+            missing.contains(&serde_json::json!("public_base_url")),
+            "{json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_with_no_stripe_key_is_a_409_naming_it() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, json) =
+            post_json(&app, "/api/invoices/sync", &token, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "send_not_configured");
+        assert_eq!(
+            json["error"]["details"]["missing"],
+            serde_json::json!(["stripe_secret_key"])
+        );
+    }
+
+    /// Both routes resolve the invoicing settings themselves, and the `NIGEL_*`
+    /// environment wins over settings.json in production — so on a machine with
+    /// those variables exported, "nothing is configured" would otherwise become
+    /// a real Stripe call. `TempConfig` takes the environment out of the
+    /// resolution for its lifetime; this is the test that says so.
+    #[tokio::test]
+    async fn a_configured_environment_cannot_turn_these_tests_into_a_real_send() {
+        let _config = TempConfig::new();
+        // Safe here: the suite runs on one thread, `#[tokio::test]` is a
+        // current-thread runtime, and the variable is removed at the end.
+        std::env::set_var("NIGEL_STRIPE_SECRET_KEY", "sk_live_not_a_real_key");
+
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, json) =
+            post_json(&app, "/api/invoices/sync", &token, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "send_not_configured");
+
+        let (status, json) = post_json(
+            &app,
+            "/api/invoices/1252/send",
+            &token,
+            &serde_json::json!({ "confirm": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "send_not_configured");
+        assert_eq!(
+            json["error"]["details"]["missing"]
+                .as_array()
+                .expect("the missing key names")
+                .len(),
+            9,
+            "the exported key was read: {json}"
+        );
+
+        std::env::remove_var("NIGEL_STRIPE_SECRET_KEY");
+    }
+
+    /// `sync` is a literal beside `{number}`, and would otherwise be read as an
+    /// invoice number — which `ApiPath<i64>` refuses with a 400.
+    #[tokio::test]
+    async fn the_sync_path_is_not_parsed_as_an_invoice_number() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, json) =
+            post_json(&app, "/api/invoices/sync", &token, &serde_json::json!({})).await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "reached the sync handler: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sending_a_void_invoice_is_a_409_before_any_network_call() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+        let gateway = FakeGw::default();
+        let mailer = FakeMail::default();
+
+        let err = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            1247,
+            AS_OF,
+            "billing@example.test",
+            &gateway,
+            &FakePub,
+            &mailer,
+        )
+        .expect_err("a void invoice cannot be sent");
+
+        let (status, json) = error_json(err).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "void");
+        // The data layer's guard, reached through the traced precheck — which
+        // is why it names the step like every other send answer.
+        assert_eq!(json["error"]["details"]["step"], "precheck");
+        assert_eq!(*gateway.create_calls.borrow(), 0);
+        assert_eq!(*mailer.sent.borrow(), 0);
+    }
+
+    #[tokio::test]
+    async fn sending_to_a_client_with_no_email_is_a_409_naming_the_client() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+        let gateway = FakeGw::default();
+        let mailer = FakeMail::default();
+
+        // 1249 belongs to Globex, which has no email address.
+        let err = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            1249,
+            AS_OF,
+            "billing@example.test",
+            &gateway,
+            &FakePub,
+            &mailer,
+        )
+        .expect_err("nowhere to send it");
+
+        let (status, json) = error_json(err).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "client_missing_email");
+        assert_eq!(json["error"]["details"]["step"], "precheck");
+        assert_eq!(json["error"]["details"]["clientName"], "Globex");
+        assert!(json["error"]["details"]["clientId"].is_i64(), "{json}");
+        assert_eq!(*gateway.create_calls.borrow(), 0, "no link was created");
+    }
+
+    #[tokio::test]
+    async fn sending_an_unknown_invoice_is_a_404_with_a_reason() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+
+        let err = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            9999,
+            AS_OF,
+            "billing@example.test",
+            &FakeGw::default(),
+            &FakePub,
+            &FakeMail::default(),
+        )
+        .expect_err("no such invoice");
+
+        let (status, json) = error_json(err).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "invoice_not_found");
+        assert_eq!(json["error"]["details"]["step"], "load");
+    }
+
+    #[cfg(feature = "pdf")]
+    #[tokio::test]
+    async fn a_publish_failure_is_a_502_naming_the_step_and_the_service() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+        let mailer = FakeMail::default();
+
+        let err = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            1252,
+            AS_OF,
+            "billing@example.test",
+            &FakeGw::default(),
+            &ForbiddenPub,
+            &mailer,
+        )
+        .expect_err("R2 refused");
+
+        let (status, json) = error_json(err).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{json}");
+        assert_eq!(json["error"]["code"], "upstream_failed");
+        assert_eq!(json["error"]["details"]["reason"], "send_failed");
+        assert_eq!(json["error"]["details"]["step"], "publish");
+        assert_eq!(json["error"]["details"]["service"], "r2");
+        assert_eq!(json["error"]["details"]["emailSent"], false);
+        assert_eq!(json["error"]["details"]["invoiceStatus"], "draft");
+        assert_eq!(
+            json["error"]["details"]["completed"],
+            serde_json::json!(["load", "precheck", "payment_link", "render"])
+        );
+        // R2's own words, so the operator has something to search for.
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("SignatureDoesNotMatch"),
+            "{json}"
+        );
+        assert_eq!(*mailer.sent.borrow(), 0, "no email went out");
+
+        // And the invoice is still a draft, so a retry is the whole fix.
+        assert_eq!(
+            crate::invoicing::invoices::get_invoice_by_number(&conn, 1252)
+                .unwrap()
+                .status,
+            "draft"
+        );
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    #[tokio::test]
+    async fn a_send_without_the_pdf_feature_is_a_501_at_the_render_step() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+
+        let err = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            1252,
+            AS_OF,
+            "billing@example.test",
+            &FakeGw::default(),
+            &FakePub,
+            &FakeMail::default(),
+        )
+        .expect_err("nothing to attach");
+
+        let (status, json) = error_json(err).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{json}");
+        assert_eq!(json["error"]["code"], "feature_disabled");
+        assert_eq!(json["error"]["details"]["step"], "render");
+        assert_eq!(json["error"]["details"]["emailSent"], false);
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn a_successful_send_answers_with_the_step_trace_and_the_refreshed_invoice() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+        let gateway = FakeGw::default();
+        let mailer = FakeMail::default();
+
+        let result = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            1252,
+            AS_OF,
+            "billing@example.test",
+            &gateway,
+            &FakePub,
+            &mailer,
+        )
+        .expect("sends");
+
+        let json = serde_json::to_value(&result).expect("serializes");
+        assert_eq!(
+            json["steps"],
+            serde_json::json!([
+                { "step": "load", "outcome": "ok" },
+                { "step": "precheck", "outcome": "ok" },
+                { "step": "payment_link", "outcome": "ok" },
+                { "step": "render", "outcome": "ok" },
+                { "step": "publish", "outcome": "ok" },
+                { "step": "email", "outcome": "ok" },
+                { "step": "record", "outcome": "ok" },
+            ])
+        );
+        assert!(json["publicUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://billing.example.test/i/"));
+        assert_eq!(json["paymentLinkUrl"], "https://buy.stripe.com/fake");
+
+        // The refreshed detail: the status has just moved, and a body echoing
+        // only what was sent would be showing the draft.
+        assert_eq!(json["invoice"]["status"], "sent");
+        assert_eq!(json["invoice"]["canEdit"], false);
+        assert!(
+            json["invoice"].get("token").is_none(),
+            "token leaked: {json}"
+        );
+        assert_eq!(*mailer.sent.borrow(), 1);
+
+        // A resend reuses the link the client was already given.
+        let again = send_with(
+            &conn,
+            db_path.parent().unwrap(),
+            1252,
+            AS_OF,
+            "billing@example.test",
+            &gateway,
+            &FakePub,
+            &mailer,
+        )
+        .expect("resends");
+        let again = serde_json::to_value(&again).expect("serializes");
+        assert_eq!(again["steps"][2]["outcome"], "reused");
+        assert_eq!(*gateway.create_calls.borrow(), 1);
+    }
+
+    #[test]
+    fn sync_reports_recorded_checked_and_per_invoice_failures() {
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+
+        // Only 1251 carries a payment link and is still open.
+        let report = sync_with(&conn, AS_OF, &PayingGw).expect("syncs");
+        let json = serde_json::to_value(&report).expect("serializes");
+        assert_eq!(json["recorded"], 1);
+        assert_eq!(json["invoicesChecked"], 1);
+        assert_eq!(json["failures"], serde_json::json!([]));
+    }
+
+    /// A run where every invoice failed is the only failure a sync answers with
+    /// — and it is the gateway's, not ours.
+    #[tokio::test]
+    async fn a_sync_that_failed_everywhere_is_a_502() {
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+
+        let err = sync_with(&conn, AS_OF, &BrokenLinkGw).expect_err("stripe refused");
+        let (status, json) = error_json(err).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{json}");
+        assert_eq!(json["error"]["code"], "upstream_failed");
+        assert_eq!(json["error"]["details"]["service"], "stripe");
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no such payment link"),
+            "{json}"
+        );
+    }
+
+    /// One bad payment link does not hide the payments the run did record.
+    #[test]
+    fn sync_carries_a_partial_failure_back_as_data() {
+        let (_dir, db_path) = seeded_db();
+        let conn = open_db(&db_path);
+        // A second open invoice with a link Stripe will refuse.
+        crate::invoicing::invoices::set_payment_link(
+            &conn,
+            crate::invoicing::invoices::get_invoice_by_number(&conn, 1250)
+                .unwrap()
+                .id,
+            "plink_seed_1250",
+            "https://buy.stripe.com/test_seed_1250",
+        )
+        .unwrap();
+
+        struct OnlyOneWorks;
+        impl PaymentGateway for OnlyOneWorks {
+            fn create_payment_link(&self, _i: &Invoice, _c: &Client) -> NigelResult<PaymentLink> {
+                unreachable!()
+            }
+            fn paid_sessions(&self, id: &str) -> NigelResult<Vec<PaidSession>> {
+                if id == "plink_seed_1250" {
+                    return Err(NigelError::Other(format!(
+                        "stripe 404: no such payment link {id}"
+                    )));
+                }
+                Ok(vec![PaidSession {
+                    session_id: format!("cs_{id}"),
+                    amount: 100.0,
+                }])
+            }
+        }
+
+        let report = sync_with(&conn, AS_OF, &OnlyOneWorks).expect("a partial run still answers");
+        let json = serde_json::to_value(&report).expect("serializes");
+        assert_eq!(json["recorded"], 1);
+        assert_eq!(json["invoicesChecked"], 2);
+        assert_eq!(json["failures"][0]["number"], 1250);
+        assert!(
+            json["failures"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no such payment link"),
+            "{json}"
+        );
     }
 
     #[tokio::test]

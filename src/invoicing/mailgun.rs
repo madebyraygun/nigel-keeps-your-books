@@ -37,7 +37,7 @@ impl Mailer for MailgunClient {
             .map_err(|e| NigelError::Other(format!("mailgun attachment: {e}")))?;
         form = form.part("attachment", part);
 
-        let resp = reqwest::blocking::Client::new()
+        let resp = crate::invoicing::http_client()
             .post(&url)
             .basic_auth("api", Some(&self.api_key))
             .multipart(form)

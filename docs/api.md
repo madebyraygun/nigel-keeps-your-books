@@ -83,6 +83,7 @@ structured context to give:
 | `payload_too_large` | 413 | An upload exceeded the size limit |
 | `locked` | 423 | The database is encrypted and not yet unlocked |
 | `internal` | 500 | Unexpected server-side failure |
+| `upstream_failed` | 502 | Stripe, R2 or Mailgun refused or could not be reached |
 | `feature_disabled` | 501 | The build lacks the required cargo feature |
 
 ## Endpoints
@@ -496,6 +497,8 @@ refused with `423 locked` until an encrypted database is unlocked. Three are
 | `/api/invoices/:number` | `PATCH` | `issueDate?`, `dueDate?`, `currency?`, `notes?`, `terms?`, `items?` | `InvoiceDetail` |
 | `/api/invoices/:number/void` | `POST` | — | `InvoiceDetail` |
 | `/api/invoices/:number/pay` | `POST` | `date`, `amount?`, `method?` | `InvoiceDetail` |
+| `/api/invoices/:number/send` | `POST` | `confirm` (must be `true`) | `SendResult` |
+| `/api/invoices/sync` | `POST` | — | `SyncResult` |
 
 ### Write conventions
 
@@ -727,6 +730,127 @@ echoing only the field that was sent would be showing the old one.
 Dates on these routes follow the API's own rule, not the CLI's: zero-padded
 `YYYY-MM-DD`, so `2026-4-1` is a `400` here where `nigel invoice pay` accepts it.
 
+#### Sending an invoice
+
+`POST /api/invoices/:number/send` requires a body, and the body must say so:
+
+```json
+{ "confirm": true }
+```
+
+An empty object or `"confirm": false` is `400` `confirmation_required`, and
+nothing happens. (A request with no body at all, or one that is not JSON, is
+also `400` — that one from the body extractor, before this route is reached.) The screen's confirm dialog is a
+convention the next screen can forget; the flag makes the dialog the only way to
+reach the endpoint and an accidental `curl` a no-op. `pay` and `sync` do not
+require it: one writes a row a person typed, and the other is idempotent.
+
+**The request blocks until the send is done.** It creates the Stripe payment
+link, renders the HTML and PDF, uploads both to R2, emails the client and marks
+the invoice published, then answers. There is no job id and no polling endpoint:
+the invoice row is already the job record — `publishedAt` and
+`stripePaymentLinkUrl` are the durable state a job store would duplicate — and
+two sources of truth for "did this go out" is how they drift.
+
+A send makes **five** outbound calls: two to Stripe (the price, then the payment
+link), two to R2 (the HTML, then the PDF), and one to Mailgun. Each is bounded
+at 10s to connect and 30s in total, so a send that hangs everywhere it can is a
+request of about **150 seconds** plus rendering — long, but bounded, where
+before it was an open socket. There is no deadline over the orchestration as a
+whole: the per-call timeouts and the step trace are the design, and a run cut
+off part-way would leave a client unable to tell which steps had happened.
+
+A completed send answers with the refreshed invoice and what each step did:
+
+```json
+{
+  "invoice": { "number": 1252, "status": "sent", "...": "the whole InvoiceDetail" },
+  "publicUrl": "https://billing.rygn.io/i/2f9c…/",
+  "paymentLinkUrl": "https://buy.stripe.com/…",
+  "steps": [
+    { "step": "load", "outcome": "ok" },
+    { "step": "precheck", "outcome": "ok" },
+    { "step": "payment_link", "outcome": "reused" },
+    { "step": "render", "outcome": "ok" },
+    { "step": "publish", "outcome": "ok" },
+    { "step": "email", "outcome": "ok" },
+    { "step": "record", "outcome": "ok" }
+  ]
+}
+```
+
+`payment_link` is `reused` on a resend: the link the client was already given is
+priced in the amount they were quoted, so a second one is never created.
+
+A failure says where it stopped, and answers with the status that step's failure
+calls for:
+
+| Step | What it does | A failure is |
+|---|---|---|
+| `config` | Resolve the invoicing settings and build the three clients | `409 send_not_configured`, `details.missing` naming the unset keys |
+| `load` | The invoice, its client and its line items | `404 invoice_not_found` / `client_not_found` |
+| `precheck` | Not void; the client has an address; there is something to charge | `409 void` / `client_missing_email` / `invoice_not_payable` |
+| `payment_link` | Create the Stripe link, unless one exists | `502 upstream_failed`, `service: "stripe"` |
+| `render` | The HTML and the PDF | `501 feature_disabled` on a build without `pdf`, otherwise `500` |
+| `publish` | Upload both to R2 | `502 upstream_failed`, `service: "r2"` |
+| `email` | Send the mail with the PDF attached | `502 upstream_failed`, `service: "mailgun"` |
+| `record` | Mark it published and re-derive the status | `500`, with `emailSent: true` |
+
+```json
+{ "error": {
+  "code": "upstream_failed",
+  "message": "r2 403: SignatureDoesNotMatch",
+  "details": {
+    "reason": "send_failed",
+    "step": "publish",
+    "service": "r2",
+    "completed": ["load", "precheck", "payment_link", "render"],
+    "emailSent": false,
+    "invoiceStatus": "draft"
+  } } }
+```
+
+The `message` is the upstream's own: `r2 403: SignatureDoesNotMatch` is the only
+information anyone has about why R2 refused, and a sentence we invented instead
+would be a worse bug report. `details` never carries a setting's value — only
+key names, in `missing`.
+
+`emailSent` is the field the wording turns on. Every failure before the email is
+safe to retry; a failure at `record` after it is not, because the client already
+has the invoice. **The server never retries by itself**, and a screen must not
+either: a retry is a fresh confirmation.
+
+A database failure inside a send is `500`, whichever step it lands on — a `502`
+would send the operator to Cloudflare's status page for a problem on their own
+disk.
+
+#### Syncing payments
+
+`POST /api/invoices/sync` takes no body. It pulls paid Stripe checkout sessions
+for every open invoice that carries a payment link and records the ones it has
+not seen, keyed by session id, so running it twice records nothing twice. It is
+the same reconciliation the CLI runs at launch.
+
+```json
+{ "recorded": 1, "invoicesChecked": 3, "failures": [
+  { "number": 1249, "message": "stripe 404: no such payment link plink_…" }
+] }
+```
+
+Per-invoice failures are **data, not an error**: a deleted payment link 404s
+forever, and one of those must not hide the payments the run did record. Only a
+run where every invoice failed answers with an error — `502 upstream_failed`,
+`service: "stripe"`. With no `stripe_secret_key` set it is `409`
+`send_not_configured` naming that one key.
+
+The whole run is bounded at **60 seconds**, checked before each invoice — one
+invoice is bounded by the same 30s call timeout a send uses, so without a
+deadline N open invoices would be N × 30s of a request holding the database
+against an encrypt, a decrypt or a data-directory switch. Invoices the budget
+did not reach come back in `failures` saying so, never silently dropped, so the
+count still accounts for every invoice in `invoicesChecked` and calling it again
+picks up where it stopped.
+
 ## Running an import
 
 Importing over HTTP takes three calls, because a browser has no file path to
@@ -871,8 +995,11 @@ its own words instead of parsing ours:
 | `has_payments` | `total`, `paid` | Editing or voiding an invoice with payments |
 | `already_void` | — | Voiding an invoice that is already void |
 | `no_balance` | `total`, `paid` | Paying an invoice with nothing outstanding |
+| `client_missing_email` | `clientId`, `clientName`, `step` | Sending to a client with no address |
+| `invoice_not_payable` | `step` | Sending an invoice with nothing to charge |
+| `send_not_configured` | `missing`, `step` | Sending or syncing with settings unset |
 
-The five invoice-state reasons are the data layer's own, raised by
+The invoice-state reasons are the data layer's own, raised by
 `ensure_editable`, `ensure_voidable`, `ensure_not_void` and `payment_amount`, so
 the CLI, the TUI and the API refuse the same things in the same words. **A
 client must not re-derive them from `status`:** an edit is blocked by recorded

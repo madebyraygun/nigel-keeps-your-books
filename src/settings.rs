@@ -79,17 +79,49 @@ pub fn set_config_dir_for_tests(dir: Option<PathBuf>) -> Option<PathBuf> {
     std::mem::replace(&mut *CONFIG_DIR_OVERRIDE.lock().unwrap(), dir)
 }
 
-/// Redirect `~/.config/nigel` at a temporary directory for the life of the
-/// guard.
+/// Test-only suppression of the `NIGEL_*` layer of [`invoicing_config`].
 ///
-/// Lives here rather than in the server's test helpers because the config
-/// directory is this module's, and tests outside the `serve` feature need it
-/// too: anything that reads [`load_settings`] otherwise answers from whatever
-/// the developer's own settings.json happens to say.
+/// The environment wins over settings.json, which is a documented production
+/// feature — and it is how this repository's own operator configures invoicing,
+/// so on their machine "nothing is configured" would resolve nine real
+/// credentials and a test that expects a refusal would instead send an invoice
+/// through Stripe, R2 and Mailgun. The suite is offline unconditionally, not
+/// offline-if-your-shell-happens-to-be-empty, so the guard below takes the
+/// environment out of the resolution entirely rather than trusting it to be
+/// unset. An in-crate override is used rather than unsetting the variables:
+/// mutating the process environment is global, unsafe in newer editions, and
+/// would have to be undone even on a panicking test.
+#[cfg(test)]
+static SUPPRESS_INVOICING_ENV: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Turn the environment layer off (or back on) and hand back what it was, so a
+/// guard restores rather than clears — the [`set_config_dir_for_tests`] rule.
+#[cfg(test)]
+pub fn suppress_invoicing_env_for_tests(suppress: bool) -> bool {
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
+    std::mem::replace(&mut *SUPPRESS_INVOICING_ENV.lock().unwrap(), suppress)
+}
+
+#[cfg(test)]
+fn invoicing_env_is_suppressed() -> bool {
+    // unwrap: poisoned mutex means a thread panicked — unrecoverable
+    *SUPPRESS_INVOICING_ENV.lock().unwrap()
+}
+
+/// Resolve settings from a temporary directory alone, for the life of the
+/// guard: `~/.config/nigel` is redirected and the `NIGEL_*` environment layer
+/// is switched off, so everything this module answers comes from the temporary
+/// file and nothing else.
+///
+/// Lives here rather than in the server's test helpers because the config is
+/// this module's, and tests outside the `serve` feature need it too: anything
+/// that reads [`load_settings`] otherwise answers from whatever the developer's
+/// own settings.json — or shell — happens to say.
 #[cfg(test)]
 pub struct TempConfigDir {
     _dir: tempfile::TempDir,
     previous: Option<PathBuf>,
+    previously_suppressed: bool,
 }
 
 #[cfg(test)]
@@ -97,9 +129,11 @@ impl TempConfigDir {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let previous = set_config_dir_for_tests(Some(dir.path().to_path_buf()));
+        let previously_suppressed = suppress_invoicing_env_for_tests(true);
         Self {
             _dir: dir,
             previous,
+            previously_suppressed,
         }
     }
 }
@@ -118,6 +152,7 @@ impl Drop for TempConfigDir {
     /// that is still writing.
     fn drop(&mut self) {
         set_config_dir_for_tests(self.previous.take());
+        suppress_invoicing_env_for_tests(self.previously_suppressed);
     }
 }
 
@@ -203,6 +238,13 @@ pub struct InvoicingConfig {
 }
 
 pub fn invoicing_config_from(s: &Settings) -> InvoicingConfig {
+    // Under a `TempConfigDir` the environment is not consulted at all — see
+    // `SUPPRESS_INVOICING_ENV`, which exists so that a machine with the nine
+    // `NIGEL_*` variables exported cannot turn an offline test into a real send.
+    #[cfg(test)]
+    if invoicing_env_is_suppressed() {
+        return invoicing_config_with(s, |_| None);
+    }
     invoicing_config_with(s, |name| std::env::var(name).ok())
 }
 
@@ -445,6 +487,36 @@ mod tests {
             loaded.last_update_check.as_deref(),
             Some("2025-06-15T10:30:00")
         );
+    }
+
+    /// The suite must be offline whatever the developer's shell says, and the
+    /// operator of this repository does export these variables.
+    #[test]
+    fn a_temp_config_dir_takes_the_environment_out_of_the_invoicing_config() {
+        let _guard = TempConfigDir::new();
+        // Safe here and only here: the suite runs on one thread (see `db.rs`),
+        // this is the process's own variable, and it is removed below.
+        std::env::set_var("NIGEL_STRIPE_SECRET_KEY", "sk_live_not_a_real_key");
+
+        let cfg = invoicing_config();
+        assert!(
+            cfg.stripe_secret_key.is_none(),
+            "the environment reached a test that expects nothing configured"
+        );
+        assert!(!invoicing_status(&cfg).sync_configured);
+
+        std::env::remove_var("NIGEL_STRIPE_SECRET_KEY");
+    }
+
+    /// And the suppression is the guard's, not a permanent change: production
+    /// resolution still reads the environment first.
+    #[test]
+    fn the_environment_layer_comes_back_when_the_guard_is_dropped() {
+        {
+            let _guard = TempConfigDir::new();
+            assert!(invoicing_env_is_suppressed());
+        }
+        assert!(!invoicing_env_is_suppressed());
     }
 
     #[test]

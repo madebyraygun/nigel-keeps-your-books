@@ -81,7 +81,7 @@ pub struct StripeClient {
 
 impl StripeClient {
     fn post_form(&self, url: &str, form: &[(String, String)]) -> Result<serde_json::Value> {
-        let resp = reqwest::blocking::Client::new()
+        let resp = crate::invoicing::http_client()
             .post(url)
             .bearer_auth(&self.secret_key)
             .form(form)
@@ -109,7 +109,7 @@ impl PaymentGateway for StripeClient {
         let url = format!(
             "https://api.stripe.com/v1/checkout/sessions?payment_link={payment_link_id}&limit=100"
         );
-        let resp = reqwest::blocking::Client::new()
+        let resp = crate::invoicing::http_client()
             .get(&url)
             .bearer_auth(&self.secret_key)
             .send()
