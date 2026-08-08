@@ -99,9 +99,11 @@ nigel invoice new --client 1 --issue 2026-08-04 --due 2026-09-03 \
   from its issue date.
 - `--currency` defaults to `USD` and must be a 3-letter code; it is stored
   uppercase.
-- `--notes` and `--terms` are free text rendered on the invoice under their own
-  headings, e.g. `--notes "Thanks for the work this quarter."` and
-  `--terms "Net 30. Late payments accrue 1.5% monthly."`.
+- `--notes` and `--terms` are free text, e.g.
+  `--notes "Thanks for the work this quarter."` and
+  `--terms "Net 30. Late payments accrue 1.5% monthly."`. Both are stored and
+  render under their own headings on the **PDF**; the published HTML page does
+  not show them yet.
 - Numbers are assigned sequentially, starting at 1248, and are not reused.
 
 New invoices are drafts. Nothing has been rendered, uploaded, or emailed yet.
@@ -126,8 +128,8 @@ nigel invoice edit 1248 --clear-due
 | `--due <YYYY-MM-DD>` | New due date |
 | `--clear-due` | Remove the due date, so the invoice never goes overdue |
 | `--currency <CODE>` | New 3-letter currency code, stored uppercase |
-| `--notes <s>` | Replace the notes |
-| `--terms <s>` | Replace the terms |
+| `--notes <s>` | Replace the notes (PDF only, as on `new`) |
+| `--terms <s>` | Replace the terms (PDF only, as on `new`) |
 | `--item "desc:qty:unit"` | **Replaces every line item**, repeatable |
 
 `--item` is all or nothing: leave it off and the existing lines stand, supply it

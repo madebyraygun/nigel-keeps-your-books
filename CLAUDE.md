@@ -117,7 +117,7 @@ nigel client list                                 # List clients with their IDs
 nigel client show 1                               # One client: details plus invoice history
 nigel client edit 1 --email ap@acme.test          # Update a client's name/email/address/notes
 nigel invoice new --client 1 --issue 2026-08-04 --item "Consulting:10:150"  # Draft (--item repeatable)
-nigel invoice new … --notes "Thanks" --terms "Net 30"  # Notes and terms render on the invoice
+nigel invoice new … --notes "Thanks" --terms "Net 30"  # Stored; rendered on the PDF (not yet the HTML page)
 nigel invoice edit 1248 --due 2026-09-30          # Edit a draft (published invoices refuse)
 nigel invoice edit 1248 --clear-due               # Drop the due date, so it never goes overdue
 nigel invoice void 1248                           # Cancel an invoice (confirms; --yes to skip)

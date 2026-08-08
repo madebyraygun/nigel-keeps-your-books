@@ -395,11 +395,13 @@ pub fn update_invoice(conn: &Connection, invoice_id: i64, update: &InvoiceUpdate
 pub fn void_invoice(conn: &Connection, invoice_id: i64, voided_on: &str) -> Result<()> {
     let invoice = get_invoice(conn, invoice_id)?;
     ensure_voidable(conn, &invoice)?;
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "UPDATE invoices SET voided_at = ?1 WHERE id = ?2",
         rusqlite::params![voided_on, invoice_id],
     )?;
-    refresh_status(conn, invoice_id, voided_on)?;
+    refresh_status(&tx, invoice_id, voided_on)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -412,7 +414,10 @@ pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
             message: format!("Invoice #{} is void and cannot be edited.", invoice.number),
         });
     }
-    if invoice.status != InvoiceStatus::Draft.as_str() {
+    let not_draft = invoice.status != InvoiceStatus::Draft.as_str();
+    // Only a published invoice has "already been sent". `invoice pay` can drive
+    // an unsent draft to `paid`, and that invoice is refused for its payments.
+    if not_draft && invoice.published_at.is_some() {
         return Err(NigelError::Conflict {
             code: "not_draft",
             message: format!(
@@ -428,6 +433,15 @@ pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
             message: format!(
                 "Invoice #{} has {paid:.2} in recorded payments and cannot be edited.",
                 invoice.number
+            ),
+        });
+    }
+    if not_draft {
+        return Err(NigelError::Conflict {
+            code: "not_draft",
+            message: format!(
+                "Invoice #{} is {} and cannot be edited.",
+                invoice.number, invoice.status
             ),
         });
     }
@@ -922,6 +936,23 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Invoice #1248 is void and cannot be edited."
+        );
+    }
+
+    #[test]
+    fn a_paid_draft_is_refused_for_its_payments_not_for_being_sent() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        record_payment(&conn, id, 100.0, "2026-08-10", "ach", None).unwrap();
+        let invoice = get_invoice(&conn, id).unwrap();
+        assert_eq!(invoice.status, "paid");
+        assert_eq!(invoice.published_at, None);
+
+        let err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "has_payments");
+        assert!(
+            !err.to_string().contains("already been sent"),
+            "an unsent invoice must not be told it was sent: {err}"
         );
     }
 

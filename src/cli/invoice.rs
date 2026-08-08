@@ -9,8 +9,8 @@ use crate::error::{NigelError, Result};
 use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
-    ar_aging, create_invoice, get_invoice, get_invoice_by_number, line_items, paid_amount,
-    record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
+    ar_aging, create_invoice, ensure_voidable, get_invoice, get_invoice_by_number, line_items,
+    paid_amount, record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
@@ -74,7 +74,9 @@ fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
 }
 
 fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
-    if invoice.status == InvoiceStatus::Void.as_str() {
+    // `voided_at` is the fact; `status` is derived from it. Reading the timestamp
+    // first means a void whose status write did not land is still refused.
+    if invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str() {
         return Err(NigelError::Conflict {
             code: "void",
             message: format!(
@@ -209,6 +211,7 @@ pub fn edit(
 pub fn void(number: i64, yes: bool, today: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
+    ensure_voidable(&conn, &invoice)?;
     let client = get_client(&conn, invoice.client_id)?;
 
     println!("{}", void_summary(&invoice, &client.name));
@@ -557,6 +560,27 @@ mod tests {
             pay_err.to_string().contains("void and cannot be paid"),
             "got: {pay_err}"
         );
+    }
+
+    #[test]
+    fn a_voided_at_row_whose_status_is_stale_is_still_refused() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn);
+        // A void whose status write did not land: the timestamp is the fact.
+        conn.execute(
+            "UPDATE invoices SET voided_at='2026-08-06', status='draft' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        for action in ["sent", "paid"] {
+            let err = ensure_not_void(&invoice, action).unwrap_err();
+            assert!(
+                matches!(err, NigelError::Conflict { code: "void", .. }),
+                "got: {err:?}"
+            );
+        }
     }
 
     #[test]
