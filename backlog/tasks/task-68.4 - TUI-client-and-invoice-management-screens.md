@@ -1,11 +1,11 @@
 ---
 id: TASK-68.4
 title: 'TUI: client and invoice management screens'
-status: In Progress
+status: Done
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 01:02'
+updated_date: '2026-08-08 04:52'
 labels:
   - invoicing
   - tui
@@ -22,10 +22,10 @@ Following the manager-screen pattern (account_manager.rs, category_manager.rs): 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Clients screen lists, adds, and edits clients from the dashboard
-- [ ] #2 Invoices screen lists and shows invoices with line items, payments, and balance
-- [ ] #3 Send, record-payment, and void actions work from the invoice screen with confirmations
-- [ ] #4 Dashboard command chooser gains shortcuts for both screens
+- [x] #1 Clients screen lists, adds, and edits clients from the dashboard
+- [x] #2 Invoices screen lists and shows invoices with line items, payments, and balance
+- [x] #3 Send, record-payment, and void actions work from the invoice screen with confirmations
+- [x] #4 Dashboard command chooser gains shortcuts for both screens
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -48,3 +48,9 @@ Rulings on the mechanical questions:
 
 User checkpoint resolved: Clients shortcut = k; Balance column stays (80-col layout as specced); invoice creation stays out of 68.4 — filed as 68.7. 68.4 is now FULLY approved for implementation.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PR #188 merged (20 commits). Client manager (k: list/add/edit) and invoice manager (n: list with Balance column, detail with line items/payments/pay link, send/pay/void actions on the detail) join the dashboard, following the manager-screen pattern. Send is draw-then-block with an honest Sending frame, buffered-input drain, template pre-flight in CLI order, and errors worded from the reloaded status. Guards are the CLI's own (ensure_voidable pre-flights before the confirm; published-void warning shared via PUBLISHED_VOID_WARNING const). Data layer gained list_invoices (single query) and payments. Review round fixed 5 findings incl. the dropped published-invoice warning and a genuinely wrong 80-col budget (five gaps, not four) now pinned by worst-case row tests. 809+72 / 626+73 green.
+<!-- SECTION:FINAL_SUMMARY:END -->
