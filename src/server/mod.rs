@@ -561,6 +561,34 @@ mod tests {
         }
     }
 
+    /// The session layer wraps the whole `/api` router, so this holds by
+    /// construction — and it is enumerated anyway, because "by construction" is
+    /// a claim about the assembly, and the assembly is what a future refactor
+    /// changes.
+    #[tokio::test]
+    async fn every_route_without_a_session_is_unauthorized() {
+        let (_dir, db_path) = seeded_db();
+        let (app, _token) = app_for(&db_path);
+        let wrong = "0".repeat(64);
+
+        for uri in DATA_ROUTES.iter().chain(PREVIEW_ROUTES.iter()) {
+            let (status, body) = send(&app, session_request("GET", uri, &wrong, None)).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "GET {uri}: {body}");
+            assert_eq!(body["error"]["code"], "unauthorized", "for {uri}");
+        }
+
+        for route in WRITE_ROUTES {
+            let (status, body) = send_write(&app, route, &wrong).await;
+            let (method, uri, _) = route;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} with no session: {body}"
+            );
+            assert_eq!(body["error"]["code"], "unauthorized", "for {method} {uri}");
+        }
+    }
+
     #[tokio::test]
     async fn unlocking_opens_every_data_route() {
         // /api/settings/app reads settings.json; keep the suite off the real one.
