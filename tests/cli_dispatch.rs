@@ -838,6 +838,36 @@ fn invoice_preview_of_a_void_invoice_warns_and_omits_the_pay_button() {
     assert!(!html.contains("Pay online"), "got: {html}");
 }
 
+#[test]
+fn invoice_preview_skips_the_launch_stripe_sync() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    // The launch sync only polls invoices that carry a payment link and are
+    // open, so this is the state in which a sync would reach Stripe at all.
+    env.db()
+        .execute(
+            "UPDATE invoices SET stripe_payment_link_id = 'pl_1', status = 'sent'
+             WHERE number = 1248",
+            [],
+        )
+        .unwrap();
+
+    // Preview is in the skip list, so the key is never used and nothing leaves
+    // the machine. Drop that arm and this run reaches Stripe with a bogus key,
+    // which reports itself on stderr.
+    env.cmd()
+        .env("NIGEL_STRIPE_SECRET_KEY", "sk_test_bogus")
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("invoice sync skipped")
+                .not()
+                .and(predicate::str::contains("new invoice payment").not()),
+        );
+}
+
 #[cfg(feature = "pdf")]
 #[test]
 fn invoice_preview_writes_a_real_pdf() {

@@ -73,10 +73,11 @@ pub fn render_invoice_html(
 
     // The placeholder styles itself inline instead of adding a rule to
     // `templates/invoice.html`, so it renders correctly against a custom
-    // template that knows nothing about a `.pay-placeholder` class.
+    // template that knows nothing about a `.pay-placeholder` class. The grey
+    // carries `.pay`'s white text at 4.5:1, the WCAG AA floor.
     let pay = match pay {
         PayButton::Link(url) => format!("<a class=\"pay\" href=\"{}\">Pay online</a>", esc(url)),
-        PayButton::Placeholder => "<span class=\"pay pay-placeholder\" style=\"background:#777;cursor:default\">Pay online — link created when the invoice is sent</span>".to_string(),
+        PayButton::Placeholder => "<span class=\"pay pay-placeholder\" style=\"background:#767676;cursor:default\">Pay online — link created when the invoice is sent</span>".to_string(),
         PayButton::Omitted => String::new(),
     };
     let due = invoice
