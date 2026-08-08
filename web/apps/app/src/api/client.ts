@@ -4,6 +4,7 @@ import {
   UPLOAD_NOT_FOUND,
   type Account,
   type AccountPatch,
+  type AgingReport,
   type ApiErrorCode,
   type ApiErrorEnvelope,
   type AppSettings,
@@ -12,6 +13,9 @@ import {
   type CategorizeResult,
   type CategoryRow,
   type ChangePasswordRequest,
+  type Client,
+  type ClientDetail,
+  type ClientPatch,
   type CompanyNameResponse,
   type ConfirmImportRequest,
   type CategoryPatch,
@@ -28,11 +32,19 @@ import {
   type ImportPreview,
   type ImportRequest,
   type InvalidPasswordDetails,
+  type InvoiceDetail,
+  type InvoiceListParams,
+  type InvoiceListRow,
+  type InvoicePatch,
   type K1PrepReport,
   type NewAccountRequest,
   type NewCategoryRequest,
+  type NewClientRequest,
+  type NewInvoiceRequest,
   type NewRuleRequest,
+  type NextInvoiceNumber,
   type PasswordStateResponse,
+  type PayInvoiceRequest,
   type PingResponse,
   type PnlReport,
   type ReconcileRequest,
@@ -50,8 +62,10 @@ import {
   type RuleRow,
   type RuleTestRequest,
   type RuleTestResult,
+  type SendResult,
   type SetPasswordRequest,
   type StatusResponse,
+  type SyncResult,
   type TaxSummary,
   type TransactionPatch,
   type UndoneImport,
@@ -83,6 +97,7 @@ const STATUS_CODES: Record<number, ApiErrorCode> = {
   423: 'locked',
   500: 'internal',
   501: 'feature_disabled',
+  502: 'upstream_failed',
 };
 
 /** A failed API call, normalized from the error envelope. */
@@ -180,6 +195,17 @@ export type YearParams = Pick<ReportDateParams, 'year'>;
 /** Reconciliation history, optionally narrowed to one account by name. */
 export interface ReconciliationParams {
   account?: string;
+}
+
+/**
+ * A/R aging is as of today unless told otherwise.
+ *
+ * The one place aging takes a date: a committed figure-parity fixture cannot
+ * survive a bucket boundary crossed overnight.
+ */
+export interface AgingParams {
+  /** `YYYY-MM-DD`, zero padded — anything else is a 400. */
+  asOf?: string;
 }
 
 export interface ApiClient {
@@ -289,6 +315,50 @@ export interface ApiClient {
   setPassword(input: SetPasswordRequest): Promise<PasswordStateResponse>;
   changePassword(input: ChangePasswordRequest): Promise<PasswordStateResponse>;
   removePassword(input: RemovePasswordRequest): Promise<PasswordStateResponse>;
+
+  /** Invoicing clients, by name. */
+  getClients(): Promise<Client[]>;
+  /** One client with its invoice history and open balance — `nigel client show`. */
+  getClient(id: number): Promise<ClientDetail>;
+  createClient(input: NewClientRequest): Promise<Client>;
+  /** Partial: an omitted field is left alone, an explicit `null` clears it. */
+  updateClient(id: number, input: ClientPatch): Promise<Client>;
+  /** Refused while the client still has invoices, of any status. */
+  deleteClient(id: number): Promise<Deleted>;
+
+  /** Every invoice, number descending. Filters are omitted when absent. */
+  getInvoices(params?: InvoiceListParams): Promise<InvoiceListRow[]>;
+  /** By invoice **number**, which is what the user reads off the page. */
+  getInvoice(number: number): Promise<InvoiceDetail>;
+  getAging(params?: AgingParams): Promise<AgingReport>;
+  /** What the next draft will be numbered. Reads the counter, reserves nothing. */
+  getNextInvoiceNumber(): Promise<NextInvoiceNumber>;
+
+  createInvoice(input: NewInvoiceRequest): Promise<InvoiceDetail>;
+  /** Draft-only, and `items` replaces the whole list when it is present. */
+  updateInvoice(number: number, input: InvoicePatch): Promise<InvoiceDetail>;
+  voidInvoice(number: number): Promise<InvoiceDetail>;
+  payInvoice(number: number, input: PayInvoiceRequest): Promise<InvoiceDetail>;
+  /**
+   * Create the Stripe link, publish, email, and record — in one blocking
+   * request.
+   *
+   * Takes no `confirm` argument: the flag is the wire contract rather than
+   * something a caller varies, and reaching this method already means the
+   * confirmation dialog resolved.
+   */
+  sendInvoice(number: number): Promise<SendResult>;
+  /** Pull Stripe payments. Per-invoice failures come back as data. */
+  syncInvoices(): Promise<SyncResult>;
+
+  /**
+   * Where an invoice's rendered page lives, for an `<iframe>` or a download.
+   *
+   * An address rather than bytes, for `exportUrl`'s reason: the browser frames
+   * and downloads better than the app can, but the address is still the api
+   * seam's to spell.
+   */
+  invoicePreviewUrl(number: number, format: 'html' | 'pdf'): string;
 }
 
 export interface FetchApiClientOptions {
@@ -576,6 +646,73 @@ export class FetchApiClient implements ApiClient {
       '/settings/password/remove',
       input,
     );
+  }
+
+  getClients(): Promise<Client[]> {
+    return this.request<Client[]>('GET', '/clients');
+  }
+
+  getClient(id: number): Promise<ClientDetail> {
+    return this.request<ClientDetail>('GET', `/clients/${id}`);
+  }
+
+  createClient(input: NewClientRequest): Promise<Client> {
+    return this.request<Client>('POST', '/clients', input);
+  }
+
+  updateClient(id: number, input: ClientPatch): Promise<Client> {
+    return this.request<Client>('PATCH', `/clients/${id}`, input);
+  }
+
+  deleteClient(id: number): Promise<Deleted> {
+    return this.request<Deleted>('DELETE', `/clients/${id}`);
+  }
+
+  getInvoices(params: InvoiceListParams = {}): Promise<InvoiceListRow[]> {
+    return this.request<InvoiceListRow[]>('GET', `/invoices${query(params)}`);
+  }
+
+  getInvoice(number: number): Promise<InvoiceDetail> {
+    return this.request<InvoiceDetail>('GET', `/invoices/${number}`);
+  }
+
+  getAging(params: AgingParams = {}): Promise<AgingReport> {
+    return this.request<AgingReport>('GET', `/invoices/aging${query(params)}`);
+  }
+
+  getNextInvoiceNumber(): Promise<NextInvoiceNumber> {
+    return this.request<NextInvoiceNumber>('GET', '/invoices/next-number');
+  }
+
+  createInvoice(input: NewInvoiceRequest): Promise<InvoiceDetail> {
+    return this.request<InvoiceDetail>('POST', '/invoices', input);
+  }
+
+  updateInvoice(number: number, input: InvoicePatch): Promise<InvoiceDetail> {
+    return this.request<InvoiceDetail>('PATCH', `/invoices/${number}`, input);
+  }
+
+  voidInvoice(number: number): Promise<InvoiceDetail> {
+    return this.request<InvoiceDetail>('POST', `/invoices/${number}/void`, {});
+  }
+
+  payInvoice(number: number, input: PayInvoiceRequest): Promise<InvoiceDetail> {
+    return this.request<InvoiceDetail>('POST', `/invoices/${number}/pay`, input);
+  }
+
+  sendInvoice(number: number): Promise<SendResult> {
+    return this.request<SendResult>('POST', `/invoices/${number}/send`, {
+      confirm: true,
+    });
+  }
+
+  syncInvoices(): Promise<SyncResult> {
+    return this.request<SyncResult>('POST', '/invoices/sync', {});
+  }
+
+  invoicePreviewUrl(number: number, format: 'html' | 'pdf'): string {
+    const suffix = format === 'pdf' ? 'preview.pdf' : 'preview';
+    return `${this.baseUrl}/invoices/${number}/${suffix}`;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

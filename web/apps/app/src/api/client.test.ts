@@ -553,4 +553,144 @@ describe('FetchApiClient', () => {
       expect(undone).toEqual({ id: 3, deletedTransactions: 42 });
     });
   });
+  describe('invoicing', () => {
+    it('reaches each client route with the method it belongs to', async () => {
+      const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse({}));
+      const client = clientFor(fetchImpl);
+
+      await client.getClients();
+      await client.getClient(3);
+      await client.createClient({ name: 'Acme Co' });
+      await client.updateClient(3, { email: null });
+      await client.deleteClient(3);
+
+      expect(
+        fetchImpl.mock.calls.map(([url, init]) => `${init.method} ${url}`),
+      ).toEqual([
+        'GET /api/clients',
+        'GET /api/clients/3',
+        'POST /api/clients',
+        'PATCH /api/clients/3',
+        'DELETE /api/clients/3',
+      ]);
+      // An explicit null has to survive as a null: it is what clears a column.
+      expect(JSON.parse(fetchImpl.mock.calls[3][1].body)).toEqual({ email: null });
+    });
+
+    it('omits an absent invoice filter rather than sending it empty', async () => {
+      const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse([]));
+      const client = clientFor(fetchImpl);
+
+      await client.getInvoices();
+      await client.getInvoices({ status: 'open' });
+      await client.getInvoices({ status: 'open', clientId: 3 });
+
+      expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+        '/api/invoices',
+        '/api/invoices?status=open',
+        '/api/invoices?status=open&clientId=3',
+      ]);
+    });
+
+    it('addresses an invoice by number, and aging by as-of date', async () => {
+      const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse({}));
+      const client = clientFor(fetchImpl);
+
+      await client.getInvoice(1248);
+      await client.getAging();
+      await client.getAging({ asOf: '2026-03-15' });
+      await client.getNextInvoiceNumber();
+
+      expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+        '/api/invoices/1248',
+        '/api/invoices/aging',
+        '/api/invoices/aging?asOf=2026-03-15',
+        '/api/invoices/next-number',
+      ]);
+    });
+
+    it('posts every invoice write to its own route', async () => {
+      const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse({}));
+      const client = clientFor(fetchImpl);
+
+      await client.createInvoice({
+        clientId: 1,
+        issueDate: '2026-03-01',
+        items: [{ description: 'Consulting', quantity: 1, unitAmount: 100 }],
+      });
+      await client.updateInvoice(1248, { dueDate: null });
+      await client.voidInvoice(1248);
+      await client.payInvoice(1248, { date: '2026-03-02' });
+      await client.syncInvoices();
+
+      expect(
+        fetchImpl.mock.calls.map(([url, init]) => `${init.method} ${url}`),
+      ).toEqual([
+        'POST /api/invoices',
+        'PATCH /api/invoices/1248',
+        'POST /api/invoices/1248/void',
+        'POST /api/invoices/1248/pay',
+        'POST /api/invoices/sync',
+      ]);
+    });
+
+    it('always sends the confirmation flag on a send', async () => {
+      // The flag is the wire contract, not a parameter: `sendInvoice` takes no
+      // argument for it, so an unconfirmed send is unrepresentable here.
+      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}));
+      await clientFor(fetchImpl).sendInvoice(1251);
+
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe('/api/invoices/1251/send');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ confirm: true });
+    });
+
+    it('builds both preview addresses without fetching them', () => {
+      const client = clientFor(vi.fn());
+      expect(client.invoicePreviewUrl(1248, 'html')).toBe('/api/invoices/1248/preview');
+      expect(client.invoicePreviewUrl(1248, 'pdf')).toBe('/api/invoices/1248/preview.pdf');
+    });
+
+    it('normalizes a 502 to upstream_failed and keeps the step details', async () => {
+      // Without `upstream_failed` in API_ERROR_CODES the client would flatten a
+      // gateway failure to `unknown`, and the send dialog could not tell an R2
+      // outage from a database write that failed.
+      const fetchImpl = vi.fn().mockResolvedValue(
+        envelope(
+          'upstream_failed',
+          'r2 403: SignatureDoesNotMatch',
+          {
+            reason: 'send_failed',
+            step: 'publish',
+            service: 'r2',
+            completed: ['config', 'load', 'precheck', 'payment_link', 'render'],
+            emailSent: false,
+            invoiceStatus: 'draft',
+          },
+          502,
+        ),
+      );
+
+      const error = (await clientFor(fetchImpl)
+        .sendInvoice(1251)
+        .catch((thrown: unknown) => thrown)) as ApiError;
+
+      expect(error.code).toBe('upstream_failed');
+      expect(error.status).toBe(502);
+      expect(error.details).toMatchObject({ step: 'publish', service: 'r2' });
+    });
+
+    it('falls back to upstream_failed for a 502 with no envelope', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(new Response('nope', { status: 502, statusText: 'Bad Gateway' }));
+
+      const error = (await clientFor(fetchImpl)
+        .syncInvoices()
+        .catch((thrown: unknown) => thrown)) as ApiError;
+
+      expect(error.code).toBe('upstream_failed');
+    });
+  });
 });
