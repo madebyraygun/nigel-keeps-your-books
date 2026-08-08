@@ -1,11 +1,11 @@
 ---
 id: TASK-68.1
 title: 'CLI: client show/edit and invoice edit/void'
-status: In Progress
+status: Done
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:27'
-updated_date: '2026-08-08 01:58'
+updated_date: '2026-08-08 03:39'
 labels:
   - invoicing
   - cli
@@ -25,7 +25,7 @@ The data-layer operations everything else builds on. client show <id> and client
 - [x] #1 client show and client edit exist; email/address changes take effect on the next send
 - [x] #2 invoice edit updates draft invoices only and refuses published/void ones by status
 - [x] #3 invoice void cancels an invoice with confirmation; voided invoices refuse send and pay
-- [ ] #4 notes and terms can be set at new and edit, and render on the invoice (absorbs TASK-38)
+- [x] #4 notes and terms can be set at new and edit, and render on the invoice (absorbs TASK-38)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,3 +49,9 @@ Scope boundary vs 68.3: 68.1 delivers notes/terms CLI flags + persistence ONLY. 
 
 PR #183 merged (17b3b59) after review round: 4 findings fixed, 2 regression tests added. 635+52 / 462+53 green. AC #4 stays unchecked until 68.3 lands HTML {{NOTES}}/{{TERMS}} rendering (PDF renders them today); task closes then.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PR #183 (edit/void/client show, migration v5 voided_at) + PR #187 (notes/terms on the published HTML page, closing AC 4). Guard matrix, atomic void, and stale-link clearing pinned by review-round regression tests.
+<!-- SECTION:FINAL_SUMMARY:END -->

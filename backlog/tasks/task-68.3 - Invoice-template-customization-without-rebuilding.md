@@ -1,11 +1,11 @@
 ---
 id: TASK-68.3
 title: Invoice template customization without rebuilding
-status: In Progress
+status: Done
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 00:50'
+updated_date: '2026-08-08 03:39'
 labels:
   - invoicing
 dependencies: []
@@ -21,9 +21,9 @@ invoice.html is include_str!-compiled into the binary and the PDF layout is code
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A template in the data dir overrides the embedded invoice.html; absence falls back to the default
-- [ ] #2 The placeholder vocabulary is documented, and the default template can be exported as a starting point
-- [ ] #3 Template expansion stays injection-safe with user-supplied templates
+- [x] #1 A template in the data dir overrides the embedded invoice.html; absence falls back to the default
+- [x] #2 The placeholder vocabulary is documented, and the default template can be exported as a starting point
+- [x] #3 Template expansion stays injection-safe with user-supplied templates
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -46,3 +46,9 @@ Plan approved by orchestrator. Rulings on the spec's open questions:
 
 Boundary vs 68.1 (ruled at plan review): {{NOTES}}/{{TERMS}} HTML rendering is 68.3's, the CLI flags and persistence are 68.1's. 68.1 confirmed both columns exist since v4.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PR #187 merged. <data_dir>/templates/invoice.html overrides the embedded default with load-time validation (empty/oversize/missing-required/unknown-placeholder → hard error naming the path; symlink-metadata probe so even a dangling symlink can never silently mail the stock page). Branding{template,company,contact_email} threads through the render seam; vocabulary is 18 placeholders, documented with the text/fragment split and placement contract; default template renders {{NOTES}}/{{TERMS}}; email subject uses company_name (no more hardcoded "from Raygun"); `invoice template export|path` works pre-init. Injection invariants verified by review: single-pass expand untouched, esc on every value, operator markup unsanitized. 701+72 / 524+73 green.
+<!-- SECTION:FINAL_SUMMARY:END -->
