@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::{get_metadata, set_metadata};
 use crate::error::{NigelError, Result};
@@ -12,7 +12,10 @@ use crate::models::{Invoice, InvoiceLineItem, InvoicePayment, InvoiceStatus};
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
 const NEXT_NUMBER_DEFAULT: i64 = 1248;
 
-#[derive(Debug, Clone)]
+/// Also `Deserialize`: a line item is a request input as well as a response
+/// field, unlike every other struct in this module.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewLineItem {
     pub description: String,
     pub quantity: f64,
@@ -156,6 +159,8 @@ pub fn record_payment(
     method: &str,
     stripe_session: Option<&str>,
 ) -> Result<bool> {
+    validate_payment_method(method)?;
+    ensure_not_void(&get_invoice(conn, invoice_id)?, "paid")?;
     if let Some(sid) = stripe_session {
         let seen: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM invoice_payments WHERE stripe_checkout_session_id = ?1)",
@@ -449,6 +454,61 @@ pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
     Ok(())
 }
 
+/// `voided_at` is the fact; `status` is derived from it. Reading the timestamp
+/// first means a void whose status write did not land still reads as void.
+pub fn is_void(invoice: &Invoice) -> bool {
+    invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str()
+}
+
+/// Void is terminal: it blocks send, pay and edit. The guard lives here rather
+/// than in the CLI wrapper so a caller that reaches `send_invoice` or
+/// `record_payment` directly cannot get past it.
+pub fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
+    if is_void(invoice) {
+        return Err(NigelError::Conflict {
+            code: "void",
+            message: format!(
+                "Invoice #{} is void and cannot be {action}.",
+                invoice.number
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Resolve the amount to record against an invoice: the explicit request, or
+/// the whole outstanding balance. Rejects amounts that would write a junk
+/// payment row.
+///
+/// It lives here rather than in `cli/invoice.rs` so both front ends refuse the
+/// same amounts with the same words, and so the refusals are typed: "already
+/// settled" is a conflict, not an internal error.
+pub fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
+    match requested {
+        // Negated positive test, not `amount <= 0.0`: NaN compares false against
+        // every bound, and a NaN payment row poisons every later SUM.
+        Some(amount) if !(amount.is_finite() && amount > 0.0) => Err(NigelError::Invalid(format!(
+            "--amount must be a finite number greater than zero, got {amount:.2}."
+        ))),
+        Some(amount) => Ok(amount),
+        None => {
+            let outstanding = invoice.total - paid;
+            // Same half-cent slack `refresh_status` settles with: anything under
+            // it is already paid in full, not a balance worth recording.
+            if outstanding < 0.005 {
+                return Err(NigelError::Conflict {
+                    code: "no_balance",
+                    message: format!(
+                        "Invoice #{} has no outstanding balance (total {:.2}, paid {:.2}). Pass --amount to record a payment anyway.",
+                        invoice.number, invoice.total, paid
+                    ),
+                });
+            }
+            Ok(outstanding)
+        }
+    }
+}
+
 /// May this invoice be voided? Not already void, and with no recorded payments.
 pub fn ensure_voidable(conn: &Connection, invoice: &Invoice) -> Result<()> {
     if invoice.voided_at.is_some() {
@@ -510,37 +570,125 @@ pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineI
 
 /// One row of the invoice list: everything a list screen prints, including the
 /// balance, without a second query per invoice.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InvoiceListRow {
     pub id: i64,
     pub number: i64,
     pub status: String,
-    pub client_name: String,
+    pub client_id: i64,
+    /// `None` when the client row is gone. The join is a LEFT JOIN, so an
+    /// orphaned invoice appears with a dash rather than vanishing from the list.
+    pub client_name: Option<String>,
+    pub issue_date: String,
+    pub due_date: Option<String>,
+    pub currency: String,
     pub total: f64,
     pub paid: f64,
-    pub due_date: Option<String>,
+    pub balance: f64,
+}
+
+/// The `status` filter vocabulary: the six status words plus `open`, the
+/// sent/partial/overdue set `sync` and the aging report already work in.
+pub const OPEN_STATUSES: [&str; 3] = ["sent", "partial", "overdue"];
+const STATUS_WORDS: [&str; 6] = ["draft", "sent", "partial", "paid", "overdue", "void"];
+
+/// The `invoice_payments.method` CHECK set, checked before the insert so an
+/// unknown method is a named refusal rather than a constraint violation.
+pub const PAYMENT_METHODS: [&str; 4] = ["stripe", "ach", "direct_deposit", "other"];
+
+pub fn validate_payment_method(method: &str) -> Result<()> {
+    if PAYMENT_METHODS.contains(&method) {
+        return Ok(());
+    }
+    Err(NigelError::Invalid(format!(
+        "Invalid payment method: {method} (expected one of {})",
+        PAYMENT_METHODS.join(", ")
+    )))
+}
+
+/// Expand a `status` filter to the statuses it selects.
+fn statuses_for(filter: &str) -> Result<Vec<&'static str>> {
+    if filter == "open" {
+        return Ok(OPEN_STATUSES.to_vec());
+    }
+    STATUS_WORDS
+        .iter()
+        .find(|word| **word == filter)
+        .map(|word| vec![*word])
+        .ok_or_else(|| {
+            NigelError::Invalid(format!(
+                "Invalid status: {filter} (expected one of {}, open)",
+                STATUS_WORDS.join(", ")
+            ))
+        })
 }
 
 /// Every invoice, newest number first, with its client and paid-to-date.
-pub fn list_invoices(conn: &Connection) -> Result<Vec<InvoiceListRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.number, i.status, c.name, i.total,
-                COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
-                          WHERE p.invoice_id = i.id), 0),
-                i.due_date
-         FROM invoices i JOIN clients c ON c.id = i.client_id
-         ORDER BY i.number DESC",
-    )?;
+///
+/// `status` takes a status word or `open`; `client_id` narrows to one client.
+/// Paid amounts come from one `GROUP BY` aggregate rather than a `SELECT SUM`
+/// per row, which is what keeps a screen that redraws off an N+1.
+pub fn list_invoices(
+    conn: &Connection,
+    status: Option<&str>,
+    client_id: Option<i64>,
+) -> Result<Vec<InvoiceListRow>> {
+    let statuses = match status {
+        Some(filter) => Some(statuses_for(filter)?),
+        None => None,
+    };
+
+    let mut wheres = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(ref statuses) = statuses {
+        let slots: Vec<String> = statuses
+            .iter()
+            .map(|status| {
+                params.push(Box::new(*status));
+                format!("?{}", params.len())
+            })
+            .collect();
+        wheres.push(format!("i.status IN ({})", slots.join(", ")));
+    }
+    if let Some(id) = client_id {
+        params.push(Box::new(id));
+        wheres.push(format!("i.client_id = ?{}", params.len()));
+    }
+    let filter = if wheres.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", wheres.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT i.id, i.number, i.status, i.client_id, c.name, i.issue_date, i.due_date,
+                i.currency, i.total, COALESCE(p.paid, 0)
+         FROM invoices i
+         LEFT JOIN clients c ON c.id = i.client_id
+         LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid FROM invoice_payments
+                    GROUP BY invoice_id) p ON p.invoice_id = i.id
+         {filter}
+         ORDER BY i.number DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(param_refs.as_slice(), |r| {
+            let total: f64 = r.get(8)?;
+            let paid: f64 = r.get(9)?;
             Ok(InvoiceListRow {
                 id: r.get(0)?,
                 number: r.get(1)?,
                 status: r.get(2)?,
-                client_name: r.get(3)?,
-                total: r.get(4)?,
-                paid: r.get(5)?,
+                client_id: r.get(3)?,
+                client_name: r.get(4)?,
+                issue_date: r.get(5)?,
                 due_date: r.get(6)?,
+                currency: r.get(7)?,
+                total,
+                paid,
+                balance: total - paid,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -604,8 +752,8 @@ const AGING_LABELS: [&str; 5] = ["current", "1-30", "31-60", "61-90", "90+"];
 
 pub fn ar_aging_detail(conn: &Connection, today: &str) -> Result<AgingReport> {
     let as_of = today.to_string();
-    let today = NaiveDate::parse_from_str(today, "%Y-%m-%d")
-        .map_err(|e| crate::error::NigelError::Other(format!("bad date {today}: {e}")))?;
+    validate_date(today, "as-of")?;
+    let today = NaiveDate::parse_from_str(today, "%Y-%m-%d").expect("validate_date just parsed it");
 
     let mut buckets: Vec<AgingBucket> = AGING_LABELS
         .iter()
@@ -697,6 +845,19 @@ mod tests {
         init_db(&conn).unwrap();
         run_migrations(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn a_line_item_reads_and_writes_camel_case_json() {
+        let item: NewLineItem =
+            serde_json::from_str(r#"{"description":"Design","quantity":2,"unitAmount":100}"#)
+                .unwrap();
+        assert_eq!(item.description, "Design");
+        assert_eq!(item.unit_amount, 100.0);
+        assert_eq!(
+            serde_json::to_value(&item).unwrap()["unitAmount"],
+            serde_json::json!(100.0)
+        );
     }
 
     #[test]
@@ -952,7 +1113,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
-        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        insert_payment(&conn, id, 100.0);
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
     }
 
@@ -983,8 +1144,21 @@ mod tests {
         .unwrap();
 
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
-        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        insert_payment(&conn, id, 100.0);
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
         assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    /// A payment row written past `record_payment`, which refuses a void
+    /// invoice. These two tests are about what `refresh_status` derives from a
+    /// payment total, so the row has to arrive some other way.
+    fn insert_payment(conn: &Connection, invoice_id: i64, amount: f64) {
+        conn.execute(
+            "INSERT INTO invoice_payments (invoice_id, amount, paid_date, method)
+             VALUES (?1, ?2, '2026-08-10', 'other')",
+            rusqlite::params![invoice_id, amount],
+        )
+        .unwrap();
     }
 
     /// One 100.00 draft invoice (number 1248) and its row id.
@@ -1003,6 +1177,91 @@ mod tests {
             crate::error::NigelError::Conflict { code, .. } => code,
             other => panic!("expected a Conflict, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn default_payment_is_the_outstanding_balance() {
+        let (_d, conn) = test_conn();
+        let invoice = get_invoice(&conn, seed_draft(&conn)).unwrap();
+
+        assert_eq!(payment_amount(&invoice, 0.0, None).unwrap(), 100.0);
+        assert_eq!(payment_amount(&invoice, 40.0, None).unwrap(), 60.0);
+    }
+
+    #[test]
+    fn no_outstanding_balance_is_a_conflict_not_an_internal_error() {
+        let (_d, conn) = test_conn();
+        let invoice = get_invoice(&conn, seed_draft(&conn)).unwrap();
+
+        for paid in [100.0, 100.001, 150.0] {
+            let err = payment_amount(&invoice, paid, None).unwrap_err();
+            assert_eq!(conflict_code(&err), "no_balance");
+            // The CLI's sentence is unchanged, verbatim.
+            assert!(
+                err.to_string().contains("no outstanding balance"),
+                "got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nan_or_negative_amount_is_invalid_not_a_junk_payment_row() {
+        let (_d, conn) = test_conn();
+        let invoice = get_invoice(&conn, seed_draft(&conn)).unwrap();
+
+        for amount in [0.0, -25.0] {
+            let err = payment_amount(&invoice, 0.0, Some(amount)).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+            assert!(err.to_string().contains("greater than zero"), "got: {err}");
+        }
+        for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = payment_amount(&invoice, 0.0, Some(amount)).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+            assert!(err.to_string().contains("finite number"), "got: {err}");
+        }
+        // An overpayment is a real thing a bank does; only zero and negative are junk.
+        assert_eq!(payment_amount(&invoice, 0.0, Some(250.0)).unwrap(), 250.0);
+    }
+
+    #[test]
+    fn record_payment_refuses_a_void_invoice_without_the_cli_wrapper() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+
+        let err = record_payment(&conn, id, 10.0, "2026-08-07", "ach", None).unwrap_err();
+        assert_eq!(conflict_code(&err), "void");
+        assert!(payments(&conn, id).unwrap().is_empty(), "a row was written");
+    }
+
+    #[test]
+    fn a_stale_void_status_also_refuses_a_payment() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        // A void whose status write did not land: the timestamp is the fact.
+        conn.execute(
+            "UPDATE invoices SET voided_at='2026-08-06', status='draft' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+
+        let err = record_payment(&conn, id, 10.0, "2026-08-07", "ach", None).unwrap_err();
+        assert_eq!(conflict_code(&err), "void");
+    }
+
+    #[test]
+    fn update_invoice_refuses_a_published_invoice_without_the_cli_wrapper() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+
+        let update = InvoiceUpdate {
+            issue_date: Some("2026-08-09".into()),
+            ..InvoiceUpdate::default()
+        };
+        let err = update_invoice(&conn, id, &update).unwrap_err();
+        assert_eq!(conflict_code(&err), "not_draft");
+        assert_eq!(get_invoice(&conn, id).unwrap().issue_date, "2026-08-04");
     }
 
     #[test]
@@ -1780,6 +2039,18 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_as_of_date_is_invalid_not_other() {
+        let (_d, conn) = test_conn();
+        // Zero-padding is not checked here: chrono's %Y-%m-%d accepts
+        // "2026-3-1" and every other validate_date caller lives with that. The
+        // HTTP layer is where the stricter parse belongs.
+        for as_of in ["March", "2026-08-32", ""] {
+            let err = ar_aging_detail(&conn, as_of).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "{as_of}: {err:?}");
+        }
+    }
+
+    #[test]
     fn aging_detail_orders_oldest_first() {
         let (_d, conn) = test_conn();
         open_invoice(&conn, "Acme", "2026-01-05", Some("2026-08-31"), 100.0);
@@ -1825,7 +2096,7 @@ mod tests {
         let (_cid, ids) = seed_three(&conn);
         record_payment(&conn, ids[1], 50.0, "2026-08-05", "ach", None).unwrap();
 
-        let rows = list_invoices(&conn).unwrap();
+        let rows = list_invoices(&conn, None, None).unwrap();
         assert_eq!(rows.len(), 3);
 
         let numbers: Vec<i64> = rows.iter().map(|r| r.number).collect();
@@ -1834,16 +2105,103 @@ mod tests {
         assert_eq!(numbers, descending, "newest first");
 
         for row in &rows {
-            assert_eq!(row.client_name, "Cedar Systems");
+            assert_eq!(row.client_name.as_deref(), Some("Cedar Systems"));
+            assert_eq!(row.issue_date, "2026-08-04");
+            assert_eq!(row.currency, "USD");
         }
         let middle = rows.iter().find(|r| r.id == ids[1]).unwrap();
         assert_eq!(middle.paid, 50.0);
         assert_eq!(middle.total, 200.0);
+        assert_eq!(middle.balance, 150.0);
         // The stored status, whatever it is — an unpublished draft stays draft.
         assert_eq!(middle.status, get_invoice(&conn, ids[1]).unwrap().status);
         for row in rows.iter().filter(|r| r.id != ids[1]) {
             assert_eq!(row.paid, 0.0, "invoice #{} has no payments", row.number);
+            assert_eq!(row.balance, row.total);
         }
+    }
+
+    #[test]
+    fn list_invoices_computes_paid_in_one_aggregate_not_one_query_per_row() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        // Five payments spread across three invoices, in one call.
+        record_payment(&conn, ids[0], 25.0, "2026-08-05", "ach", None).unwrap();
+        record_payment(&conn, ids[0], 25.0, "2026-08-06", "ach", None).unwrap();
+        record_payment(&conn, ids[1], 40.0, "2026-08-05", "ach", None).unwrap();
+        record_payment(&conn, ids[1], 60.0, "2026-08-07", "other", None).unwrap();
+        record_payment(&conn, ids[2], 300.0, "2026-08-05", "direct_deposit", None).unwrap();
+
+        let rows = list_invoices(&conn, None, None).unwrap();
+        let paid = |id: i64| rows.iter().find(|r| r.id == id).unwrap().paid;
+        assert_eq!(paid(ids[0]), 50.0);
+        assert_eq!(paid(ids[1]), 100.0);
+        assert_eq!(paid(ids[2]), 300.0);
+        assert_eq!(rows.iter().find(|r| r.id == ids[2]).unwrap().balance, 0.0);
+    }
+
+    #[test]
+    fn list_invoices_keeps_an_invoice_whose_client_row_is_missing() {
+        let (_d, conn) = test_conn();
+        let (cid, ids) = seed_three(&conn);
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("DELETE FROM clients WHERE id = ?1", [cid])
+            .unwrap();
+
+        // A list that hides invoices is worse than one that shows a dash.
+        let rows = list_invoices(&conn, None, None).unwrap();
+        assert_eq!(rows.len(), ids.len());
+        assert!(rows.iter().all(|r| r.client_name.is_none()), "{rows:?}");
+    }
+
+    #[test]
+    fn list_invoices_filters_by_status_word_and_by_open() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        mark_published(&conn, ids[0], "2026-08-05").unwrap();
+        mark_published(&conn, ids[1], "2026-08-05").unwrap();
+        record_payment(&conn, ids[1], 50.0, "2026-08-06", "ach", None).unwrap();
+
+        let numbers = |status: &str| -> Vec<i64> {
+            let mut ids: Vec<i64> = list_invoices(&conn, Some(status), None)
+                .unwrap()
+                .iter()
+                .map(|r| r.id)
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(numbers("draft"), vec![ids[2]]);
+        assert_eq!(numbers("sent"), vec![ids[0]]);
+        assert_eq!(numbers("partial"), vec![ids[1]]);
+        assert_eq!(numbers("open"), vec![ids[0], ids[1]]);
+        assert!(numbers("void").is_empty());
+    }
+
+    #[test]
+    fn an_unknown_status_filter_is_invalid_and_names_the_legal_set() {
+        let (_d, conn) = test_conn();
+        let err = list_invoices(&conn, Some("archived"), None).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        let text = err.to_string();
+        for word in ["draft", "overdue", "open"] {
+            assert!(text.contains(word), "missing {word} in: {text}");
+        }
+    }
+
+    #[test]
+    fn list_invoices_filters_by_client() {
+        let (_d, conn) = test_conn();
+        let (cid, ids) = seed_three(&conn);
+        let other = open_invoice(&conn, "Globex", "2026-01-05", None, 100.0);
+
+        let mine: Vec<i64> = list_invoices(&conn, None, Some(cid))
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(mine.len(), ids.len());
+        assert!(!mine.contains(&other), "another client's invoice leaked in");
     }
 
     #[test]
@@ -1852,7 +2210,7 @@ mod tests {
         open_invoice(&conn, "Acme", "2026-01-05", Some("2026-02-05"), 100.0);
         open_invoice(&conn, "Globex", "2026-01-05", None, 100.0);
 
-        let rows = list_invoices(&conn).unwrap();
+        let rows = list_invoices(&conn, None, None).unwrap();
         let dues: Vec<Option<String>> = rows.iter().map(|r| r.due_date.clone()).collect();
         assert!(dues.contains(&Some("2026-02-05".to_string())), "{dues:?}");
         assert!(dues.contains(&None), "{dues:?}");
@@ -1861,7 +2219,26 @@ mod tests {
     #[test]
     fn list_invoices_on_an_empty_book_is_empty() {
         let (_d, conn) = test_conn();
-        assert!(list_invoices(&conn).unwrap().is_empty());
+        assert!(list_invoices(&conn, None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_payment_method_is_invalid_not_a_constraint_violation() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+
+        let err = validate_payment_method("bitcoin").unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert!(err.to_string().contains("direct_deposit"), "got: {err}");
+
+        // record_payment refuses before the insert, so no CHECK ever fires.
+        let err = record_payment(&conn, ids[0], 10.0, "2026-08-05", "bitcoin", None).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert!(payments(&conn, ids[0]).unwrap().is_empty());
+
+        for method in PAYMENT_METHODS {
+            assert!(validate_payment_method(method).is_ok(), "{method}");
+        }
     }
 
     #[test]

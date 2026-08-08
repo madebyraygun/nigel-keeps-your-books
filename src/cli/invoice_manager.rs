@@ -8,16 +8,14 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
-use crate::cli::invoice::{
-    build_clients, company_name, ensure_not_void, is_void, payment_amount, PUBLISHED_VOID_WARNING,
-};
+use crate::cli::invoice::{build_clients, company_name, PUBLISHED_VOID_WARNING};
 use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{
-    ensure_voidable, get_invoice, line_items, list_invoices, paid_amount, payments, record_payment,
-    validate_date, void_invoice, InvoiceListRow,
+    ensure_not_void, ensure_voidable, get_invoice, is_void, line_items, list_invoices, paid_amount,
+    payment_amount, payments, record_payment, validate_date, void_invoice, InvoiceListRow,
 };
 use crate::invoicing::render_html::{load_template, Branding};
 use crate::invoicing::send::send_invoice;
@@ -149,7 +147,7 @@ pub struct InvoiceManager {
 impl InvoiceManager {
     pub fn new(conn: &Connection, greeting: &str) -> Self {
         Self {
-            rows: list_invoices(conn).unwrap_or_default(),
+            rows: list_invoices(conn, None, None).unwrap_or_default(),
             selection: 0,
             scroll_offset: 0,
             last_visible_rows: 20,
@@ -163,7 +161,7 @@ impl InvoiceManager {
     }
 
     fn reload_list(&mut self, conn: &Connection) {
-        self.rows = list_invoices(conn).unwrap_or_default();
+        self.rows = list_invoices(conn, None, None).unwrap_or_default();
         if self.rows.is_empty() {
             self.selection = 0;
         } else {
@@ -1055,7 +1053,7 @@ fn optional_display(value: Option<&str>) -> String {
 
 /// What is still owed on an invoice.
 fn balance(row: &InvoiceListRow) -> f64 {
-    row.total - row.paid
+    row.balance
 }
 
 /// The column budget S4 lays out. A `TestBackend` buffer is this wide by
@@ -1086,7 +1084,10 @@ fn list_cells(marker: &str, row: &InvoiceListRow) -> (String, String, String) {
         format!("{:<STATUS_WIDTH$} ", truncate(&row.status, STATUS_WIDTH)),
         format!(
             "{:<client_width$} {total:>money_width$} {paid:>money_width$} {due}",
-            truncate(&row.client_name, client_width.saturating_sub(2)),
+            truncate(
+                &optional_display(row.client_name.as_deref()),
+                client_width.saturating_sub(2)
+            ),
         ),
     )
 }
@@ -1611,7 +1612,7 @@ mod tests {
         // the rule is the CLI's, so the screen cannot disagree about it.
         let (_d, conn) = test_conn();
         seed_invoice(&conn, "Cedar Systems", 100.0);
-        let invoice = get_invoice(&conn, list_invoices(&conn).unwrap()[0].id).unwrap();
+        let invoice = get_invoice(&conn, list_invoices(&conn, None, None).unwrap()[0].id).unwrap();
 
         for amount in [-25.0, f64::NAN, f64::INFINITY] {
             let message = field_wording(
@@ -2399,7 +2400,7 @@ mod tests {
     }
 
     fn row_of(conn: &Connection) -> InvoiceListRow {
-        list_invoices(conn).unwrap().pop().unwrap()
+        list_invoices(conn, None, None).unwrap().pop().unwrap()
     }
 
     #[test]

@@ -475,6 +475,61 @@ fn init_with_client_and_invoice(env: &TestEnv) {
         .success();
 }
 
+/// The three commands whose printing moved into pure formatters, pinned as
+/// whole stdout rather than as substrings. Money reads as `$1,500.00` here,
+/// which is what `nigel invoice aging` and the browser have always printed.
+#[test]
+fn invoice_and_client_listings_print_money_the_way_every_other_report_does() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    let stdout = |args: &[&str]| -> String {
+        let out = env.cmd().args(args).assert().success().get_output().clone();
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    assert_eq!(
+        stdout(&["invoice", "list"]),
+        concat!(
+            "Invoices\n",
+            "+------+--------+---------+-----------+-----+\n",
+            "| #    | Status | Client  | Total     | Due |\n",
+            "+===========================================+\n",
+            "| 1248 | draft  | Acme Co | $1,500.00 |     |\n",
+            "+------+--------+---------+-----------+-----+\n",
+        )
+    );
+
+    assert_eq!(
+        stdout(&["invoice", "show", "1248"]),
+        concat!(
+            "Invoice #1248  [draft]  USD $1,500.00\n",
+            "Client:   Acme Co\n",
+            "Issued:   2026-08-04\n",
+            "Due:      -\n",
+            "+-------------+-------+---------+-----------+\n",
+            "| Description | Qty   | Unit    | Amount    |\n",
+            "+===========================================+\n",
+            "| Consulting  | 10.00 | $150.00 | $1,500.00 |\n",
+            "+-------------+-------+---------+-----------+\n",
+            "Paid:     $0.00\n",
+            "Balance:  $1,500.00\n",
+        )
+    );
+
+    assert_eq!(
+        stdout(&["client", "list"]),
+        concat!(
+            "Clients\n",
+            "+----+---------+--------------+\n",
+            "| ID | Name    | Email        |\n",
+            "+=============================+\n",
+            "| 1  | Acme Co | ap@acme.test |\n",
+            "+----+---------+--------------+\n",
+        )
+    );
+}
+
 #[test]
 fn client_show_prints_details_and_invoice_history() {
     let env = TestEnv::new();
