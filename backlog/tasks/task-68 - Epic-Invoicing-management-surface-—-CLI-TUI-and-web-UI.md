@@ -1,9 +1,11 @@
 ---
 id: TASK-68
 title: 'Epic: Invoicing management surface — CLI, TUI, and web UI'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude-orchestrator'
 created_date: '2026-08-08 00:27'
+updated_date: '2026-08-08 00:41'
 labels:
   - epic
   - invoicing

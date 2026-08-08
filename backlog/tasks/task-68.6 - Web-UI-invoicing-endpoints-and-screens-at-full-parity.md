@@ -1,9 +1,11 @@
 ---
 id: TASK-68.6
 title: 'Web UI: invoicing endpoints and screens at full parity'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@opus-team'
 created_date: '2026-08-08 00:28'
+updated_date: '2026-08-08 01:00'
 labels:
   - invoicing
   - web
@@ -25,3 +27,24 @@ Supersedes TASK-62 with the full scope: Serialize derives on the invoicing struc
 - [ ] #3 Send requires explicit confirmation in the UI and reports each step's failure by cause
 - [ ] #4 SPA screens cover client management, invoice management, and aging with CLI figure parity
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Spec: docs/superpowers/specs/2026-08-08-task-68-6-web-invoicing-design.md. Plan: docs/superpowers/plans/2026-08-08-task-68-6-web-invoicing.md (5 stages, each its own PR).
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Plan approved by orchestrator. Rulings on open questions:
+1. Blocking send CONFIRMED — the invoice row is the job record; bounded reqwest timeouts + SendStep trace + wire-level {"confirm":true} are the price, paid in the plan.
+2. Nav stays FLAT — the registry is flat today; grouping is a shell redesign that belongs to its own task if 14 screens ever feels crowded.
+3. Aging lives in #/reports (it is a report; matches 68.5 making it a ReportKind), with a link from the invoices screen.
+4. Invoice detail is a FULL VIEW (query param), not a drawer — consistent with how reports/register handle depth; detail carries line items, payments, actions.
+5. Preview iframe COLLAPSED by default — one click to open; keeps detail fast.
+6. "from Raygun" subject: already ruled into 68.3 ({{COMPANY}}); 68.6 inherits, no separate fix.
+7. delete_client stays in 68.6 stage 3 as planned — it is the only consumer (68.4's TUI has no client delete).
+8. /api/status omits the `invoicing` block while LOCKED — do not advertise configured integrations pre-unlock.
+502/UpstreamFailed and token skip_serializing are accepted as specced.
+<!-- SECTION:NOTES:END -->
