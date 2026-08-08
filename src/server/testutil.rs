@@ -269,7 +269,7 @@ pub async fn ok_json(app: &Router, uri: &str, token: &str) -> serde_json::Value 
 /// Every route that reads the database, for tests that must hold across all of
 /// them — the locked guard especially, where a route mounted in the wrong place
 /// would silently answer while the database is still encrypted.
-pub const DATA_ROUTES: [&str; 20] = [
+pub const DATA_ROUTES: [&str; 24] = [
     "/api/settings/app",
     "/api/reports/pnl",
     "/api/reports/expenses",
@@ -290,6 +290,10 @@ pub const DATA_ROUTES: [&str; 20] = [
     "/api/reconciliations",
     "/api/clients",
     "/api/clients/1",
+    "/api/invoices",
+    "/api/invoices/1248",
+    "/api/invoices/aging",
+    "/api/invoices/next-number",
 ];
 
 /// Every export route, named without the `format` each of them requires. They
