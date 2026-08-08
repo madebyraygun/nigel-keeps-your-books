@@ -160,6 +160,7 @@ pub fn record_payment(
     stripe_session: Option<&str>,
 ) -> Result<bool> {
     validate_payment_method(method)?;
+    ensure_not_void(&get_invoice(conn, invoice_id)?, "paid")?;
     if let Some(sid) = stripe_session {
         let seen: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM invoice_payments WHERE stripe_checkout_session_id = ?1)",
@@ -447,6 +448,28 @@ pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
             message: format!(
                 "Invoice #{} is {} and cannot be edited.",
                 invoice.number, invoice.status
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// `voided_at` is the fact; `status` is derived from it. Reading the timestamp
+/// first means a void whose status write did not land still reads as void.
+pub fn is_void(invoice: &Invoice) -> bool {
+    invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str()
+}
+
+/// Void is terminal: it blocks send, pay and edit. The guard lives here rather
+/// than in the CLI wrapper so a caller that reaches `send_invoice` or
+/// `record_payment` directly cannot get past it.
+pub fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
+    if is_void(invoice) {
+        return Err(NigelError::Conflict {
+            code: "void",
+            message: format!(
+                "Invoice #{} is void and cannot be {action}.",
+                invoice.number
             ),
         });
     }
@@ -1090,7 +1113,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
-        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        insert_payment(&conn, id, 100.0);
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
     }
 
@@ -1121,8 +1144,21 @@ mod tests {
         .unwrap();
 
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
-        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        insert_payment(&conn, id, 100.0);
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
         assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    /// A payment row written past `record_payment`, which refuses a void
+    /// invoice. These two tests are about what `refresh_status` derives from a
+    /// payment total, so the row has to arrive some other way.
+    fn insert_payment(conn: &Connection, invoice_id: i64, amount: f64) {
+        conn.execute(
+            "INSERT INTO invoice_payments (invoice_id, amount, paid_date, method)
+             VALUES (?1, ?2, '2026-08-10', 'other')",
+            rusqlite::params![invoice_id, amount],
+        )
+        .unwrap();
     }
 
     /// One 100.00 draft invoice (number 1248) and its row id.
@@ -1185,6 +1221,47 @@ mod tests {
         }
         // An overpayment is a real thing a bank does; only zero and negative are junk.
         assert_eq!(payment_amount(&invoice, 0.0, Some(250.0)).unwrap(), 250.0);
+    }
+
+    #[test]
+    fn record_payment_refuses_a_void_invoice_without_the_cli_wrapper() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+
+        let err = record_payment(&conn, id, 10.0, "2026-08-07", "ach", None).unwrap_err();
+        assert_eq!(conflict_code(&err), "void");
+        assert!(payments(&conn, id).unwrap().is_empty(), "a row was written");
+    }
+
+    #[test]
+    fn a_stale_void_status_also_refuses_a_payment() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        // A void whose status write did not land: the timestamp is the fact.
+        conn.execute(
+            "UPDATE invoices SET voided_at='2026-08-06', status='draft' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+
+        let err = record_payment(&conn, id, 10.0, "2026-08-07", "ach", None).unwrap_err();
+        assert_eq!(conflict_code(&err), "void");
+    }
+
+    #[test]
+    fn update_invoice_refuses_a_published_invoice_without_the_cli_wrapper() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+
+        let update = InvoiceUpdate {
+            issue_date: Some("2026-08-09".into()),
+            ..InvoiceUpdate::default()
+        };
+        let err = update_invoice(&conn, id, &update).unwrap_err();
+        assert_eq!(conflict_code(&err), "not_draft");
+        assert_eq!(get_invoice(&conn, id).unwrap().issue_date, "2026-08-04");
     }
 
     #[test]

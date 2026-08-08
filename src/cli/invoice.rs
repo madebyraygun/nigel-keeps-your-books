@@ -9,8 +9,9 @@ use crate::error::{NigelError, Result};
 use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
-    create_invoice, ensure_voidable, get_invoice, get_invoice_by_number, line_items, paid_amount,
-    payment_amount, record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
+    create_invoice, ensure_not_void, ensure_voidable, get_invoice, get_invoice_by_number, is_void,
+    line_items, paid_amount, payment_amount, record_payment, update_invoice, void_invoice,
+    InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
@@ -21,7 +22,7 @@ use crate::invoicing::render_html::{
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
 use crate::invoicing::sync::sync_all;
-use crate::models::{Invoice, InvoiceStatus};
+use crate::models::Invoice;
 use crate::settings::{get_data_dir, invoicing_config, InvoicingConfig};
 
 fn parse_item(s: &str) -> Result<NewLineItem> {
@@ -82,25 +83,6 @@ fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
 pub(crate) const PUBLISHED_VOID_WARNING: &str =
     "Warning: this invoice was already published. Its page and Stripe payment link stay live — \
      deactivate the link in Stripe if you do not want it paid.";
-
-/// `voided_at` is the fact; `status` is derived from it. Reading the timestamp
-/// first means a void whose status write did not land still reads as void.
-pub(crate) fn is_void(invoice: &Invoice) -> bool {
-    invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str()
-}
-
-pub(crate) fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
-    if is_void(invoice) {
-        return Err(NigelError::Conflict {
-            code: "void",
-            message: format!(
-                "Invoice #{} is void and cannot be {action}.",
-                invoice.number
-            ),
-        });
-    }
-    Ok(())
-}
 
 fn require(value: Option<String>, what: &str) -> Result<String> {
     value.ok_or_else(|| {

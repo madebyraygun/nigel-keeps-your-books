@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::{NigelError, Result};
 use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
-use crate::invoicing::invoices::{get_invoice, mark_published, set_payment_link};
+use crate::invoicing::invoices::{ensure_not_void, get_invoice, mark_published, set_payment_link};
 use crate::invoicing::render::render_invoice;
 use crate::invoicing::render_html::{Branding, PayButton};
 
@@ -17,6 +17,8 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     mailer: &M,
 ) -> Result<String> {
     let mut invoice = get_invoice(conn, invoice_id)?;
+    // Before the Stripe link, so a void invoice costs no network call.
+    ensure_not_void(&invoice, "sent")?;
     let client = get_client(conn, invoice.client_id)?;
     let email = client
         .email
@@ -167,6 +169,36 @@ mod tests {
         assert_eq!(inv.status, "sent");
         assert_eq!(inv.stripe_payment_link_id.as_deref(), Some("pl_1"));
         assert_eq!(*mail.sent.borrow(), 1);
+    }
+
+    #[test]
+    fn send_invoice_refuses_a_void_invoice_without_the_cli_wrapper() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        crate::invoicing::invoices::void_invoice(&conn, id, "2026-08-06").unwrap();
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail::default();
+
+        let err = send_invoice(
+            &conn,
+            id,
+            "2026-08-07",
+            &brand("billing@example.test"),
+            &gw,
+            &FakePub,
+            &mail,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, NigelError::Conflict { code: "void", .. }),
+            "got: {err:?}"
+        );
+        // Refused before any network call, so no payment link was created.
+        assert_eq!(*gw.create_calls.borrow(), 0);
+        assert_eq!(*mail.sent.borrow(), 0);
     }
 
     #[test]
