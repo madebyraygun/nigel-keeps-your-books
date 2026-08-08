@@ -329,11 +329,13 @@ fn report_all_text_export() {
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
         .collect();
-    // Should produce multiple report files (pnl, expenses, tax, cashflow, register, flagged, balance, k1)
-    assert!(
-        entries.len() >= 5,
-        "expected at least 5 report files, got {}",
-        entries.len()
+    // pnl, expenses, tax, cashflow, register, flagged, balance, k1-prep, aging
+    assert_eq!(
+        entries.len(),
+        9,
+        "expected 9 report files, got {}: {:?}",
+        entries.len(),
+        entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
     );
 }
 
@@ -905,6 +907,48 @@ fn invoice_preview_without_the_pdf_feature_still_writes_html_and_says_why() {
 
     assert!(previews_dir(&env).join("invoice-1248.html").exists());
     assert!(!previews_dir(&env).join("invoice-1248.pdf").exists());
+}
+
+#[test]
+fn invoice_aging_prints_bucket_labels() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "aging"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("current")
+                .and(predicate::str::contains("1-30"))
+                .and(predicate::str::contains("90+"))
+                .and(predicate::str::contains("Total Outstanding")),
+        );
+}
+
+#[test]
+fn report_aging_text_export_writes_a_file() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    let output_path = env.home.path().join("aging.txt");
+    env.cmd()
+        .args([
+            "report",
+            "aging",
+            "--mode",
+            "export",
+            "--format",
+            "text",
+            "--output",
+            &output_path.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote"));
+
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    assert!(content.contains("A/R Aging"), "got: {content}");
 }
 
 #[test]

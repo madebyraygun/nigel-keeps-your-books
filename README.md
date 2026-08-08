@@ -22,12 +22,12 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Rules engine** — pattern-based auto-categorization (contains, starts_with, regex) with priority ordering; test patterns with `nigel rules test` before committing
 - **Bulk recategorization** — `nigel recategorize` moves transactions between categories by ID or by filters (category, date range, pattern, account, amount), with `--dry-run` preview and confirmation for filter-based moves
 - **Interactive review** — step through flagged transactions with a pinned category chart, assign categories, and create rules on the fly; press Esc to go back and redo previous transactions
-- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
+- **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep, A/R aging; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Invoicing** — draft invoices for your clients, edit or void them while they are still drafts, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. See [docs/invoicing.md](docs/invoicing.md)
 - **Monthly reconciliation** — compare calculated balances against bank statements
-- **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. Every report the CLI prints is there too, for any period, with text and PDF downloads and a print-friendly layout
+- **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. The eight ledger reports are there too, for any period, with text and PDF downloads and a print-friendly layout; A/R aging is terminal-only for now and arrives in the web UI with the invoicing screens
 - **SQLite storage** — single portable database, no server required
 - **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen, or in the browser when using `nigel serve`; backups preserve encryption state
 - **Auto-updater** — checks GitHub Releases for new versions on launch (once per 24 hours); run `nigel update` to download and install the latest binary in-place; opt out via the Settings screen or `update_check: false` in settings.json
@@ -106,6 +106,7 @@ nigel report tax --year 2025
 nigel report cashflow
 nigel report balance
 nigel report flagged
+nigel report aging                  # A/R aging: buckets and open invoices
 nigel report register --year 2025   # Transaction register
 
 # Export reports

@@ -40,6 +40,12 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::reports::ReportKind;
 
+/// Today's local date as `YYYY-MM-DD` — the reference day every date-less
+/// command ages, derives and reports against.
+pub fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
 pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
     if let Some(m) = month {
         let parts: Vec<&str> = m.split('-').collect();
@@ -578,6 +584,11 @@ pub enum ReportCommands {
         #[command(flatten)]
         output: ReportOutputArgs,
     },
+    /// A/R aging — outstanding invoices by age. Always as of today.
+    Aging {
+        #[command(flatten)]
+        output: ReportOutputArgs,
+    },
     /// K-1 preparation worksheet (Form 1120-S).
     K1 {
         #[arg(long)]
@@ -610,6 +621,7 @@ impl ReportCommands {
             Self::Register { output, .. } => output.clone(),
             Self::Flagged { output, .. } => output.clone(),
             Self::Balance { output, .. } => output.clone(),
+            Self::Aging { output, .. } => output.clone(),
             Self::K1 { output, .. } => output.clone(),
             Self::All { format, .. } => ReportOutputArgs {
                 mode: Some("export".to_string()),
@@ -628,6 +640,7 @@ impl ReportCommands {
             Self::Register { .. } => ReportKind::Register,
             Self::Flagged { .. } => ReportKind::Flagged,
             Self::Balance { .. } => ReportKind::Balance,
+            Self::Aging { .. } => ReportKind::Aging,
             Self::K1 { .. } => ReportKind::K1,
             Self::All { .. } => ReportKind::All,
         }

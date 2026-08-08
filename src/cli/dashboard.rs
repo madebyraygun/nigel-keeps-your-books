@@ -73,6 +73,7 @@ const REPORT_TYPES: &[&str] = &[
     "Flagged Transactions",
     "Cash Position",
     "K-1 Prep (1120-S)",
+    "A/R Aging",
 ];
 
 const EXPORT_TYPES: &[&str] = &[
@@ -84,7 +85,15 @@ const EXPORT_TYPES: &[&str] = &[
     "Flagged Transactions",
     "Cash Position",
     "K-1 Prep (1120-S)",
+    "A/R Aging",
     "All Reports",
+];
+
+/// The report slug behind each picker index. `REPORT_TYPES`, `EXPORT_TYPES`,
+/// `enter_report_view_with_date`, `do_export` and `do_text_export` are all keyed
+/// by that bare index; this is what the guard test holds them to.
+const REPORT_SLUGS: &[&str] = &[
+    "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep", "aging",
 ];
 
 #[derive(Clone, Copy)]
@@ -122,6 +131,28 @@ enum DashboardScreen {
     Snake(SnakeGame),
 }
 
+/// What the home screen says about money owed: the total and the oldest
+/// bucket still carrying a balance.
+struct ArSummary {
+    outstanding: f64,
+    oldest_bucket: &'static str,
+}
+
+/// `None` when nothing is outstanding — the home screen then renders exactly
+/// as it did before invoicing existed. Half a cent of slack, the same the rest
+/// of invoicing settles balances with.
+fn ar_summary(report: &crate::invoicing::invoices::AgingReport) -> Option<ArSummary> {
+    if report.outstanding < 0.005 {
+        return None;
+    }
+    // The buckets run current → 90+, so the oldest with money in it is the last.
+    let oldest = report.buckets.iter().rev().find(|b| b.total > 0.005)?;
+    Some(ArSummary {
+        outstanding: report.outstanding,
+        oldest_bucket: oldest.label,
+    })
+}
+
 struct HomeData {
     total_income: f64,
     total_expenses: f64,
@@ -134,6 +165,7 @@ struct HomeData {
     cashflow_expenses: Vec<u64>,
     cashflow_year_range: String,
     top_expenses: Vec<(String, f64)>,
+    ar: Option<ArSummary>,
 }
 
 struct Dashboard {
@@ -271,6 +303,12 @@ impl Dashboard {
             .map(|e| (e.name.clone(), e.total.abs()))
             .collect();
 
+        // `.ok()`, never `?`: an invoicing failure must not blank the dashboard,
+        // and the same expression is the "only when open invoices exist" gate.
+        let ar = crate::invoicing::invoices::ar_aging_detail(conn, &crate::cli::today())
+            .ok()
+            .and_then(|report| ar_summary(&report));
+
         self.home_data = Some(HomeData {
             total_income: pnl.total_income,
             total_expenses: pnl.total_expenses,
@@ -283,6 +321,7 @@ impl Dashboard {
             cashflow_expenses,
             cashflow_year_range,
             top_expenses,
+            ar,
         });
         Ok(())
     }
@@ -357,13 +396,14 @@ impl Dashboard {
 
         let menu_rows = MENU_LEFT_COUNT as u16 + 1;
         let has_update = self.update_notification.is_some();
+        let has_ar = self.home_data.as_ref().is_some_and(|d| d.ar.is_some());
 
         let [header_area, sep1, update_area, stats_area, sep2, charts_area, sep3, menu_area, hints_area] =
             Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(if has_update { 1 } else { 0 }),
-                Constraint::Length(5),
+                Constraint::Length(if has_ar { 6 } else { 5 }),
                 Constraint::Length(1),
                 Constraint::Fill(1),
                 Constraint::Length(1),
@@ -399,19 +439,32 @@ impl Dashboard {
                     .areas(stats_area);
 
             // YTD summary — 1-space indent to align with "N" in " Nigel:"
-            let stats_lines = vec![
+            let mut stats_lines = vec![
                 Line::from(vec![
-                    Span::raw(" YTD Income     "),
+                    Span::raw(" YTD Income      "),
                     money_span(data.total_income),
                 ]),
                 Line::from(vec![
-                    Span::raw(" YTD Expenses   "),
+                    Span::raw(" YTD Expenses    "),
                     money_span(data.total_expenses),
                 ]),
-                Line::from(vec![Span::raw(" Net Profit     "), money_span(data.net)]),
-                Line::from(format!(" Transactions   {}", number(data.txn_count))),
-                Line::from(format!(" Flagged        {}", data.flagged_count)),
+                Line::from(vec![Span::raw(" Net Profit      "), money_span(data.net)]),
+                Line::from(format!(" Transactions    {}", number(data.txn_count))),
+                Line::from(format!(" Flagged         {}", data.flagged_count)),
             ];
+
+            if let Some(ar) = &data.ar {
+                let oldest_style = if ar.oldest_bucket == "current" {
+                    FOOTER_STYLE
+                } else {
+                    Style::default().fg(Color::Yellow)
+                };
+                stats_lines.push(Line::from(vec![
+                    Span::raw(" A/R Outstanding "),
+                    money_span(ar.outstanding),
+                    Span::styled(format!("  ({})", ar.oldest_bucket), oldest_style),
+                ]));
+            }
             frame.render_widget(Paragraph::new(stats_lines), left_area);
 
             // Account balances
@@ -793,6 +846,7 @@ impl Dashboard {
             5 => super::report::view::build_flagged(),
             6 => super::report::view::build_balance(),
             7 => super::report::view::build_k1(year),
+            8 => super::report::view::build_aging(),
             _ => return DashboardScreen::Home,
         };
         match result {
@@ -865,7 +919,8 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
             5 => super::export::flagged(None)?,
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
-            8 => return super::export::all(year, None),
+            8 => super::export::aging(None)?,
+            n if n == REPORT_SLUGS.len() => return super::export::all(year, None),
             _ => return Ok(String::new()),
         };
         Ok(format!("Exported {path}"))
@@ -874,11 +929,8 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
 
 fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
     let year = year.or_else(|| Some(chrono::Local::now().year()));
-    let names = [
-        "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep",
-    ];
 
-    if idx == 8 {
+    if idx == REPORT_SLUGS.len() {
         // "All Reports" text export
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         let dir = crate::settings::get_data_dir().join("exports");
@@ -896,6 +948,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ("flagged", super::report::text::flagged()),
             ("balance", super::report::text::balance()),
             ("k1-prep", super::report::text::k1(year)),
+            ("aging", super::report::text::aging(&crate::cli::today())),
         ];
         let mut failed = Vec::new();
         for (name, result) in reports {
@@ -915,7 +968,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
         return Ok(format!("{msg} (skipped: {})", failed.join(", ")));
     }
 
-    let name = names.get(idx).unwrap_or(&"report");
+    let name = REPORT_SLUGS.get(idx).unwrap_or(&"report");
     let content = match idx {
         0 => super::report::text::pnl(month, year, None, None)?,
         1 => super::report::text::expenses(month, year)?,
@@ -925,6 +978,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
         5 => super::report::text::flagged()?,
         6 => super::report::text::balance()?,
         7 => super::report::text::k1(year)?,
+        8 => super::report::text::aging(&crate::cli::today())?,
         _ => return Ok(String::new()),
     };
 
@@ -1356,6 +1410,183 @@ pub fn run() -> Result<()> {
                 return Ok(());
             }
             Ok(false) => continue, // reload (data directory changed)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::invoicing::invoices::{AgingBucket, AgingInvoice, AgingReport};
+
+    fn aging(buckets: &[(&'static str, f64)]) -> AgingReport {
+        let buckets: Vec<AgingBucket> = buckets
+            .iter()
+            .map(|(label, total)| AgingBucket {
+                label,
+                count: if *total > 0.0 { 1 } else { 0 },
+                total: *total,
+            })
+            .collect();
+        let outstanding = buckets.iter().map(|b| b.total).sum();
+        AgingReport {
+            as_of: "2026-08-04".into(),
+            buckets,
+            invoices: Vec::<AgingInvoice>::new(),
+            outstanding,
+        }
+    }
+
+    #[test]
+    fn ar_summary_is_none_when_nothing_outstanding() {
+        assert!(ar_summary(&aging(&[("current", 0.0), ("90+", 0.0)])).is_none());
+        assert!(ar_summary(&aging(&[("current", 0.004)])).is_none());
+    }
+
+    #[test]
+    fn ar_summary_picks_oldest_non_empty_bucket() {
+        let summary = ar_summary(&aging(&[
+            ("current", 4200.0),
+            ("1-30", 0.0),
+            ("31-60", 0.0),
+            ("61-90", 3200.0),
+            ("90+", 0.0),
+        ]))
+        .unwrap();
+        assert_eq!(summary.oldest_bucket, "61-90");
+
+        let summary = ar_summary(&aging(&[("current", 4200.0), ("90+", 0.0)])).unwrap();
+        assert_eq!(summary.oldest_bucket, "current");
+    }
+
+    #[test]
+    fn ar_summary_reports_total() {
+        let summary = ar_summary(&aging(&[("current", 4200.0), ("61-90", 3200.0)])).unwrap();
+        assert_eq!(summary.outstanding, 7400.0);
+    }
+
+    fn home_with(ar: Option<ArSummary>) -> Dashboard {
+        home_with_income(ar, 184_200.0)
+    }
+
+    fn home_with_income(ar: Option<ArSummary>, total_income: f64) -> Dashboard {
+        let mut dash = Dashboard::new(Some("Dalton".into()), None);
+        dash.home_data = Some(HomeData {
+            total_income,
+            total_expenses: -121_455.0,
+            net: 62_745.0,
+            txn_count: 1_284,
+            flagged_count: 3,
+            balances: vec![("BofA Checking".into(), 42_118.02)],
+            cashflow_labels: Vec::new(),
+            cashflow_income: Vec::new(),
+            cashflow_expenses: Vec::new(),
+            cashflow_year_range: String::new(),
+            top_expenses: Vec::new(),
+            ar,
+        });
+        dash
+    }
+
+    fn rendered(dash: &Dashboard) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| dash.draw_home(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The stats row as rendered, trailing blanks trimmed.
+    fn stats_row(screen: &str, label: &str) -> String {
+        screen
+            .lines()
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("no row for {label} in:\n{screen}"))
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn home_shows_the_ar_line_only_when_money_is_owed() {
+        let owed = rendered(&home_with(Some(ArSummary {
+            outstanding: 8_900.0,
+            oldest_bucket: "61-90",
+        })));
+        // The label field is padded, so the amount never abuts the wording.
+        assert!(owed.contains("A/R Outstanding "), "{owed}");
+        assert!(owed.contains("$8,900.00"), "{owed}");
+        assert!(owed.contains("(61-90)"), "{owed}");
+
+        let clear = rendered(&home_with(None));
+        assert!(!clear.contains("A/R"), "{clear}");
+    }
+
+    #[test]
+    fn stats_amounts_share_one_column() {
+        let screen = rendered(&home_with(Some(ArSummary {
+            outstanding: 8_900.0,
+            oldest_bucket: "61-90",
+        })));
+        for label in [
+            "YTD Income",
+            "YTD Expenses",
+            "Net Profit",
+            "A/R Outstanding",
+        ] {
+            let row = stats_row(&screen, label);
+            assert_eq!(
+                row.find('$'),
+                Some(17),
+                "amount column moved on the {label} row: {row:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ar_line_fits_the_left_half_at_eighty_columns() {
+        // Widest case: a six-figure balance and the longest bucket label.
+        let screen = rendered(&home_with_income(
+            Some(ArSummary {
+                outstanding: 999_999.99,
+                oldest_bucket: "current",
+            }),
+            999_999.99,
+        ));
+        let row = stats_row(&screen, "A/R Outstanding");
+        assert!(
+            row.chars().count() <= 40,
+            "row is {} cols, over the 40-col left half: {row:?}",
+            row.chars().count()
+        );
+        assert!(row.contains("$999,999.99"), "amount truncated: {row:?}");
+        assert!(row.contains("(current)"), "hint truncated: {row:?}");
+    }
+
+    #[test]
+    fn report_picker_indices_match_report_slugs() {
+        assert_eq!(REPORT_TYPES.len(), REPORT_SLUGS.len());
+        assert_eq!(EXPORT_TYPES.len(), REPORT_SLUGS.len() + 1);
+        assert_eq!(REPORT_TYPES[8], "A/R Aging");
+        assert_eq!(EXPORT_TYPES[8], "A/R Aging");
+        assert_eq!(REPORT_SLUGS[8], "aging");
+        assert_eq!(EXPORT_TYPES[REPORT_SLUGS.len()], "All Reports");
+    }
+
+    #[test]
+    fn report_slugs_are_the_report_kinds_own_slugs() {
+        use crate::reports::ReportKind::*;
+        let kinds = [
+            Pnl, Expenses, Tax, Cashflow, Register, Flagged, Balance, K1, Aging,
+        ];
+        assert_eq!(kinds.len(), REPORT_SLUGS.len());
+        for (slug, kind) in REPORT_SLUGS.iter().zip(kinds) {
+            assert_eq!(*slug, kind.as_str());
         }
     }
 }

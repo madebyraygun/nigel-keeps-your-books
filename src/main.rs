@@ -6,10 +6,6 @@ use nigel::cli::{
 };
 use nigel::error;
 
-fn today() -> String {
-    chrono::Local::now().format("%Y-%m-%d").to_string()
-}
-
 /// Reconcile Stripe payments before a data-bearing command runs. Best-effort:
 /// with no Stripe key configured it does nothing, and any failure prints a
 /// notice instead of failing the command the user actually asked for.
@@ -20,7 +16,7 @@ fn sync_invoice_payments() {
     let gateway = nigel::invoicing::stripe::StripeClient { secret_key };
     let db_path = nigel::settings::get_data_dir().join("nigel.db");
     let result = nigel::db::get_connection(&db_path)
-        .and_then(|conn| nigel::invoicing::sync::sync_all(&conn, &today(), &gateway));
+        .and_then(|conn| nigel::invoicing::sync::sync_all(&conn, &cli::today(), &gateway));
 
     match result {
         Ok(0) => {}
@@ -223,21 +219,21 @@ fn dispatch(command: Commands) -> error::Result<()> {
             } => cli::invoice::edit(
                 number, issue_date, due_date, clear_due, currency, notes, terms, &items,
             ),
-            InvoiceCommands::Void { number, yes } => cli::invoice::void(number, yes, &today()),
+            InvoiceCommands::Void { number, yes } => cli::invoice::void(number, yes, &cli::today()),
             InvoiceCommands::List => cli::invoice::list(),
             InvoiceCommands::Show { number } => cli::invoice::show(number),
             InvoiceCommands::Preview { number, output_dir } => {
                 cli::invoice::preview(number, output_dir)
             }
-            InvoiceCommands::Send { number } => cli::invoice::send(number, &today()),
-            InvoiceCommands::Sync => cli::invoice::sync(&today()),
+            InvoiceCommands::Send { number } => cli::invoice::send(number, &cli::today()),
+            InvoiceCommands::Sync => cli::invoice::sync(&cli::today()),
             InvoiceCommands::Pay {
                 number,
                 amount,
                 date,
                 method,
             } => cli::invoice::pay(number, amount, &date, &method),
-            InvoiceCommands::Aging => cli::invoice::aging(&today()),
+            InvoiceCommands::Aging => cli::invoice::aging(&cli::today()),
             InvoiceCommands::Import { db } => cli::invoice::import(&db),
         },
         Commands::Import {

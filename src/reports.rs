@@ -30,6 +30,7 @@ pub enum ReportKind {
     Register,
     Flagged,
     Balance,
+    Aging,
     K1,
     /// Bulk export of every report; not a report in its own right.
     All,
@@ -46,6 +47,7 @@ impl ReportKind {
             Self::Register => "register",
             Self::Flagged => "flagged",
             Self::Balance => "balance",
+            Self::Aging => "aging",
             Self::K1 => "k1-prep",
             Self::All => "all",
         }
@@ -57,7 +59,7 @@ impl ReportKind {
                 DateGranularity::MonthAndYear
             }
             Self::Tax | Self::K1 | Self::All => DateGranularity::YearOnly,
-            Self::Flagged | Self::Balance => DateGranularity::None,
+            Self::Flagged | Self::Balance | Self::Aging => DateGranularity::None,
         }
     }
 }
@@ -874,6 +876,7 @@ mod tests {
             (Register, "register", MonthAndYear),
             (Flagged, "flagged", None),
             (Balance, "balance", None),
+            (Aging, "aging", None),
             (K1, "k1-prep", YearOnly),
             (All, "all", YearOnly),
         ];
