@@ -136,6 +136,64 @@ pub fn list_clients(conn: &Connection) -> Result<Vec<Client>> {
     Ok(rows)
 }
 
+/// One row of a client's invoice history, for `client show`.
+#[derive(Debug, Clone)]
+pub struct ClientInvoiceRow {
+    pub number: i64,
+    pub status: String,
+    pub issue_date: String,
+    pub due_date: Option<String>,
+    pub total: f64,
+    pub paid: f64,
+}
+
+/// A client plus everything `client show` prints, in one round trip.
+#[derive(Debug, Clone)]
+pub struct ClientSummary {
+    pub client: Client,
+    /// Newest invoice number first.
+    pub invoices: Vec<ClientInvoiceRow>,
+    /// Open invoices only, so a paid or voided one contributes nothing.
+    pub outstanding: f64,
+}
+
+pub fn client_summary(conn: &Connection, id: i64) -> Result<ClientSummary> {
+    let client = get_client(conn, id)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT i.number, i.status, i.issue_date, i.due_date, i.total,
+                COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                          WHERE p.invoice_id = i.id), 0)
+         FROM invoices i WHERE i.client_id = ?1 ORDER BY i.number DESC",
+    )?;
+    let invoices = stmt
+        .query_map([id], |r| {
+            Ok(ClientInvoiceRow {
+                number: r.get(0)?,
+                status: r.get(1)?,
+                issue_date: r.get(2)?,
+                due_date: r.get(3)?,
+                total: r.get(4)?,
+                paid: r.get(5)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // The same open-status filter `ar_aging` uses, clamped per row so an
+    // overpayment on one invoice cannot pay down another's balance.
+    let outstanding = invoices
+        .iter()
+        .filter(|i| matches!(i.status.as_str(), "sent" | "partial" | "overdue"))
+        .map(|i| (i.total - i.paid).max(0.0))
+        .sum();
+
+    Ok(ClientSummary {
+        client,
+        invoices,
+        outstanding,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +319,91 @@ mod tests {
         assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
         assert_eq!(err.to_string(), "Name is required");
         assert_eq!(get_client(&conn, id).unwrap().name, "Acme Co");
+    }
+
+    /// One invoice for `client_id` at `total`, left as a draft.
+    fn seed_invoice(conn: &Connection, client_id: i64, issue_date: &str, total: f64) -> i64 {
+        let items = vec![crate::invoicing::invoices::NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: total,
+        }];
+        crate::invoicing::invoices::create_invoice(
+            conn, client_id, issue_date, None, "USD", &items, None, None,
+        )
+        .unwrap()
+    }
+
+    fn publish(conn: &Connection, invoice_id: i64, on: &str) {
+        crate::invoicing::invoices::mark_published(conn, invoice_id, on).unwrap();
+    }
+
+    #[test]
+    fn summary_lists_a_clients_invoices_newest_first() {
+        let (_d, conn) = test_conn();
+        let id = seed_client(&conn);
+        seed_invoice(&conn, id, "2026-06-01", 100.0);
+        seed_invoice(&conn, id, "2026-07-01", 200.0);
+        seed_invoice(&conn, id, "2026-08-01", 300.0);
+
+        let summary = client_summary(&conn, id).unwrap();
+        let numbers: Vec<i64> = summary.invoices.iter().map(|i| i.number).collect();
+        assert_eq!(numbers, vec![1250, 1249, 1248]);
+        assert_eq!(summary.client.name, "Acme Co");
+    }
+
+    #[test]
+    fn summary_outstanding_counts_only_open_invoices() {
+        let (_d, conn) = test_conn();
+        let id = seed_client(&conn);
+
+        let open = seed_invoice(&conn, id, "2026-06-01", 100.0);
+        publish(&conn, open, "2026-06-01");
+        crate::invoicing::invoices::record_payment(&conn, open, 30.0, "2026-06-10", "ach", None)
+            .unwrap();
+
+        let settled = seed_invoice(&conn, id, "2026-07-01", 200.0);
+        publish(&conn, settled, "2026-07-01");
+        crate::invoicing::invoices::record_payment(
+            &conn,
+            settled,
+            200.0,
+            "2026-07-10",
+            "ach",
+            None,
+        )
+        .unwrap();
+
+        let cancelled = seed_invoice(&conn, id, "2026-08-01", 500.0);
+        publish(&conn, cancelled, "2026-08-01");
+        conn.execute(
+            "UPDATE invoices SET voided_at = '2026-08-02' WHERE id = ?1",
+            [cancelled],
+        )
+        .unwrap();
+        crate::invoicing::invoices::refresh_status(&conn, cancelled, "2026-08-02").unwrap();
+
+        let summary = client_summary(&conn, id).unwrap();
+        assert_eq!(summary.outstanding, 70.0);
+        assert_eq!(summary.invoices.len(), 3);
+    }
+
+    #[test]
+    fn summary_for_a_client_with_no_invoices_is_empty_not_an_error() {
+        let (_d, conn) = test_conn();
+        let id = seed_client(&conn);
+
+        let summary = client_summary(&conn, id).unwrap();
+        assert!(summary.invoices.is_empty());
+        assert_eq!(summary.outstanding, 0.0);
+    }
+
+    #[test]
+    fn summary_for_a_missing_client_is_not_found() {
+        let (_d, conn) = test_conn();
+        let err = client_summary(&conn, 99).map(|_| ()).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Client not found: id 99");
     }
 
     #[test]
