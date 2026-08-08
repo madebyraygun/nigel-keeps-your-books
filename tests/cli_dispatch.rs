@@ -908,6 +908,48 @@ fn invoice_preview_without_the_pdf_feature_still_writes_html_and_says_why() {
 }
 
 #[test]
+fn invoice_aging_prints_bucket_labels() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "aging"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("current")
+                .and(predicate::str::contains("1-30"))
+                .and(predicate::str::contains("90+"))
+                .and(predicate::str::contains("Total Outstanding")),
+        );
+}
+
+#[test]
+fn report_aging_text_export_writes_a_file() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    let output_path = env.home.path().join("aging.txt");
+    env.cmd()
+        .args([
+            "report",
+            "aging",
+            "--mode",
+            "export",
+            "--format",
+            "text",
+            "--output",
+            &output_path.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote"));
+
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    assert!(content.contains("A/R Aging"), "got: {content}");
+}
+
+#[test]
 fn invoice_new_with_an_unknown_client_reports_not_found() {
     let env = TestEnv::new();
     env.cmd()

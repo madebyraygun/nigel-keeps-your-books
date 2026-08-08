@@ -9,8 +9,8 @@ use crate::error::{NigelError, Result};
 use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
-    ar_aging, create_invoice, ensure_voidable, get_invoice, get_invoice_by_number, line_items,
-    paid_amount, record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
+    create_invoice, ensure_voidable, get_invoice, get_invoice_by_number, line_items, paid_amount,
+    record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
@@ -450,11 +450,7 @@ pub fn pay(number: i64, amount: Option<f64>, date: &str, method: &str) -> Result
 }
 
 pub fn aging(today: &str) -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    println!("A/R aging as of {today}");
-    for bucket in ar_aging(&conn, today)? {
-        println!("{:>8}: {:.2}", bucket.label, bucket.total);
-    }
+    println!("{}", crate::cli::report::text::aging(today)?);
     Ok(())
 }
 
