@@ -15,6 +15,7 @@ pub mod import;
 pub mod import_manager;
 pub mod init;
 pub mod invoice;
+pub mod invoice_manager;
 pub mod load;
 pub mod load_manager;
 pub mod onboarding;
