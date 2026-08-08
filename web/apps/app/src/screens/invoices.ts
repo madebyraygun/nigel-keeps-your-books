@@ -213,7 +213,18 @@ export class NigelInvoicesScreen extends SignalWatcher(LitElement) {
   @state() private nextNumber: number | null = null;
 
   @state() private loading = false;
+  /** A load that failed: there is nothing to show, so the whole view is it. */
   @state() private error: string | null = null;
+  /**
+   * A refused action on data that loaded fine — a 409 on void, a payment the
+   * server would not take.
+   *
+   * Deliberately not `error`: a guardrail is a normal answer, and rendering it
+   * through the "that did not load" state would blank the invoice the user is
+   * being told something about. It lands in a notice above the detail instead,
+   * which is the manager screens' alert-region rule, one screen over.
+   */
+  @state() private actionError: string | null = null;
   @state() private busy = false;
 
   @state() private form: InvoiceFormValue = EMPTY_INVOICE_FORM;
@@ -259,12 +270,15 @@ export class NigelInvoicesScreen extends SignalWatcher(LitElement) {
     void this.load(key);
   }
 
-  private async load(key: string): Promise<void> {
+  private async load(key: string, keepActionError = false): Promise<void> {
     const seq = (this.loadSeq += 1);
     const view = viewOf(this.params);
     const number = numberOf(this.params);
     this.loading = true;
     this.error = null;
+    // A refetch that a refusal triggered keeps the refusal; a route change
+    // drops it, because it was about the invoice being left behind.
+    if (!keepActionError) this.actionError = null;
 
     try {
       if (view === 'list') {
@@ -325,9 +339,9 @@ export class NigelInvoicesScreen extends SignalWatcher(LitElement) {
   }
 
   /** Refetch whatever the current route shows, after a write. */
-  private async refresh(): Promise<void> {
+  private async refresh(keepActionError = false): Promise<void> {
     this.loadedKey = null;
-    await this.load(this.params.toString());
+    await this.load(this.params.toString(), keepActionError);
   }
 
   private go(changes: Record<string, string | null>): void {
@@ -419,13 +433,22 @@ export class NigelInvoicesScreen extends SignalWatcher(LitElement) {
     this.busy = true;
     try {
       await this.client.voidInvoice(detail.number);
-      this.error = null;
+      this.actionError = null;
       await this.refresh();
     } catch (error) {
-      this.error = invoicingGuardrailMessage(error, 'invoice');
+      // `confirmDialog()` has already resolved and removed itself, so the
+      // refusal lands above the invoice it is about — never in place of it.
+      // The refetch stands because a refusal can mean the view is stale:
+      // `already_void` is somebody else having voided it in another tab.
+      this.actionError = invoicingGuardrailMessage(error, 'invoice');
+      await this.refresh(true);
     } finally {
       this.busy = false;
     }
+  };
+
+  private dismissActionError = (): void => {
+    this.actionError = null;
   };
 
   private openPayment = (): void => {
@@ -633,6 +656,16 @@ export class NigelInvoicesScreen extends SignalWatcher(LitElement) {
 
     return html`
       <a class="back" href=${this.href({ number: null, edit: null })}>← All invoices</a>
+
+      ${this.actionError
+        ? html`<wc-notice-bar
+            variant="danger"
+            data-action-error
+            message=${this.actionError}
+            action-label="Dismiss"
+            @nc-notice-action=${this.dismissActionError}
+          ></wc-notice-bar>`
+        : nothing}
 
       <wc-invoice-summary
         .number=${detail.number}

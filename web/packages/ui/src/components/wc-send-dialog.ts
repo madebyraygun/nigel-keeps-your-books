@@ -233,9 +233,19 @@ export class WcSendDialog extends LitElement {
 
   private handleHide = (event: Event) => {
     if (event.target !== event.currentTarget) return;
+
     // A request in flight is not cancellable — the orchestration is already
-    // running on the server, and closing here would only hide its outcome.
-    if (this.phase === 'sending') return;
+    // running on the server, and there is nowhere but here for its outcome to
+    // land. `wa-hide` is a *request* to close, and `requestClose` honours it
+    // unless it is prevented, so returning early would let Escape, the
+    // backdrop or the built-in close button hide the dialog while `this.open`
+    // stayed true. The `?open` binding would then see no change, never reopen
+    // it, and the send would finish into a dialog nobody can see.
+    if (this.phase === 'sending') {
+      event.preventDefault();
+      return;
+    }
+
     if (this.open) this.emit('nc-send-close');
   };
 

@@ -10,7 +10,6 @@ import {
   invoiceListParams,
   invoicePatch,
   invoiceTableRows,
-  isEmptyPatch,
   newClientRequest,
   newInvoiceRequest,
   payRequest,
@@ -160,7 +159,6 @@ describe('newInvoiceRequest', () => {
 describe('invoiceFormFrom', () => {
   it('round-trips an invoice into the editor and back with no patch', () => {
     expect(invoicePatch(DETAIL, invoiceFormFrom(DETAIL))).toEqual({});
-    expect(isEmptyPatch(invoicePatch(DETAIL, invoiceFormFrom(DETAIL)))).toBe(true);
   });
 
   it('renders an absent due date, note and term as empty fields', () => {

@@ -415,7 +415,9 @@ describe('nigel-invoices-screen', () => {
     expect(fake.calls).toContain('voidInvoice:1252');
   });
 
-  it('renders a refused void in our own words, from the reason code', async () => {
+  it('renders a refused void beside the invoice, not in place of it', async () => {
+    // A guardrail is a normal answer. Routing it through the "that did not
+    // load" state would blank the very invoice the message is about.
     await answerConfirm(true);
     const fake = client();
     fake.invoiceDetails[1252] = detail({ number: 1252, canVoid: true });
@@ -429,7 +431,64 @@ describe('nigel-invoices-screen', () => {
     button(el, '[data-void]').click();
     await settle(el);
 
-    expect(el.shadowRoot?.textContent).toContain('$2,000.00');
+    const notice = el.shadowRoot?.querySelector('[data-action-error]');
+    expect(notice?.getAttribute('message')).toContain('$2,000.00');
+    expect(notice?.getAttribute('message')).toContain('$3,200.00');
+
+    // The detail is still all there: summary, line items, payments, actions.
+    expect(el.shadowRoot?.querySelector('wc-invoice-summary')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('wc-line-items')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('wc-payment-list')).toBeTruthy();
+    expect(button(el, '[data-void]')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('wc-empty-state')).toBeNull();
+  });
+
+  it('dismisses a refusal without reloading the invoice', async () => {
+    await answerConfirm(true);
+    const fake = client();
+    fake.invoiceDetails[1252] = detail({ number: 1252, canVoid: true });
+    fake.voidInvoiceError = conflictError('has_payments', { paid: 2000, total: 3200 });
+    const { el } = await mount('number=1252', fake);
+
+    button(el, '[data-void]').click();
+    await settle(el);
+
+    el.shadowRoot
+      ?.querySelector('[data-action-error]')
+      ?.dispatchEvent(new CustomEvent('nc-notice-action', { bubbles: true, composed: true }));
+    await settle(el);
+
+    expect(el.shadowRoot?.querySelector('[data-action-error]')).toBeNull();
+    expect(el.shadowRoot?.querySelector('wc-invoice-summary')).toBeTruthy();
+  });
+
+  it('drops a refusal when the route moves to another invoice', async () => {
+    await answerConfirm(true);
+    const fake = client();
+    fake.invoiceDetails[1252] = detail({ number: 1252, canVoid: true });
+    fake.voidInvoiceError = conflictError('has_payments', { paid: 2000, total: 3200 });
+    const { el, go } = await mount('number=1252', fake);
+
+    button(el, '[data-void]').click();
+    await settle(el);
+    expect(el.shadowRoot?.querySelector('[data-action-error]')).toBeTruthy();
+
+    await go('number=1250');
+    expect(el.shadowRoot?.querySelector('[data-action-error]')).toBeNull();
+  });
+
+  it('keeps a failed load in the full-screen state, where there is nothing to show', async () => {
+    const fake = client();
+    fake.invoiceError = new ApiError({
+      code: 'internal',
+      rawCode: 'internal',
+      message: 'Could not read that invoice',
+      status: 500,
+    });
+    const { el } = await mount('number=1250', fake);
+
+    expect(el.shadowRoot?.querySelector('wc-empty-state')).toBeTruthy();
+    expect(el.shadowRoot?.querySelector('wc-invoice-summary')).toBeNull();
   });
 
   it('sends only after the confirmation dialog resolves', async () => {

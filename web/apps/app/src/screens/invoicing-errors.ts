@@ -185,6 +185,12 @@ export function sendFailureMessage(error: unknown, number: number): SendFailureV
   const details = sendDetailsOf(error);
   const message = error instanceof ApiError ? error.message : String(error);
 
+  // A 501 is this build having no `pdf` feature: the render step will refuse
+  // identically every time, and the fix is a different binary rather than
+  // another attempt. It belongs with the pre-flight refusals below, not with
+  // the outages.
+  const featureMissing = error instanceof ApiError && error.status === 501;
+
   // The pre-flight refusals: same request, same answer, so no Try again.
   const conflict = conflictDetailsOf(error);
   if (conflict?.reason === 'send_not_configured') {
@@ -210,7 +216,7 @@ export function sendFailureMessage(error: unknown, number: number): SendFailureV
     return {
       headline: 'The invoice could not be sent.',
       message,
-      retryable: details?.emailSent !== true,
+      retryable: details?.emailSent !== true && !featureMissing,
     };
   }
 
@@ -222,9 +228,11 @@ export function sendFailureMessage(error: unknown, number: number): SendFailureV
     message,
     note: emailSent
       ? `The invoice was emailed but Nigel could not record it. Run \`nigel invoice show ${number}\` to check before sending it again.`
-      : `No email was sent${
-          details.invoiceStatus ? `, and invoice #${number} is still a ${details.invoiceStatus}` : ''
-        }.`,
-    retryable: !emailSent,
+      : featureMissing
+        ? `No email was sent. This build of Nigel cannot render a PDF, so no invoice can be sent from it.`
+        : `No email was sent${
+            details.invoiceStatus ? `, and invoice #${number} is still a ${details.invoiceStatus}` : ''
+          }.`,
+    retryable: !emailSent && !featureMissing,
   };
 }

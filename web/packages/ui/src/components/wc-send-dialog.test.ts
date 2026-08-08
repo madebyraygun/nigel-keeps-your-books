@@ -146,6 +146,11 @@ describe('wc-send-dialog', () => {
   });
 
   it('stays open across its own request and cannot be dismissed mid-flight', async () => {
+    // `wa-hide` is a request, not a notification: `requestClose` closes unless
+    // the event is prevented. Escape, the backdrop and the built-in close
+    // button all go through it, so declining to answer would hide the dialog
+    // while `open` stayed true — and the send would finish into a dialog the
+    // `?open` binding never reopens.
     const el = await mount({ phase: 'sending', steps: STEPS });
     let closes = 0;
     el.addEventListener('nc-send-close', () => (closes += 1));
@@ -156,8 +161,25 @@ describe('wc-send-dialog', () => {
     );
 
     const dialog = el.shadowRoot?.querySelector('wa-dialog');
-    dialog?.dispatchEvent(new CustomEvent('wa-hide', { bubbles: false }));
+    const hide = new CustomEvent('wa-hide', { bubbles: false, cancelable: true });
+    dialog?.dispatchEvent(hide);
+
+    expect(hide.defaultPrevented, 'the dismissal must be refused, not ignored').toBe(true);
     expect(closes).toBe(0);
+    expect(el.open).toBe(true);
+  });
+
+  it('lets a finished send be dismissed by Escape or the backdrop', async () => {
+    const el = await mount({ phase: 'failed', steps: STEPS });
+    let closes = 0;
+    el.addEventListener('nc-send-close', () => (closes += 1));
+
+    const dialog = el.shadowRoot?.querySelector('wa-dialog');
+    const hide = new CustomEvent('wa-hide', { bubbles: false, cancelable: true });
+    dialog?.dispatchEvent(hide);
+
+    expect(hide.defaultPrevented).toBe(false);
+    expect(closes).toBe(1);
   });
 
   it('closes on Close, which is the only thing that resolves it', async () => {

@@ -208,6 +208,24 @@ describe('sendFailureMessage', () => {
     }
   });
 
+  it('offers no retry when this build cannot render a PDF', () => {
+    // A 501 at the render step is the `pdf` feature being absent: the same
+    // request will refuse identically, and the fix is a different binary.
+    const view = sendFailureMessage(
+      new ApiError({
+        code: 'feature_disabled',
+        rawCode: 'feature_disabled',
+        message: 'PDF export is not available in this build.',
+        status: 501,
+        details: { reason: 'send_failed', step: 'render', emailSent: false },
+      }),
+      1251,
+    );
+    expect(view.retryable).toBe(false);
+    expect(view.note).toContain('cannot render a PDF');
+    expect(view.message).toBe('PDF export is not available in this build.');
+  });
+
   it('renders send_not_configured as key names with a settings link', () => {
     // Never the server's sentence, which names settings.json and NIGEL_ env
     // vars — good advice in a terminal, useless beside a settings screen.

@@ -1,8 +1,6 @@
 import {
   EMPTY_INVOICE_FORM,
   invoiceFormItems,
-  isBlankLineItem,
-  lineItemsSubtotal,
   parseLineNumber,
   validateInvoiceForm,
   type InvoiceFormValue,
@@ -170,11 +168,6 @@ export function invoicePatch(
   return patch;
 }
 
-/** Whether a patch would be refused as empty before it is sent. */
-export function isEmptyPatch(patch: object): boolean {
-  return Object.keys(patch).length === 0;
-}
-
 /** The payment request. An empty amount means the whole outstanding balance. */
 export function payRequest(value: PaymentFormValue): PayInvoiceRequest {
   const amount = value.amount.trim() === '' ? null : parseLineNumber(value.amount);
@@ -297,14 +290,4 @@ export function detailLineItems(detail: InvoiceDetail): LineItemValue[] {
     quantity: item.quantity.toFixed(2),
     unitAmount: String(item.unitAmount),
   }));
-}
-
-/** Whether a form has any row at all worth sending. */
-export function hasSendableItems(value: InvoiceFormValue): boolean {
-  return value.items.some((item) => !isBlankLineItem(item));
-}
-
-/** The subtotal the editor shows, for a screen that wants it in a heading. */
-export function formSubtotal(value: InvoiceFormValue): number {
-  return lineItemsSubtotal(invoiceFormItems(value));
 }

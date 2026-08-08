@@ -216,6 +216,14 @@ describe('invoicing figure parity with the CLI', () => {
 
     const el = await mount('nigel-clients-screen', client);
 
+    // Prove the screen actually rendered the fixture first: zero figures on a
+    // screen that never painted is not the same claim at all.
+    const rows = el.shadowRoot
+      ?.querySelector('wc-manager-table')
+      ?.shadowRoot?.querySelectorAll('tr[data-row]');
+    expect(rows?.length, 'the clients screen rendered no rows').toBe(clients.length);
+    expect(el.shadowRoot?.textContent).toBeDefined();
+
     const fromText = moneyTokens(viewText('clients'));
     expect(fromText).toEqual([]);
     expect(screenMoney(el)).toEqual([]);

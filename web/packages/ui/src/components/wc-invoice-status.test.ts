@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { colorCss, colorDarkCss } from '@nigel/theme';
 import './wc-invoice-status.js';
 import {
   INVOICE_STATUS_WORDS,
-  type WcInvoiceStatus,
+  WcInvoiceStatus,
 } from './wc-invoice-status.js';
 import { describePreviewA11y } from '../../preview/axe-suite.js';
 import preview from './wc-invoice-status.preview.js';
@@ -14,6 +15,43 @@ async function mount(status: string): Promise<WcInvoiceStatus> {
   await el.updateComplete;
   return el;
 }
+
+/** Every colour custom property the chip reads, in source order. */
+function colorTokensUsed(): string[] {
+  const css = [WcInvoiceStatus.styles].flat().map(String).join('\n');
+  return [...css.matchAll(/(?:^|\s)color:\s*var\(([^)]*)\)/gm)].map((match) =>
+    match[1].trim(),
+  );
+}
+
+describe('the status chip’s colours', () => {
+  const theme = `${colorCss}\n${colorDarkCss}`;
+
+  it('names only tokens @nigel/theme defines, in both schemes', () => {
+    // The bug this catches: `--nc-color-warning` does not exist, so its
+    // literal fallback always won — a colour the theme's contrast test could
+    // not see and never held to AA.
+    const used = colorTokensUsed();
+    expect(used.length).toBeGreaterThan(0);
+
+    for (const token of used) {
+      expect(theme, `${token} is not defined by @nigel/theme`).toContain(`${token}:`);
+      expect(colorDarkCss.toString(), `${token} has no dark value`).toContain(
+        `${token}:`,
+      );
+    }
+  });
+
+  it('carries no literal fallback that could win over a token', () => {
+    // A fallback only ever renders when the token is missing, which is exactly
+    // the case the contrast test cannot reach.
+    expect(colorTokensUsed().filter((token) => token.includes(','))).toEqual([]);
+  });
+
+  it('reads partial as flagged rather than inventing a warning colour', () => {
+    expect(colorTokensUsed()).toContain('--nc-color-flagged');
+  });
+});
 
 describe('wc-invoice-status', () => {
   afterEach(() => {

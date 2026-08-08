@@ -65,22 +65,28 @@ export class WcInvoiceStatus extends LitElement {
     }
 
     .chip[data-status='sent'] {
-      color: var(--wa-color-brand, #2f6feb);
+      color: var(--wa-color-brand);
       border-color: currentColor;
     }
 
+    /*
+     * Partial reads as the flagged token rather than a warning colour of its
+     * own. Every value here must be a token @nigel/theme defines in both
+     * schemes and holds to WCAG AA — a literal fallback that can actually win
+     * is a colour the contrast test never sees.
+     */
     .chip[data-status='partial'] {
-      color: var(--nc-color-warning, #8a5300);
+      color: var(--nc-color-flagged);
       border-color: currentColor;
     }
 
     .chip[data-status='paid'] {
-      color: var(--nc-color-income, #1a7f5a);
+      color: var(--nc-color-income);
       border-color: currentColor;
     }
 
     .chip[data-status='overdue'] {
-      color: var(--nc-color-expense, #b3261e);
+      color: var(--nc-color-expense);
       border-color: currentColor;
     }
 
