@@ -15,7 +15,9 @@ use crate::invoicing::invoices::{
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
 use crate::invoicing::render::render_invoice;
-use crate::invoicing::render_html::{load_template, Branding, PayButton};
+use crate::invoicing::render_html::{
+    load_template, template_path, Branding, PayButton, DEFAULT_TEMPLATE,
+};
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
 use crate::invoicing::sync::sync_all;
@@ -457,6 +459,43 @@ pub fn pay(number: i64, amount: Option<f64>, date: &str, method: &str) -> Result
 
 pub fn aging(today: &str) -> Result<()> {
     println!("{}", crate::cli::report::text::aging(today)?);
+    Ok(())
+}
+
+pub fn template_export(output: Option<&str>, force: bool) -> Result<()> {
+    let destination = match output {
+        Some(path) => PathBuf::from(crate::settings::shellexpand_path(path)),
+        None => template_path(&get_data_dir()),
+    };
+
+    if destination.exists() && !force {
+        return Err(NigelError::Invalid(format!(
+            "{} already exists. Pass --force to overwrite it.",
+            destination.display()
+        )));
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&destination, DEFAULT_TEMPLATE)?;
+
+    println!("Wrote invoice template to {}", destination.display());
+    println!(
+        "Edit it, then check it with `nigel invoice preview <number>` — see docs/invoicing.md."
+    );
+    Ok(())
+}
+
+pub fn template_show_path() -> Result<()> {
+    let path = template_path(&get_data_dir());
+    println!("{}", path.display());
+
+    if !path.exists() {
+        println!("No custom template — the built-in one is in use.");
+        return Ok(());
+    }
+    load_template(&get_data_dir())?;
+    println!("Custom template in effect.");
     Ok(())
 }
 

@@ -2,7 +2,7 @@ use clap::{CommandFactory, Parser};
 
 use nigel::cli::{
     self, AccountsCommands, BrowseCommands, CategoriesCommands, Cli, ClientCommands, Commands,
-    InvoiceCommands, PasswordCommand, RulesCommands,
+    InvoiceCommands, InvoiceTemplateCommands, PasswordCommand, RulesCommands,
 };
 use nigel::error;
 
@@ -58,15 +58,23 @@ fn main() {
 
 fn dispatch(command: Commands) -> error::Result<()> {
     // Commands that need an already-initialized database (skip for init/demo which create
-    // new DBs, load which switches directories, and update which needs no DB)
+    // new DBs, load which switches directories, update which needs no DB, and
+    // `invoice template`, which only reads and writes a file in the data directory)
     let needs_existing_db = !matches!(
         command,
-        Commands::Init { .. } | Commands::Demo | Commands::Load { .. } | Commands::Update
+        Commands::Init { .. }
+            | Commands::Demo
+            | Commands::Load { .. }
+            | Commands::Update
+            | Commands::Invoice {
+                command: InvoiceCommands::Template { .. }
+            }
     );
 
     // Commands that need the encryption password up front. `password` does its own
     // prompting as part of set/change/remove, `completions` never touches the DB, and
-    // `serve` has no stdin to prompt on — its clients unlock over HTTP instead.
+    // `serve` has no stdin to prompt on — its clients unlock over HTTP instead, and
+    // `invoice template` never opens the database.
     let needs_password = !matches!(
         command,
         Commands::Init { .. }
@@ -75,6 +83,9 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Completions { .. }
             | Commands::Serve { .. }
             | Commands::Update
+            | Commands::Invoice {
+                command: InvoiceCommands::Template { .. }
+            }
     );
 
     let db_path = nigel::settings::get_data_dir().join("nigel.db");
@@ -120,7 +131,9 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Restore { .. }
             | Commands::Serve { .. }
             | Commands::Invoice {
-                command: InvoiceCommands::Sync | InvoiceCommands::Preview { .. }
+                command: InvoiceCommands::Sync
+                    | InvoiceCommands::Preview { .. }
+                    | InvoiceCommands::Template { .. }
             }
     ) {
         sync_invoice_payments();
@@ -235,6 +248,12 @@ fn dispatch(command: Commands) -> error::Result<()> {
             } => cli::invoice::pay(number, amount, &date, &method),
             InvoiceCommands::Aging => cli::invoice::aging(&cli::today()),
             InvoiceCommands::Import { db } => cli::invoice::import(&db),
+            InvoiceCommands::Template { command } => match command {
+                InvoiceTemplateCommands::Export { output, force } => {
+                    cli::invoice::template_export(output.as_deref(), force)
+                }
+                InvoiceTemplateCommands::Path => cli::invoice::template_show_path(),
+            },
         },
         Commands::Import {
             file,

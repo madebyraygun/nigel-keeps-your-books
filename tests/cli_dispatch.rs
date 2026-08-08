@@ -921,6 +921,113 @@ fn write_template(env: &TestEnv, source: &str) {
 }
 
 #[test]
+fn template_export_writes_the_default_and_reports_where() {
+    // No `nigel init`: exporting a template to edit must work on a machine that
+    // has never opened the books.
+    let env = TestEnv::new();
+    let expected = env
+        .home
+        .path()
+        .join("Documents/nigel/templates/invoice.html");
+
+    env.cmd()
+        .args(["invoice", "template", "export"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(expected.display().to_string()));
+
+    assert_eq!(
+        std::fs::read_to_string(&expected).expect("exported template missing"),
+        nigel::invoicing::render_html::DEFAULT_TEMPLATE
+    );
+}
+
+#[test]
+fn template_export_refuses_to_clobber_without_force() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "template", "export"])
+        .assert()
+        .success();
+    std::fs::write(template_file(&env), "MINE").unwrap();
+
+    env.cmd()
+        .args(["invoice", "template", "export"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+    assert_eq!(
+        std::fs::read_to_string(template_file(&env)).unwrap(),
+        "MINE"
+    );
+
+    env.cmd()
+        .args(["invoice", "template", "export", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(template_file(&env)).unwrap(),
+        nigel::invoicing::render_html::DEFAULT_TEMPLATE
+    );
+}
+
+#[test]
+fn template_export_honors_output() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    let out = env.home.path().join("scratch/custom.html");
+
+    env.cmd()
+        .args([
+            "invoice",
+            "template",
+            "export",
+            "--output",
+            &out.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(out.display().to_string()));
+
+    assert!(out.exists());
+    assert!(!template_file(&env).exists());
+}
+
+#[test]
+fn template_path_reports_absent_then_present_then_broken() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "template", "path"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(template_file(&env).display().to_string())
+                .and(predicate::str::contains("No custom template")),
+        );
+
+    write_template(&env, "<p>{{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}}</p>");
+    env.cmd()
+        .args(["invoice", "template", "path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Custom template in effect"));
+
+    write_template(
+        &env,
+        "<p>{{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}} {{TOTL}}</p>",
+    );
+    env.cmd()
+        .args(["invoice", "template", "path"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("{{TOTL}}"));
+}
+
+#[test]
 fn invoice_preview_renders_a_custom_template() {
     let env = TestEnv::new();
     init_with_client_and_invoice(&env);
