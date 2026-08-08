@@ -70,9 +70,11 @@ fn void_summary(invoice: &Invoice, client_name: &str) -> String {
     )
 }
 
+/// The data layer already answers an absent invoice as `NotFound`; this only
+/// rewrites the sentence, because a terminal can be told what to run next.
 fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
     get_invoice_by_number(conn, number).map_err(|e| match e {
-        NigelError::Db(rusqlite::Error::QueryReturnedNoRows) => NigelError::NotFound(format!(
+        NigelError::NotFound(_) => NigelError::NotFound(format!(
             "No invoice #{number}. Run `nigel invoice list` to see invoice numbers."
         )),
         other => other,

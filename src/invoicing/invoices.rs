@@ -134,12 +134,21 @@ pub fn get_invoice(conn: &Connection, id: i64) -> Result<Invoice> {
     })
 }
 
+/// An absent row is `NotFound`, exactly as it is for [`get_invoice`]. Leaving it
+/// as the raw rusqlite error made "no such invoice" a 500 over HTTP, and every
+/// number-keyed caller had to remember to narrow it by hand.
 pub fn get_invoice_by_number(conn: &Connection, number: i64) -> Result<Invoice> {
-    Ok(conn.query_row(
+    conn.query_row(
         &format!("SELECT {INVOICE_COLS} FROM invoices WHERE number = ?1"),
         [number],
         row_to_invoice,
-    )?)
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("Invoice not found: #{number}"))
+        }
+        other => NigelError::Db(other),
+    })
 }
 
 pub fn paid_amount(conn: &Connection, invoice_id: i64) -> Result<f64> {
@@ -1793,6 +1802,17 @@ mod tests {
         let err = void_invoice(&conn, 99, "2026-08-06").unwrap_err();
         assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
         assert_eq!(err.to_string(), "Invoice not found: id 99");
+    }
+
+    /// The by-number lookup answers an absent invoice the way its by-id sibling
+    /// does. Left as a raw rusqlite error it was a 500 over HTTP, and every
+    /// number-keyed caller had to remember to narrow it.
+    #[test]
+    fn an_unknown_invoice_number_is_not_found_not_a_database_error() {
+        let (_d, conn) = test_conn();
+        let err = get_invoice_by_number(&conn, 4242).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Invoice not found: #4242");
     }
 
     /// Void by hand, the way migration v5 leaves a voided row.
