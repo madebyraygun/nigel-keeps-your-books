@@ -112,6 +112,27 @@ const MIGRATIONS: &[Migration] = &[
             Ok(())
         },
     },
+    Migration {
+        version: 5,
+        description: "add voided_at to invoices so void is a derived status like sent",
+        up: |conn| {
+            // SQLite has no ADD COLUMN IF NOT EXISTS; the probe is what makes a
+            // replay of this migration as harmless as v4's IF NOT EXISTS tables.
+            let has_column: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('invoices') WHERE name = 'voided_at'",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_column {
+                conn.execute_batch("ALTER TABLE invoices ADD COLUMN voided_at TEXT")?;
+            }
+            conn.execute_batch(
+                "UPDATE invoices SET voided_at = COALESCE(published_at, issue_date)
+                     WHERE status = 'void' AND voided_at IS NULL",
+            )?;
+            Ok(())
+        },
+    },
 ];
 
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
@@ -273,6 +294,51 @@ mod invoicing_migration_tests {
                 .unwrap();
             assert_eq!(n, 1, "missing table {table}");
         }
+    }
+
+    #[test]
+    fn invoices_carry_a_voided_at_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = get_connection(&dir.path().join("t.db")).unwrap();
+        init_db(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+
+        let mut stmt = conn.prepare("PRAGMA table_info(invoices)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(cols.iter().any(|c| c == "voided_at"), "got: {cols:?}");
+    }
+
+    #[test]
+    fn a_hand_set_void_status_is_backfilled_with_a_voided_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = get_connection(&dir.path().join("t.db")).unwrap();
+        conn.execute_batch(crate::db::SCHEMA).unwrap();
+        let up_to_v4 = &crate::migrations::MIGRATIONS[..4];
+        crate::migrations::apply_migrations(&conn, up_to_v4).unwrap();
+
+        conn.execute("INSERT INTO clients (name) VALUES ('Acme')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO invoices (number, client_id, issue_date, status, token)
+             VALUES (1248, 1, '2026-08-04', 'void', 'tok')",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let voided_at: Option<String> = conn
+            .query_row(
+                "SELECT voided_at FROM invoices WHERE number = 1248",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(voided_at.as_deref(), Some("2026-08-04"));
     }
 }
 

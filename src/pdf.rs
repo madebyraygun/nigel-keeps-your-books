@@ -899,6 +899,7 @@ mod invoice_pdf_tests {
             stripe_payment_link_id: None,
             stripe_payment_link_url: None,
             published_at: None,
+            voided_at: None,
         };
         let client = Client {
             id: 1,
@@ -940,6 +941,7 @@ mod invoice_pdf_tests {
             stripe_payment_link_id: None,
             stripe_payment_link_url: None,
             published_at: None,
+            voided_at: None,
         };
         let client = Client {
             id: 1,

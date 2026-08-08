@@ -109,6 +109,7 @@ mod tests {
             stripe_payment_link_id: None,
             stripe_payment_link_url: None,
             published_at: Some("2026-08-04".into()),
+            voided_at: None,
         };
         let client = Client {
             id: 1,

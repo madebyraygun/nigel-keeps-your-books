@@ -4,12 +4,14 @@ use rand::Rng;
 use rusqlite::Connection;
 
 use crate::db::{get_metadata, set_metadata};
-use crate::error::Result;
+use crate::error::{NigelError, Result};
+use crate::invoicing::clients::ensure_client_exists;
 use crate::models::{Invoice, InvoiceLineItem, InvoiceStatus};
 
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
 const NEXT_NUMBER_DEFAULT: i64 = 1248;
 
+#[derive(Debug, Clone)]
 pub struct NewLineItem {
     pub description: String,
     pub quantity: f64,
@@ -42,6 +44,12 @@ pub fn create_invoice(
     notes: Option<&str>,
     terms: Option<&str>,
 ) -> Result<i64> {
+    ensure_client_exists(conn, client_id)?;
+    validate_date(issue_date, "issue")?;
+    if let Some(due) = due_date {
+        validate_date(due, "due")?;
+    }
+    let currency = validate_currency(currency)?;
     let tx = conn.unchecked_transaction()?;
 
     let number = next_number(&tx)?;
@@ -100,19 +108,26 @@ fn row_to_invoice(r: &rusqlite::Row) -> rusqlite::Result<Invoice> {
         stripe_payment_link_id: r.get(13)?,
         stripe_payment_link_url: r.get(14)?,
         published_at: r.get(15)?,
+        voided_at: r.get(16)?,
     })
 }
 
 const INVOICE_COLS: &str = "id, number, client_id, issue_date, due_date, status, currency,
     subtotal, tax, total, notes, terms, token, stripe_payment_link_id,
-    stripe_payment_link_url, published_at";
+    stripe_payment_link_url, published_at, voided_at";
 
 pub fn get_invoice(conn: &Connection, id: i64) -> Result<Invoice> {
-    Ok(conn.query_row(
+    conn.query_row(
         &format!("SELECT {INVOICE_COLS} FROM invoices WHERE id = ?1"),
         [id],
         row_to_invoice,
-    )?)
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("Invoice not found: id {id}"))
+        }
+        other => NigelError::Db(other),
+    })
 }
 
 pub fn get_invoice_by_number(conn: &Connection, number: i64) -> Result<Invoice> {
@@ -163,8 +178,13 @@ pub fn record_payment(
 
 pub fn refresh_status(conn: &Connection, invoice_id: i64, today: &str) -> Result<String> {
     let inv = get_invoice(conn, invoice_id)?;
-    if inv.status == InvoiceStatus::Void.as_str() {
-        return Ok(inv.status);
+    if inv.voided_at.is_some() {
+        let void = InvoiceStatus::Void.as_str();
+        conn.execute(
+            "UPDATE invoices SET status = ?1 WHERE id = ?2",
+            rusqlite::params![void, invoice_id],
+        )?;
+        return Ok(void.to_string());
     }
     let paid = paid_amount(conn, invoice_id)?;
     let published = inv.published_at.is_some();
@@ -197,6 +217,256 @@ fn is_overdue(due_date: Option<&str>, today: &str) -> bool {
         Some(d) => today > d,
         None => false,
     }
+}
+
+/// `YYYY-MM-DD`, or an `Invalid` error naming the field.
+pub fn validate_date(value: &str, what: &str) -> Result<()> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+        NigelError::Invalid(format!(
+            "Invalid {what} date: {value} (expected YYYY-MM-DD)"
+        ))
+    })?;
+    Ok(())
+}
+
+/// Normalizes a 3-letter code to uppercase, or an `Invalid` error.
+pub fn validate_currency(code: &str) -> Result<String> {
+    if code.len() == 3 && code.chars().all(|c| c.is_ascii_alphabetic()) {
+        Ok(code.to_ascii_uppercase())
+    } else {
+        Err(NigelError::Invalid(format!(
+            "Invalid currency: {code} (expected a 3-letter code like USD)"
+        )))
+    }
+}
+
+/// Fields to change on a draft invoice. Same `Option`/`Option<Option<_>>`
+/// convention as `ClientUpdate`. `items: Some(v)` replaces the entire line-item
+/// set; `None` leaves the existing lines alone.
+#[derive(Debug, Default)]
+pub struct InvoiceUpdate {
+    pub issue_date: Option<String>,
+    pub due_date: Option<Option<String>>,
+    pub currency: Option<String>,
+    pub notes: Option<Option<String>>,
+    pub terms: Option<Option<String>>,
+    pub items: Option<Vec<NewLineItem>>,
+}
+
+impl InvoiceUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.issue_date.is_none()
+            && self.due_date.is_none()
+            && self.currency.is_none()
+            && self.notes.is_none()
+            && self.terms.is_none()
+            && self.items.is_none()
+    }
+}
+
+/// Rewrite an invoice's line items at dense positions `0..n-1`, returning the
+/// recomputed `(subtotal, total)`. `tax` is read from the row and left alone.
+fn replace_line_items(
+    conn: &Connection,
+    invoice_id: i64,
+    items: &[NewLineItem],
+) -> Result<(f64, f64)> {
+    conn.execute(
+        "DELETE FROM invoice_line_items WHERE invoice_id = ?1",
+        [invoice_id],
+    )?;
+    for (idx, item) in items.iter().enumerate() {
+        let line_total = item.quantity * item.unit_amount;
+        conn.execute(
+            "INSERT INTO invoice_line_items
+                (invoice_id, description, quantity, unit_amount, line_total, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                invoice_id,
+                item.description,
+                item.quantity,
+                item.unit_amount,
+                line_total,
+                idx as i64
+            ],
+        )?;
+    }
+    let subtotal: f64 = items.iter().map(|i| i.quantity * i.unit_amount).sum();
+    let tax: f64 = conn.query_row(
+        "SELECT tax FROM invoices WHERE id = ?1",
+        [invoice_id],
+        |r| r.get(0),
+    )?;
+    Ok((subtotal, subtotal + tax))
+}
+
+/// Apply a partial update to a draft invoice, guarded by `ensure_editable`.
+pub fn update_invoice(conn: &Connection, invoice_id: i64, update: &InvoiceUpdate) -> Result<()> {
+    let invoice = get_invoice(conn, invoice_id)?;
+    ensure_editable(conn, &invoice)?;
+    if update.is_empty() {
+        return Err(NigelError::Invalid(
+            "Nothing to update — provide at least one flag".to_string(),
+        ));
+    }
+
+    if let Some(ref issue_date) = update.issue_date {
+        validate_date(issue_date, "issue")?;
+    }
+    if let Some(Some(ref due_date)) = update.due_date {
+        validate_date(due_date, "due")?;
+    }
+    let currency = match update.currency {
+        Some(ref code) => Some(validate_currency(code)?),
+        None => None,
+    };
+
+    let tx = conn.unchecked_transaction()?;
+
+    let mut updates = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(ref issue_date) = update.issue_date {
+        params.push(Box::new(issue_date.clone()));
+        updates.push(format!("issue_date = ?{}", params.len()));
+    }
+    if let Some(ref due_date) = update.due_date {
+        params.push(Box::new(due_date.clone()));
+        updates.push(format!("due_date = ?{}", params.len()));
+    }
+    if let Some(ref currency) = currency {
+        params.push(Box::new(currency.clone()));
+        updates.push(format!("currency = ?{}", params.len()));
+    }
+    if let Some(ref notes) = update.notes {
+        params.push(Box::new(notes.clone()));
+        updates.push(format!("notes = ?{}", params.len()));
+    }
+    if let Some(ref terms) = update.terms {
+        params.push(Box::new(terms.clone()));
+        updates.push(format!("terms = ?{}", params.len()));
+    }
+    if !updates.is_empty() {
+        params.push(Box::new(invoice_id));
+        let sql = format!(
+            "UPDATE invoices SET {} WHERE id = ?{}",
+            updates.join(", "),
+            params.len()
+        );
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        tx.execute(&sql, param_refs.as_slice())?;
+    }
+
+    let mut total = invoice.total;
+    if let Some(ref items) = update.items {
+        let (subtotal, new_total) = replace_line_items(&tx, invoice_id, items)?;
+        tx.execute(
+            "UPDATE invoices SET subtotal = ?1, total = ?2 WHERE id = ?3",
+            rusqlite::params![subtotal, new_total, invoice_id],
+        )?;
+        total = new_total;
+    }
+
+    // A Stripe link is priced in the currency and amount it was created with,
+    // so an edit that moves either leaves it pointing at the wrong charge.
+    let money_moved = total != invoice.total
+        || currency
+            .as_deref()
+            .is_some_and(|c| c != invoice.currency.as_str());
+    if money_moved && invoice.stripe_payment_link_id.is_some() {
+        tx.execute(
+            "UPDATE invoices SET stripe_payment_link_id = NULL, stripe_payment_link_url = NULL
+             WHERE id = ?1",
+            [invoice_id],
+        )?;
+    }
+
+    tx.commit()?;
+    let issue_date = update
+        .issue_date
+        .clone()
+        .unwrap_or(invoice.issue_date.clone());
+    refresh_status(conn, invoice_id, &issue_date)?;
+    Ok(())
+}
+
+/// Cancel an invoice, guarded by `ensure_voidable`. Writes `voided_at` and lets
+/// `refresh_status` derive the `void` status from it.
+pub fn void_invoice(conn: &Connection, invoice_id: i64, voided_on: &str) -> Result<()> {
+    let invoice = get_invoice(conn, invoice_id)?;
+    ensure_voidable(conn, &invoice)?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE invoices SET voided_at = ?1 WHERE id = ?2",
+        rusqlite::params![voided_on, invoice_id],
+    )?;
+    refresh_status(&tx, invoice_id, voided_on)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// May this invoice be edited? Draft, not void, and with no recorded payments —
+/// a payment against it means the client has settled against these figures.
+pub fn ensure_editable(conn: &Connection, invoice: &Invoice) -> Result<()> {
+    if invoice.voided_at.is_some() {
+        return Err(NigelError::Conflict {
+            code: "void",
+            message: format!("Invoice #{} is void and cannot be edited.", invoice.number),
+        });
+    }
+    let not_draft = invoice.status != InvoiceStatus::Draft.as_str();
+    // Only a published invoice has "already been sent". `invoice pay` can drive
+    // an unsent draft to `paid`, and that invoice is refused for its payments.
+    if not_draft && invoice.published_at.is_some() {
+        return Err(NigelError::Conflict {
+            code: "not_draft",
+            message: format!(
+                "Invoice #{} has already been sent and cannot be edited. Void it and issue a new one.",
+                invoice.number
+            ),
+        });
+    }
+    let paid = paid_amount(conn, invoice.id)?;
+    if paid > 0.0 {
+        return Err(NigelError::Conflict {
+            code: "has_payments",
+            message: format!(
+                "Invoice #{} has {paid:.2} in recorded payments and cannot be edited.",
+                invoice.number
+            ),
+        });
+    }
+    if not_draft {
+        return Err(NigelError::Conflict {
+            code: "not_draft",
+            message: format!(
+                "Invoice #{} is {} and cannot be edited.",
+                invoice.number, invoice.status
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// May this invoice be voided? Not already void, and with no recorded payments.
+pub fn ensure_voidable(conn: &Connection, invoice: &Invoice) -> Result<()> {
+    if invoice.voided_at.is_some() {
+        return Err(NigelError::Conflict {
+            code: "already_void",
+            message: format!("Invoice #{} is already void.", invoice.number),
+        });
+    }
+    let paid = paid_amount(conn, invoice.id)?;
+    if paid > 0.0 {
+        return Err(NigelError::Conflict {
+            code: "has_payments",
+            message: format!(
+                "Invoice #{} has {paid:.2} in recorded payments and cannot be voided.",
+                invoice.number
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub fn set_payment_link(conn: &Connection, id: i64, link_id: &str, url: &str) -> Result<()> {
@@ -367,6 +637,31 @@ mod tests {
     }
 
     #[test]
+    fn creating_an_invoice_for_an_unknown_client_is_not_found_and_writes_nothing() {
+        let (_d, conn) = test_conn();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 10.0,
+        }];
+
+        let err = create_invoice(&conn, 99, "2026-08-04", None, "USD", &items, None, None)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::NigelError::NotFound(_)),
+            "got: {err:?}"
+        );
+        assert!(err.to_string().contains("id 99"), "got: {err}");
+
+        let invoices: i64 = conn
+            .query_row("SELECT COUNT(*) FROM invoices", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(invoices, 0);
+        assert_eq!(next_number(&conn).unwrap(), 1248);
+    }
+
+    #[test]
     fn failed_create_rolls_back_and_leaves_numbering_usable() {
         let (_d, conn) = test_conn();
         let cid = add_client(&conn, "Acme", None, None, None).unwrap();
@@ -533,6 +828,27 @@ mod tests {
     }
 
     #[test]
+    fn void_is_derived_from_voided_at() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
+        conn.execute(
+            "UPDATE invoices SET voided_at = '2026-08-06' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
+        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
+    }
+
+    #[test]
     fn void_is_never_downgraded() {
         let (_d, conn) = test_conn();
         let cid = add_client(&conn, "Acme", None, None, None).unwrap();
@@ -552,12 +868,574 @@ mod tests {
             None,
         )
         .unwrap();
-        conn.execute("UPDATE invoices SET status='void' WHERE id=?1", [id])
-            .unwrap();
+        conn.execute(
+            "UPDATE invoices SET voided_at='2026-08-06' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
 
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
         record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
         assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    /// One 100.00 draft invoice (number 1248) and its row id.
+    fn seed_draft(conn: &Connection) -> i64 {
+        let cid = add_client(conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        create_invoice(conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap()
+    }
+
+    fn conflict_code(err: &crate::error::NigelError) -> &'static str {
+        match err {
+            crate::error::NigelError::Conflict { code, .. } => code,
+            other => panic!("expected a Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_clean_draft_is_editable_and_voidable() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        assert!(ensure_editable(&conn, &invoice).is_ok());
+        assert!(ensure_voidable(&conn, &invoice).is_ok());
+    }
+
+    #[test]
+    fn a_published_invoice_refuses_edits() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "not_draft");
+        assert!(
+            err.to_string()
+                .contains("has already been sent and cannot be edited"),
+            "got: {err}"
+        );
+        assert!(ensure_voidable(&conn, &invoice).is_ok());
+    }
+
+    #[test]
+    fn a_void_invoice_refuses_edits() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_at(&conn, id, "2026-08-06");
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "void");
+        assert_eq!(
+            err.to_string(),
+            "Invoice #1248 is void and cannot be edited."
+        );
+    }
+
+    #[test]
+    fn a_paid_draft_is_refused_for_its_payments_not_for_being_sent() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        record_payment(&conn, id, 100.0, "2026-08-10", "ach", None).unwrap();
+        let invoice = get_invoice(&conn, id).unwrap();
+        assert_eq!(invoice.status, "paid");
+        assert_eq!(invoice.published_at, None);
+
+        let err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "has_payments");
+        assert!(
+            !err.to_string().contains("already been sent"),
+            "an unsent invoice must not be told it was sent: {err}"
+        );
+    }
+
+    #[test]
+    fn an_invoice_with_payments_refuses_edit_and_void() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        record_payment(&conn, id, 50.0, "2026-08-10", "ach", None).unwrap();
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let edit_err = ensure_editable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&edit_err), "has_payments");
+        assert_eq!(
+            edit_err.to_string(),
+            "Invoice #1248 has 50.00 in recorded payments and cannot be edited."
+        );
+
+        let void_err = ensure_voidable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&void_err), "has_payments");
+        assert_eq!(
+            void_err.to_string(),
+            "Invoice #1248 has 50.00 in recorded payments and cannot be voided."
+        );
+    }
+
+    #[test]
+    fn voiding_a_void_invoice_is_already_void() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_at(&conn, id, "2026-08-06");
+        let invoice = get_invoice(&conn, id).unwrap();
+
+        let err = ensure_voidable(&conn, &invoice).unwrap_err();
+        assert_eq!(conflict_code(&err), "already_void");
+        assert_eq!(err.to_string(), "Invoice #1248 is already void.");
+    }
+
+    #[test]
+    fn editing_the_due_date_leaves_everything_else_alone() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                due_date: Some(Some("2026-09-30".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.due_date.as_deref(), Some("2026-09-30"));
+        assert_eq!(inv.issue_date, "2026-08-04");
+        assert_eq!(inv.total, 100.0);
+        assert_eq!(inv.currency, "USD");
+        assert_eq!(line_items(&conn, id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn clearing_the_due_date_writes_null() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                due_date: Some(Some("2026-09-30".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                due_date: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(get_invoice(&conn, id).unwrap().due_date, None);
+    }
+
+    #[test]
+    fn editing_notes_and_terms_persists_both() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                notes: Some(Some("Thanks".into())),
+                terms: Some(Some("Net 30".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.notes.as_deref(), Some("Thanks"));
+        assert_eq!(inv.terms.as_deref(), Some("Net 30"));
+    }
+
+    #[test]
+    fn an_empty_invoice_update_is_rejected() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        let err = update_invoice(&conn, id, &InvoiceUpdate::default()).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert_eq!(
+            err.to_string(),
+            "Nothing to update — provide at least one flag"
+        );
+    }
+
+    #[test]
+    fn replacing_line_items_renumbers_positions_densely() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![
+            NewLineItem {
+                description: "A".into(),
+                quantity: 1.0,
+                unit_amount: 10.0,
+            },
+            NewLineItem {
+                description: "B".into(),
+                quantity: 1.0,
+                unit_amount: 20.0,
+            },
+            NewLineItem {
+                description: "C".into(),
+                quantity: 1.0,
+                unit_amount: 30.0,
+            },
+        ];
+        let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                items: Some(vec![
+                    NewLineItem {
+                        description: "Rework".into(),
+                        quantity: 2.0,
+                        unit_amount: 250.0,
+                    },
+                    NewLineItem {
+                        description: "Extras".into(),
+                        quantity: 1.0,
+                        unit_amount: 50.0,
+                    },
+                ]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = line_items(&conn, id).unwrap();
+        let positions: Vec<i64> = rows.iter().map(|r| r.position).collect();
+        assert_eq!(positions, vec![0, 1]);
+        let descriptions: Vec<&str> = rows.iter().map(|r| r.description.as_str()).collect();
+        assert_eq!(descriptions, vec!["Rework", "Extras"]);
+    }
+
+    #[test]
+    fn replacing_line_items_recomputes_subtotal_and_total() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                items: Some(vec![NewLineItem {
+                    description: "Rework".into(),
+                    quantity: 2.0,
+                    unit_amount: 250.0,
+                }]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.subtotal, 500.0);
+        assert_eq!(inv.total, 500.0);
+    }
+
+    #[test]
+    fn omitting_items_leaves_the_existing_lines_alone() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        let before = line_items(&conn, id).unwrap();
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                notes: Some(Some("Thanks".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = line_items(&conn, id).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].description, before[0].description);
+        assert_eq!(get_invoice(&conn, id).unwrap().total, 100.0);
+    }
+
+    #[test]
+    fn a_failed_line_item_insert_leaves_the_invoice_untouched() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        conn.execute_batch(
+            "CREATE TRIGGER fail_line_items BEFORE INSERT ON invoice_line_items
+             BEGIN SELECT RAISE(ABORT, 'line item insert failed'); END;",
+        )
+        .unwrap();
+
+        assert!(update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                items: Some(vec![NewLineItem {
+                    description: "Rework".into(),
+                    quantity: 2.0,
+                    unit_amount: 250.0,
+                }]),
+                ..Default::default()
+            },
+        )
+        .is_err());
+
+        conn.execute_batch("DROP TRIGGER fail_line_items;").unwrap();
+        let rows = line_items(&conn, id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].description, "Work");
+        assert_eq!(get_invoice(&conn, id).unwrap().total, 100.0);
+    }
+
+    #[test]
+    fn a_malformed_date_is_rejected_on_create_and_on_edit() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+
+        let err = create_invoice(&conn, cid, "2026-13-45", None, "USD", &items, None, None)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert_eq!(
+            err.to_string(),
+            "Invalid issue date: 2026-13-45 (expected YYYY-MM-DD)"
+        );
+
+        let id = seed_draft(&conn);
+        let err = update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                issue_date: Some("2026-13-45".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid issue date: 2026-13-45 (expected YYYY-MM-DD)"
+        );
+
+        let err = update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                due_date: Some(Some("nope".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid due date: nope (expected YYYY-MM-DD)"
+        );
+    }
+
+    #[test]
+    fn currency_is_normalized_to_uppercase_and_must_be_three_letters() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                currency: Some("eur".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(get_invoice(&conn, id).unwrap().currency, "EUR");
+
+        let err = update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                currency: Some("dollars".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert_eq!(
+            err.to_string(),
+            "Invalid currency: dollars (expected a 3-letter code like USD)"
+        );
+    }
+
+    #[test]
+    fn changing_the_total_clears_a_stale_stripe_link() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        set_payment_link(&conn, id, "plink_1", "https://pay.test/plink_1").unwrap();
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                items: Some(vec![NewLineItem {
+                    description: "Rework".into(),
+                    quantity: 2.0,
+                    unit_amount: 250.0,
+                }]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.stripe_payment_link_id, None);
+        assert_eq!(inv.stripe_payment_link_url, None);
+    }
+
+    #[test]
+    fn an_edit_that_does_not_move_the_money_keeps_the_link() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        set_payment_link(&conn, id, "plink_1", "https://pay.test/plink_1").unwrap();
+
+        update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                notes: Some(Some("Thanks".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.stripe_payment_link_id.as_deref(), Some("plink_1"));
+        assert_eq!(
+            inv.stripe_payment_link_url.as_deref(),
+            Some("https://pay.test/plink_1")
+        );
+    }
+
+    #[test]
+    fn update_invoice_refuses_a_published_invoice() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+
+        let err = update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                notes: Some(Some("Thanks".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(conflict_code(&err), "not_draft");
+        assert_eq!(get_invoice(&conn, id).unwrap().notes, None);
+    }
+
+    #[test]
+    fn voiding_a_draft_sets_voided_at_and_the_void_status() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.voided_at.as_deref(), Some("2026-08-06"));
+        assert_eq!(inv.status, "void");
+    }
+
+    #[test]
+    fn voiding_a_sent_invoice_is_allowed() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+        assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    #[test]
+    fn voiding_an_invoice_with_payments_is_refused() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        record_payment(&conn, id, 50.0, "2026-08-10", "ach", None).unwrap();
+
+        let err = void_invoice(&conn, id, "2026-08-11").unwrap_err();
+        assert_eq!(conflict_code(&err), "has_payments");
+        assert_eq!(get_invoice(&conn, id).unwrap().voided_at, None);
+    }
+
+    #[test]
+    fn voiding_a_void_invoice_is_refused() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+
+        let err = void_invoice(&conn, id, "2026-08-07").unwrap_err();
+        assert_eq!(conflict_code(&err), "already_void");
+        assert_eq!(
+            get_invoice(&conn, id).unwrap().voided_at.as_deref(),
+            Some("2026-08-06")
+        );
+    }
+
+    #[test]
+    fn a_voided_invoice_leaves_the_aging_buckets() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-06-01").unwrap();
+        assert!(ar_aging(&conn, "2026-08-04")
+            .unwrap()
+            .iter()
+            .any(|b| b.total > 0.0));
+
+        void_invoice(&conn, id, "2026-08-04").unwrap();
+
+        for bucket in ar_aging(&conn, "2026-08-04").unwrap() {
+            assert_eq!(
+                bucket.total, 0.0,
+                "bucket {} still carries money",
+                bucket.label
+            );
+        }
+    }
+
+    #[test]
+    fn voiding_a_missing_invoice_is_not_found() {
+        let (_d, conn) = test_conn();
+        let err = void_invoice(&conn, 99, "2026-08-06").unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Invoice not found: id 99");
+    }
+
+    /// Void by hand, the way migration v5 leaves a voided row.
+    fn void_at(conn: &Connection, id: i64, on: &str) {
+        conn.execute(
+            "UPDATE invoices SET voided_at = ?1 WHERE id = ?2",
+            rusqlite::params![on, id],
+        )
+        .unwrap();
+        refresh_status(conn, id, on).unwrap();
     }
 
     #[test]

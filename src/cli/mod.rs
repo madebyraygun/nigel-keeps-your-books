@@ -306,6 +306,28 @@ pub enum ClientCommands {
         #[arg(long)]
         address: Option<String>,
     },
+    /// Show one client: details plus invoice history and open balance.
+    Show {
+        /// Client ID (shown in `nigel client list`)
+        id: i64,
+    },
+    /// Update a client. Changes take effect on the next `invoice send`.
+    Edit {
+        /// Client ID (shown in `nigel client list`)
+        id: i64,
+        /// New client name
+        #[arg(long)]
+        name: Option<String>,
+        /// New billing email
+        #[arg(long)]
+        email: Option<String>,
+        /// New billing address
+        #[arg(long)]
+        address: Option<String>,
+        /// New internal notes (never shown to the client)
+        #[arg(long)]
+        notes: Option<String>,
+    },
     /// List all clients.
     List,
 }
@@ -329,6 +351,46 @@ pub enum InvoiceCommands {
         /// Line item as "desc:qty:unit" (repeatable)
         #[arg(long = "item")]
         items: Vec<String>,
+        /// Notes rendered on the invoice, under a "Notes" heading
+        #[arg(long)]
+        notes: Option<String>,
+        /// Payment terms rendered on the invoice, under a "Terms" heading
+        #[arg(long)]
+        terms: Option<String>,
+    },
+    /// Edit a draft invoice. Published and void invoices refuse edits.
+    Edit {
+        /// Invoice number (shown in `nigel invoice list`)
+        number: i64,
+        /// New issue date: YYYY-MM-DD
+        #[arg(long = "issue")]
+        issue_date: Option<String>,
+        /// New due date: YYYY-MM-DD
+        #[arg(long = "due")]
+        due_date: Option<String>,
+        /// Remove the due date, so the invoice never goes overdue
+        #[arg(long = "clear-due", conflicts_with = "due_date")]
+        clear_due: bool,
+        /// New currency code
+        #[arg(long)]
+        currency: Option<String>,
+        /// Replace the notes rendered on the invoice
+        #[arg(long)]
+        notes: Option<String>,
+        /// Replace the payment terms rendered on the invoice
+        #[arg(long)]
+        terms: Option<String>,
+        /// Line item as "desc:qty:unit" (repeatable); replaces every existing line
+        #[arg(long = "item")]
+        items: Vec<String>,
+    },
+    /// Cancel an invoice. Terminal — a void invoice cannot be sent or paid.
+    Void {
+        /// Invoice number (shown in `nigel invoice list`)
+        number: i64,
+        /// Void without confirmation (required when stdin is not a TTY)
+        #[arg(long)]
+        yes: bool,
     },
     /// List invoices.
     List,

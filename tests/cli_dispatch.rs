@@ -448,6 +448,246 @@ fn client_add_and_list_roundtrip() {
         .stdout(predicate::str::contains("Acme Co").and(predicate::str::contains("a@b.test")));
 }
 
+/// Init plus one client and one 1500.00 draft invoice (#1248).
+fn init_with_client_and_invoice(env: &TestEnv) {
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+    env.cmd()
+        .args(["client", "add", "Acme Co", "--email", "ap@acme.test"])
+        .assert()
+        .success();
+    env.cmd()
+        .args([
+            "invoice",
+            "new",
+            "--client",
+            "1",
+            "--issue",
+            "2026-08-04",
+            "--item",
+            "Consulting:10:150",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn client_show_prints_details_and_invoice_history() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["client", "show", "1"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Acme Co")
+                .and(predicate::str::contains("ap@acme.test"))
+                .and(predicate::str::contains("1248"))
+                .and(predicate::str::contains("Outstanding")),
+        );
+}
+
+#[test]
+fn client_show_for_an_unknown_id_fails_with_not_found() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["client", "show", "99"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Client not found: id 99"));
+}
+
+#[test]
+fn client_edit_changes_the_email() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["client", "edit", "1", "--email", "new@acme.test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated client 1"));
+
+    env.cmd()
+        .args(["client", "show", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("new@acme.test"));
+}
+
+#[test]
+fn client_edit_with_no_flags_fails() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["client", "edit", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Nothing to update"));
+}
+
+#[test]
+fn invoice_new_persists_notes_and_terms() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+    env.cmd()
+        .args(["client", "add", "Acme Co", "--email", "ap@acme.test"])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args([
+            "invoice",
+            "new",
+            "--client",
+            "1",
+            "--issue",
+            "2026-08-04",
+            "--item",
+            "Consulting:10:150",
+            "--notes",
+            "Thanks for the work",
+            "--terms",
+            "Net 30",
+        ])
+        .assert()
+        .success();
+
+    let (notes, terms): (String, String) = env
+        .db()
+        .query_row(
+            "SELECT notes, terms FROM invoices WHERE number = 1248",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("invoice row missing");
+    assert_eq!(notes, "Thanks for the work");
+    assert_eq!(terms, "Net 30");
+}
+
+#[test]
+fn invoice_edit_updates_a_draft() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args([
+            "invoice",
+            "edit",
+            "1248",
+            "--due",
+            "2026-10-01",
+            "--item",
+            "Rework:2:250",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("500.00"));
+
+    env.cmd()
+        .args(["invoice", "show", "1248"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("500.00").and(predicate::str::contains("2026-10-01")));
+}
+
+#[test]
+fn invoice_edit_refuses_a_void_invoice() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "void", "1248", "--yes"])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["invoice", "edit", "1248", "--due", "2026-10-01"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is void and cannot be edited"));
+}
+
+#[test]
+fn invoice_void_requires_confirmation_without_a_tty() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "void", "1248"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Pass --yes"));
+
+    let status: String = env
+        .db()
+        .query_row("SELECT status FROM invoices WHERE number = 1248", [], |r| {
+            r.get(0)
+        })
+        .expect("invoice row missing");
+    assert_eq!(status, "draft");
+}
+
+#[test]
+fn invoice_void_with_yes_voids_and_blocks_pay() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "void", "1248", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Voided invoice #1248"));
+
+    env.cmd()
+        .args(["invoice", "pay", "1248", "--date", "2026-08-20"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("void and cannot be paid"));
+}
+
+#[test]
+fn invoice_new_with_an_unknown_client_reports_not_found() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args([
+            "invoice",
+            "new",
+            "--client",
+            "99",
+            "--issue",
+            "2026-08-04",
+            "--item",
+            "X:1:1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Client not found: id 99"));
+
+    let count: i64 = env
+        .db()
+        .query_row("SELECT COUNT(*) FROM invoices", [], |r| r.get(0))
+        .expect("invoices table missing");
+    assert_eq!(count, 0);
+}
+
 #[test]
 fn demo_without_init_fails() {
     let env = TestEnv::new();
