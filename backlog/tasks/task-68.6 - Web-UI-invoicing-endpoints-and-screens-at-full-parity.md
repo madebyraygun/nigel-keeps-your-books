@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 08:58'
+updated_date: '2026-08-08 10:22'
 labels:
   - invoicing
   - web
@@ -23,8 +23,8 @@ Supersedes TASK-62 with the full scope: Serialize derives on the invoicing struc
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 Invoicing data structs derive Serialize following the task-31.2 pattern
-- [ ] #2 JSON API covers clients, invoices, payments, preview, and aging behind the standard guards
-- [ ] #3 Send requires explicit confirmation in the UI and reports each step's failure by cause
+- [x] #2 JSON API covers clients, invoices, payments, preview, and aging behind the standard guards
+- [x] #3 Send requires explicit confirmation in the UI and reports each step's failure by cause
 - [ ] #4 SPA screens cover client management, invoice management, and aging with CLI figure parity
 <!-- AC:END -->
 
@@ -53,4 +53,6 @@ Stage 1 merged (PR #189): Serialize derives with token skip_serializing, payment
 Stage 2 merged (PR #190): read API complete (clients, invoices, aging, next-number, preview HTML/PDF, status invoicing block omitted while locked). Security headers now defer to handler-set values; preview frames SAMEORIGIN, everything else stays DENY. get_invoice_by_number retyped NotFound in the data layer. Stage-5 note: preview iframe sandbox must NOT include allow-same-origin. serve-without-pdf test run added to the standing gate.
 
 Stage 3 merged (PR #191): write API (clients CRUD incl. delete_client with has_invoices guard, invoice create/edit/void/pay). validate_items lives in the data layer — CLI and API refuse NaN/inf/zero-total items with one voice; overflow-to-infinity checked per line and on the sum. clients.name UNIQUE decision → TASK-70; refresh_status issue-date quirk → TASK-71. Stage-4 note: /api/invoices/sync literal must mount safely beside /{number}/send.
+
+Stage 4 merged (PR #192): send (blocking, wire-level confirm, 8-step trace, 502 upstream_failed with step+service, ~150s documented ceiling over five bounded calls) and sync (60s budget, honest SyncReport). TempConfigDir now also pins the env layer of invoicing_config — tests offline UNCONDITIONALLY. Stage 5 owns: ApiClient sendInvoice/syncInvoices, single CHANGELOG entry for 68.6, iframe sandbox WITHOUT allow-same-origin, negative daysPastDue, overdue-not-partial overlap.
 <!-- SECTION:NOTES:END -->
