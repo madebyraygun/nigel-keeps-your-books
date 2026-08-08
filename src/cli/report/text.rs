@@ -101,6 +101,13 @@ pub fn k1(year: Option<i32>) -> Result<String> {
     Ok(with_header(&company, format_k1(&data)))
 }
 
+pub fn aging(today: &str) -> Result<String> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
+    let data = crate::invoicing::invoices::ar_aging_detail(&conn, today)?;
+    Ok(with_header(&company, format_aging(&data)))
+}
+
 // ---------------------------------------------------------------------------
 // Pure formatting functions (report data → String)
 // ---------------------------------------------------------------------------
@@ -448,9 +455,132 @@ pub fn format_k1(data: &reports::K1PrepReport) -> String {
     out
 }
 
+pub fn format_aging(data: &crate::invoicing::invoices::AgingReport) -> String {
+    let mut summary = Table::new();
+    summary.set_header(vec!["Bucket", "Invoices", "Amount"]);
+    for b in &data.buckets {
+        summary.add_row(vec![
+            Cell::new(b.label),
+            Cell::new(b.count),
+            Cell::new(money(b.total)),
+        ]);
+    }
+    let count: usize = data.buckets.iter().map(|b| b.count).sum();
+    summary.add_row(vec![
+        Cell::new("Total Outstanding".bold()),
+        Cell::new(count),
+        Cell::new(money(data.outstanding)),
+    ]);
+
+    let mut out = format!(
+        "A/R Aging \u{2014} as of {}\n\nSummary\n{summary}",
+        data.as_of
+    );
+
+    if data.invoices.is_empty() {
+        out.push_str("\n\nNo open invoices.");
+        return out;
+    }
+
+    let mut open = Table::new();
+    open.set_header(vec!["Invoice", "Client", "Due", "Days", "Balance"]);
+    for i in &data.invoices {
+        let days = if i.days_past_due > 0 {
+            i.days_past_due.to_string()
+        } else {
+            "\u{2014}".to_string()
+        };
+        open.add_row(vec![
+            Cell::new(format!("#{}", i.number)),
+            Cell::new(&i.client),
+            Cell::new(&i.due_date),
+            Cell::new(days),
+            Cell::new(money(i.balance)),
+        ]);
+    }
+    out.push_str(&format!("\n\nOpen Invoices\n{open}"));
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_k1, with_header};
+    use super::{format_aging, format_k1, with_header};
+    use crate::invoicing::invoices::{AgingBucket, AgingInvoice, AgingReport};
+
+    fn bucket(label: &'static str, count: usize, total: f64) -> AgingBucket {
+        AgingBucket {
+            label,
+            count,
+            total,
+        }
+    }
+
+    fn invoice(
+        number: i64,
+        client: &str,
+        due: &str,
+        days: i64,
+        bucket: &'static str,
+    ) -> AgingInvoice {
+        AgingInvoice {
+            number,
+            client: client.into(),
+            due_date: due.into(),
+            days_past_due: days,
+            bucket,
+            total: 100.0,
+            paid: 0.0,
+            balance: 100.0,
+        }
+    }
+
+    fn aging_fixture(invoices: Vec<AgingInvoice>) -> AgingReport {
+        let outstanding = invoices.iter().map(|i| i.balance).sum();
+        AgingReport {
+            as_of: "2026-08-04".into(),
+            buckets: vec![
+                bucket("current", 1, 100.0),
+                bucket("1-30", 0, 0.0),
+                bucket("31-60", 1, 100.0),
+                bucket("61-90", 0, 0.0),
+                bucket("90+", 0, 0.0),
+            ],
+            invoices,
+            outstanding,
+        }
+    }
+
+    #[test]
+    fn format_aging_lists_every_bucket() {
+        let out = format_aging(&aging_fixture(vec![]));
+        for label in ["current", "1-30", "31-60", "61-90", "90+"] {
+            assert!(out.contains(label), "missing bucket {label}");
+        }
+        assert!(out.contains("Total Outstanding"));
+        assert!(out.contains("2026-08-04"));
+    }
+
+    #[test]
+    fn format_aging_lists_open_invoices() {
+        let out = format_aging(&aging_fixture(vec![
+            invoice(1244, "Initech", "2026-06-20", 45, "31-60"),
+            invoice(1251, "Acme Co", "2026-08-31", -27, "current"),
+        ]));
+        assert!(out.contains("1244"));
+        assert!(out.contains("Initech"));
+        assert!(out.contains("2026-06-20"));
+        assert!(out.contains("$100.00"));
+        let older = out.find("1244").unwrap();
+        let newer = out.find("1251").unwrap();
+        assert!(older < newer, "oldest invoice should print first");
+    }
+
+    #[test]
+    fn format_aging_empty_state() {
+        let out = format_aging(&aging_fixture(vec![]));
+        assert!(out.contains("No open invoices."));
+        assert!(out.contains("90+"));
+    }
 
     #[test]
     fn format_k1_shows_cogs_gross_profit_and_needs_mapping() {
