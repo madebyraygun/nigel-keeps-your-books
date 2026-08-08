@@ -4,6 +4,7 @@ title: 'TUI: draft-invoice creation form'
 status: To Do
 assignee: []
 created_date: '2026-08-08 01:02'
+updated_date: '2026-08-08 04:33'
 labels:
   - invoicing
   - tui
@@ -24,3 +25,21 @@ priority: low
 - [ ] #2 Validation failures render beside the field with the CLI's wording
 - [ ] #3 The invoice-list empty state stops pointing at the CLI once the form exists
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+From 68.4: Demo data loaded!
+  Account:      BofA Checking
+  Transactions: 270
+  Rules:        10
+  Categorized:  186
+  Flagged:      84
+
+Try these next:
+  nigel accounts list
+  nigel rules list
+  nigel report pnl
+  nigel report flagged
+  nigel review seeds no clients or invoices, so the TUI invoice/client screens open empty on a demo database. Seeding a few demo clients/invoices belongs here alongside the creation form.
+<!-- SECTION:NOTES:END -->
