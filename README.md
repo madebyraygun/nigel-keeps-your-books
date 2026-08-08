@@ -12,7 +12,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 
 ## Features
 
-- **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, manage accounts and categories, view rules, view/export reports, and switch data files.
+- **Interactive dashboard** — run `nigel` to access your dashboard with YTD financials, account balances, a monthly income/expense chart, and a command menu; browse, review, import, reconcile, manage accounts, categories, clients (`k`) and invoices (`n`), view rules, view/export reports, and switch data files.
 - **Bank imports** — CSV/XLSX parsers with format auto-detection; `--dry-run` to preview without writing
 - **Generic CSV** — import any CSV with `--date-col`, `--desc-col`, `--amount-col`; save reusable profiles with `--save-profile`
 - **Payroll import** — XLSX payroll importer with auto-categorization
@@ -25,7 +25,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep, A/R aging; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
-- **Invoicing** — draft invoices for your clients, edit or void them while they are still drafts, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. The client-facing page is yours to restyle — `nigel invoice template export` writes it out to edit, no rebuild required. See [docs/invoicing.md](docs/invoicing.md)
+- **Invoicing** — draft invoices for your clients, edit or void them while they are still drafts, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. Clients (`k`) and invoices (`n`) are on the dashboard too — add and edit clients, open an invoice to send it, record a payment against it or void it; drafting a new invoice is still `nigel invoice new`. The client-facing page is yours to restyle — `nigel invoice template export` writes it out to edit, no rebuild required. See [docs/invoicing.md](docs/invoicing.md)
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. The eight ledger reports are there too, for any period, with text and PDF downloads and a print-friendly layout; A/R aging is terminal-only for now and arrives in the web UI with the invoicing screens
 - **SQLite storage** — single portable database, no server required
