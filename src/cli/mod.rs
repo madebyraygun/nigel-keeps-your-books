@@ -306,6 +306,28 @@ pub enum ClientCommands {
         #[arg(long)]
         address: Option<String>,
     },
+    /// Show one client: details plus invoice history and open balance.
+    Show {
+        /// Client ID (shown in `nigel client list`)
+        id: i64,
+    },
+    /// Update a client. Changes take effect on the next `invoice send`.
+    Edit {
+        /// Client ID (shown in `nigel client list`)
+        id: i64,
+        /// New client name
+        #[arg(long)]
+        name: Option<String>,
+        /// New billing email
+        #[arg(long)]
+        email: Option<String>,
+        /// New billing address
+        #[arg(long)]
+        address: Option<String>,
+        /// New internal notes (never shown to the client)
+        #[arg(long)]
+        notes: Option<String>,
+    },
     /// List all clients.
     List,
 }

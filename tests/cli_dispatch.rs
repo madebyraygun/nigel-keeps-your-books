@@ -448,6 +448,93 @@ fn client_add_and_list_roundtrip() {
         .stdout(predicate::str::contains("Acme Co").and(predicate::str::contains("a@b.test")));
 }
 
+/// Init plus one client and one 1500.00 draft invoice (#1248).
+fn init_with_client_and_invoice(env: &TestEnv) {
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+    env.cmd()
+        .args(["client", "add", "Acme Co", "--email", "ap@acme.test"])
+        .assert()
+        .success();
+    env.cmd()
+        .args([
+            "invoice",
+            "new",
+            "--client",
+            "1",
+            "--issue",
+            "2026-08-04",
+            "--item",
+            "Consulting:10:150",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn client_show_prints_details_and_invoice_history() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["client", "show", "1"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Acme Co")
+                .and(predicate::str::contains("ap@acme.test"))
+                .and(predicate::str::contains("1248"))
+                .and(predicate::str::contains("Outstanding")),
+        );
+}
+
+#[test]
+fn client_show_for_an_unknown_id_fails_with_not_found() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["client", "show", "99"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Client not found: id 99"));
+}
+
+#[test]
+fn client_edit_changes_the_email() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["client", "edit", "1", "--email", "new@acme.test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated client 1"));
+
+    env.cmd()
+        .args(["client", "show", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("new@acme.test"));
+}
+
+#[test]
+fn client_edit_with_no_flags_fails() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["client", "edit", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Nothing to update"));
+}
+
 #[test]
 fn demo_without_init_fails() {
     let env = TestEnv::new();

@@ -181,6 +181,14 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 email,
                 address,
             } => cli::client::add(&name, email.as_deref(), address.as_deref()),
+            ClientCommands::Show { id } => cli::client::show(id),
+            ClientCommands::Edit {
+                id,
+                name,
+                email,
+                address,
+                notes,
+            } => cli::client::edit(id, name, email, address, notes),
             ClientCommands::List => cli::client::list(),
         },
         Commands::Invoice { command } => match command {
