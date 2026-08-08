@@ -449,15 +449,7 @@ async fn pay(
 // Send and sync
 // ---------------------------------------------------------------------------
 
-/// Sending is a blocking request: the whole orchestration runs inside it and
-/// the response says what happened, step by step.
-///
-/// There is no job registry because the invoice row is already the job record —
-/// `published_at` and `stripe_payment_link_url` are the durable state one would
-/// duplicate — and the three gateway clients are synchronous `reqwest::blocking`
-/// running on the same pool `with_conn_api` already uses. The cost, an
-/// open request for as long as three external services take, is bounded by
-/// `invoicing::REQUEST_TIMEOUT` on each of them.
+/// The whole body of a send request.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SendRequest {
@@ -504,12 +496,20 @@ fn not_configured(what: &str, missing: &[&'static str]) -> ApiError {
     )
 }
 
-/// `POST /api/invoices/{number}/send`.
+/// `POST /api/invoices/{number}/send` — the whole publish, inside the request.
 ///
 /// The `confirm` flag is checked first and nothing else happens without it:
-/// AC-level "send requires explicit confirmation" is a property of the endpoint
-/// rather than a convention of whichever screen calls it, so an accidental
-/// `curl` is a no-op instead of an invoice in a client's inbox.
+/// "send requires explicit confirmation" is a property of the endpoint rather
+/// than a convention of whichever screen calls it, so an accidental `curl` is a
+/// no-op instead of an invoice in a client's inbox.
+///
+/// It blocks rather than queueing because there is nothing a job registry would
+/// hold that the invoice row does not: `published_at` and
+/// `stripe_payment_link_url` are the durable state, and two sources of truth for
+/// "did this go out" is how they drift. The gateway clients are synchronous
+/// `reqwest::blocking` and `with_conn_api` is already `spawn_blocking`, so the
+/// work lands on that pool either way; what makes the open request bounded is
+/// `invoicing::REQUEST_TIMEOUT` on each of the three calls.
 async fn send(
     State(state): State<AppState>,
     ApiPath(number): ApiPath<i64>,
