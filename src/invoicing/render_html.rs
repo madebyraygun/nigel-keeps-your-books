@@ -10,7 +10,24 @@ pub const DEFAULT_TEMPLATE: &str = include_str!("templates/invoice.html");
 /// Every `{{KEY}}` a template may use. Anything else shaped like a placeholder
 /// is a typo and is refused at load time.
 pub const PLACEHOLDERS: &[&str] = &[
-    "NUMBER", "CLIENT", "COMPANY", "ISSUE", "DUE", "ROWS", "CURRENCY", "TOTAL", "PAY", "CONTACT",
+    "NUMBER",
+    "CLIENT",
+    "CLIENT_EMAIL",
+    "CLIENT_ADDRESS",
+    "COMPANY",
+    "ISSUE",
+    "DUE_DATE",
+    "DUE",
+    "ROWS",
+    "CURRENCY",
+    "SUBTOTAL",
+    "TAX",
+    "TOTAL",
+    "NOTES",
+    "TERMS",
+    "PAY_URL",
+    "PAY",
+    "CONTACT",
 ];
 
 /// What an invoice is: which invoice, who owes, for what, how much. A template
@@ -225,28 +242,53 @@ pub fn render_invoice_html(
     // `templates/invoice.html`, so it renders correctly against a custom
     // template that knows nothing about a `.pay-placeholder` class. The grey
     // carries `.pay`'s white text at 4.5:1, the WCAG AA floor.
+    let pay_url = match &pay {
+        PayButton::Link(url) => *url,
+        PayButton::Placeholder | PayButton::Omitted => "",
+    };
     let pay = match pay {
         PayButton::Link(url) => format!("<a class=\"pay\" href=\"{}\">Pay online</a>", esc(url)),
         PayButton::Placeholder => "<span class=\"pay pay-placeholder\" style=\"background:#767676;cursor:default\">Pay online — link created when the invoice is sent</span>".to_string(),
         PayButton::Omitted => String::new(),
     };
-    let due = invoice
-        .due_date
-        .as_deref()
-        .map(|d| format!("<br>Due: {}", esc(d)))
-        .unwrap_or_default();
+    let due_date = invoice.due_date.as_deref().map(esc).unwrap_or_default();
+    let due = match due_date.as_str() {
+        "" => String::new(),
+        date => format!("<br>Due: {date}"),
+    };
+
+    // A block rather than a bare value, so "empty when unset" needs no
+    // conditional in a template language that has none.
+    let block = |heading: &str, text: Option<&String>| match text {
+        Some(t) if !t.trim().is_empty() => format!("<h3>{heading}</h3><p>{}</p>", esc(t)),
+        _ => String::new(),
+    };
 
     expand(
         branding.template,
         &[
             ("NUMBER", &invoice.number.to_string()),
             ("CLIENT", &esc(&client.name)),
+            (
+                "CLIENT_EMAIL",
+                &esc(client.email.as_deref().unwrap_or_default()),
+            ),
+            (
+                "CLIENT_ADDRESS",
+                &esc(client.billing_address.as_deref().unwrap_or_default()),
+            ),
             ("COMPANY", &esc(branding.company)),
             ("ISSUE", &esc(&invoice.issue_date)),
+            ("DUE_DATE", &due_date),
             ("DUE", &due),
             ("ROWS", &rows),
             ("CURRENCY", &esc(&invoice.currency)),
+            ("SUBTOTAL", &format!("{:.2}", invoice.subtotal)),
+            ("TAX", &format!("{:.2}", invoice.tax)),
             ("TOTAL", &format!("{:.2}", invoice.total)),
+            ("NOTES", &block("Notes", invoice.notes.as_ref())),
+            ("TERMS", &block("Terms", invoice.terms.as_ref())),
+            ("PAY_URL", &esc(pay_url)),
             ("PAY", &pay),
             ("CONTACT", &esc(branding.contact_email)),
         ],
@@ -647,6 +689,125 @@ mod tests {
             PayButton::Omitted,
         );
         assert!(html.starts_with("<h1></h1>"), "got: {html}");
+    }
+
+    #[test]
+    fn every_placeholder_in_the_vocabulary_expands() {
+        let (inv, client, items) = sample();
+        let template = PLACEHOLDERS
+            .iter()
+            .map(|k| format!("{{{{{k}}}}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let html = render_invoice_html(
+            &brand_with(&template, "b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Link("https://pay.test/x"),
+        );
+        assert!(!html.contains("{{"), "unexpanded placeholder in: {html}");
+    }
+
+    #[test]
+    fn optional_values_render_empty_rather_than_an_empty_tag() {
+        let (mut inv, mut client, items) = sample();
+        inv.due_date = None;
+        inv.notes = None;
+        inv.terms = None;
+        client.email = None;
+        client.billing_address = None;
+
+        let html = render_invoice_html(
+            &brand("b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(!html.contains("Due:"), "got: {html}");
+        assert!(!html.contains("<p></p>"), "got: {html}");
+        assert!(!html.contains("Notes"), "got: {html}");
+        assert!(!html.contains("Terms"), "got: {html}");
+    }
+
+    #[test]
+    fn notes_and_terms_are_escaped() {
+        let (mut inv, client, items) = sample();
+        inv.notes = Some("<b>thanks</b>".into());
+        inv.terms = Some("<i>net 30</i>".into());
+
+        let html = render_invoice_html(
+            &brand("b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(html.contains("&lt;b&gt;thanks&lt;/b&gt;"), "got: {html}");
+        assert!(html.contains("&lt;i&gt;net 30&lt;/i&gt;"), "got: {html}");
+        assert!(!html.contains("<b>thanks"), "got: {html}");
+    }
+
+    #[test]
+    fn due_date_is_the_bare_date_and_due_is_the_fragment() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(
+            &brand_with(
+                "[{{DUE_DATE}}][{{DUE}}]{{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}",
+                "b@e.test",
+            ),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(
+            html.starts_with("[2026-09-03][<br>Due: 2026-09-03]"),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn the_pay_url_is_the_link_only_when_there_is_one() {
+        let (inv, client, items) = sample();
+        let template = "[{{PAY_URL}}]{{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}";
+        let linked = render_invoice_html(
+            &brand_with(template, "b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Link("https://pay.test/x"),
+        );
+        assert!(linked.starts_with("[https://pay.test/x]"), "got: {linked}");
+
+        for pay in [PayButton::Placeholder, PayButton::Omitted] {
+            let html = render_invoice_html(
+                &brand_with(template, "b@e.test"),
+                &inv,
+                &client,
+                &items,
+                pay,
+            );
+            assert!(html.starts_with("[]"), "got: {html}");
+        }
+    }
+
+    #[test]
+    fn the_default_template_renders_notes_and_terms() {
+        let (mut inv, client, items) = sample();
+        inv.notes = Some("Thanks for the work".into());
+        inv.terms = Some("Net 30".into());
+
+        let html = render_invoice_html(
+            &brand("b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(html.contains("Thanks for the work"), "got: {html}");
+        assert!(html.contains("Net 30"), "got: {html}");
     }
 
     #[test]

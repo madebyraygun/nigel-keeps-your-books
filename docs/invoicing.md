@@ -103,9 +103,9 @@ nigel invoice new --client 1 --issue 2026-08-04 --due 2026-09-03 \
   uppercase.
 - `--notes` and `--terms` are free text, e.g.
   `--notes "Thanks for the work this quarter."` and
-  `--terms "Net 30. Late payments accrue 1.5% monthly."`. Both are stored and
-  render under their own headings on the **PDF**; the published HTML page does
-  not show them yet.
+  `--terms "Net 30. Late payments accrue 1.5% monthly."`. Both render under
+  their own headings on the invoice page and on the PDF, and are omitted
+  entirely when unset.
 - Numbers are assigned sequentially, starting at 1248, and are not reused.
 
 New invoices are drafts. Nothing has been rendered, uploaded, or emailed yet.
@@ -189,8 +189,8 @@ nigel invoice edit 1248 --clear-due
 | `--due <YYYY-MM-DD>` | New due date |
 | `--clear-due` | Remove the due date, so the invoice never goes overdue |
 | `--currency <CODE>` | New 3-letter currency code, stored uppercase |
-| `--notes <s>` | Replace the notes (PDF only, as on `new`) |
-| `--terms <s>` | Replace the terms (PDF only, as on `new`) |
+| `--notes <s>` | Replace the notes |
+| `--terms <s>` | Replace the terms |
 | `--item "desc:qty:unit"` | **Replaces every line item**, repeatable |
 
 `--item` is all or nothing: leave it off and the existing lines stand, supply it
@@ -249,7 +249,9 @@ One command does the whole publish:
 3. Uploads both to R2 as `i/{token}/index.html` and `i/{token}/invoice.pdf`, where
    `token` is the invoice's random 16-character identifier.
 4. Emails the client through Mailgun — HTML body, PDF attached, subject
-   `Invoice #1248 from Raygun`.
+   `Invoice #1248 from Acme LLC`, or plain `Invoice #1248` when no business name
+   is set. The name comes from the same setting the dashboard's settings screen
+   edits.
 5. Marks the invoice published, which moves it from `draft` to `sent` (or straight
    to `overdue` if its due date has already passed).
 
@@ -257,9 +259,114 @@ If any step fails the invoice stays a draft and no email goes out, so a failed
 send is safe to retry. The command prints the public URL on success:
 `Sent invoice #1248: https://billing.rygn.io/i/aBc123.../`.
 
-The published page shows the line items, the total, a Pay button linking to
-Stripe, and bank-transfer instructions. The direct-deposit line tells the client
-to get in touch at `from_email`, the same address the invoice is sent from.
+The published page shows the line items, the total, any notes and terms, a Pay
+button linking to Stripe, and bank-transfer instructions. The direct-deposit line
+tells the client to get in touch at `from_email`, the same address the invoice is
+sent from.
+
+## Customizing the invoice page
+
+The page a client opens is yours to change without rebuilding Nigel. Put a file
+here and it renders instead of the built-in one:
+
+```
+<data_dir>/templates/invoice.html
+```
+
+No file there means the built-in page renders, exactly as it always has.
+
+```bash
+nigel invoice template export                      # write the built-in page out to edit
+nigel invoice template export --output ~/mine.html # somewhere else
+nigel invoice template export --force              # overwrite an existing template
+nigel invoice template path                        # where Nigel looks, and what it found
+```
+
+`export` refuses to overwrite an existing file without `--force`, because the
+file it would clobber is your own work. Neither command opens the database, so
+both run on a machine that has never seen `nigel init`.
+
+### The iteration loop
+
+```bash
+nigel invoice template export
+$EDITOR ~/Documents/nigel/templates/invoice.html
+nigel invoice preview 1248 && open ~/Documents/nigel/previews/invoice-1248.html
+```
+
+`preview` renders through the same code `send` publishes through, makes no
+network call, and needs no Stripe, R2, or Mailgun configuration — so a template
+can go through twenty revisions before anything is ever sent.
+
+### Placeholders
+
+A template is plain HTML with `{{KEY}}` placeholders. There are no conditionals,
+loops, or includes: the fragment placeholders are already empty when they have
+nothing to say.
+
+| Placeholder | Kind | Value |
+|---|---|---|
+| `{{NUMBER}}` | text | Invoice number (**required**) |
+| `{{CLIENT}}` | text | Client name (**required**) |
+| `{{CLIENT_EMAIL}}` | text | Client billing email, empty when unset |
+| `{{CLIENT_ADDRESS}}` | text | Client billing address, empty when unset |
+| `{{COMPANY}}` | text | Your business name, empty when unset |
+| `{{ISSUE}}` | text | Issue date |
+| `{{DUE_DATE}}` | text | Due date, empty when there is none |
+| `{{DUE}}` | fragment | `<br>Due: …`, empty when there is none |
+| `{{ROWS}}` | fragment | The line-item `<tr>` rows (**required**) |
+| `{{CURRENCY}}` | text | Currency code |
+| `{{SUBTOTAL}}` | text | Subtotal, two decimals |
+| `{{TAX}}` | text | Tax, two decimals |
+| `{{TOTAL}}` | text | Total, two decimals (**required**) |
+| `{{NOTES}}` | fragment | Notes block, empty when unset |
+| `{{TERMS}}` | fragment | Terms block, empty when unset |
+| `{{PAY_URL}}` | text | Stripe payment link, empty when there is none |
+| `{{PAY}}` | fragment | The Pay button, empty when there is no link |
+| `{{CONTACT}}` | text | Direct-deposit contact address (`from_email`) |
+
+**Text** placeholders are HTML-escaped values you can put anywhere. **Fragment**
+placeholders are pre-built markup and are content-only — putting one in an
+attribute produces broken HTML. `{{DUE_DATE}}` and `{{PAY_URL}}` are the escaped
+text alternatives for authors who want to place those two values themselves.
+
+Where a placeholder may go:
+
+> Placeholders are safe in element content and inside quoted attribute values.
+> Do not put one inside `<script>`, `<style>`, an unquoted attribute, or a
+> position where the value becomes a URL scheme.
+
+Every value is escaped on the way in, so a client named `Acme <script> Co` is
+text on the page and never markup. The template itself is **not** sanitized —
+your `<script>` and your web fonts are the feature, and anyone who can write the
+file can already run programs as you.
+
+### When a template is refused
+
+A template that is there but broken is an error naming the path. Nigel does not
+quietly mail the stock page instead: an invoice you did not approve reaching a
+client is worse than a send you have to retry. On `send` the template is loaded
+before the Stripe link is created, so a broken one costs nothing — no link, no
+upload, no email.
+
+| Condition | What you get |
+|---|---|
+| Cannot be read (permissions, a directory, invalid UTF-8) | `Cannot read invoice template <path>: …` |
+| Empty or whitespace only | `Invoice template <path> is empty.` |
+| Larger than 1 MiB | `Invoice template <path> is <n> bytes; the limit is 1 MiB.` |
+| Missing `{{NUMBER}}`, `{{CLIENT}}`, `{{ROWS}}` or `{{TOTAL}}` | `… is missing required placeholder(s): {{TOTAL}}. …` |
+| Uses a `{{KEY}}` that is not in the table above | `… uses unknown placeholder(s): {{TOTL}}. …` |
+
+The four required placeholders are what an invoice is — which invoice, who owes,
+for what, how much. An unknown one is always a typo, and refusing is how you find
+out before `{{TOTL}}` appears on a page someone is reading.
+
+Only `{{` + `SCREAMING_SNAKE` + `}}` counts as a placeholder, so a CSS rule, a JS
+template literal, or a `{{ not a key }}` aside passes through as literal text.
+Checking happens when the template is loaded, which is why `nigel invoice
+template path` and `nigel invoice preview` both report the problem.
+
+The PDF is not customizable — it is built by code rather than from a template.
 
 ## Recording payments
 

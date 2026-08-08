@@ -25,7 +25,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep, A/R aging; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
-- **Invoicing** — draft invoices for your clients, edit or void them while they are still drafts, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. See [docs/invoicing.md](docs/invoicing.md)
+- **Invoicing** — draft invoices for your clients, edit or void them while they are still drafts, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. The client-facing page is yours to restyle — `nigel invoice template export` writes it out to edit, no rebuild required. See [docs/invoicing.md](docs/invoicing.md)
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. The eight ledger reports are there too, for any period, with text and PDF downloads and a print-friendly layout; A/R aging is terminal-only for now and arrives in the web UI with the invoicing screens
 - **SQLite storage** — single portable database, no server required
@@ -132,6 +132,7 @@ nigel invoice send 1248                               # Publish, email, attach a
 nigel invoice sync                                    # Record Stripe payments
 nigel invoice pay 1248 --date 2026-08-20              # Record a payment received directly
 nigel invoice aging                                   # A/R aging
+nigel invoice template export                         # Make the invoice page your own
 
 # Reconcile against a bank statement
 nigel reconcile "BofA Checking" --month 2025-03 --balance 12345.67
