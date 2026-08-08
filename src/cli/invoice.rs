@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::Path;
 
 use comfy_table::{Cell, Table};
@@ -9,7 +10,7 @@ use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
     ar_aging, create_invoice, get_invoice, get_invoice_by_number, line_items, paid_amount,
-    record_payment, NewLineItem,
+    record_payment, update_invoice, void_invoice, InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
@@ -44,6 +45,23 @@ fn parse_items(items: &[String]) -> Result<Vec<NewLineItem>> {
         ));
     }
     items.iter().map(|s| parse_item(s)).collect()
+}
+
+/// `--item` on an edit is all-or-nothing: none supplied leaves the existing
+/// lines alone, any supplied replaces the whole set.
+fn optional_items(items: &[String]) -> Result<Option<Vec<NewLineItem>>> {
+    if items.is_empty() {
+        Ok(None)
+    } else {
+        parse_items(items).map(Some)
+    }
+}
+
+fn void_summary(invoice: &Invoice, client_name: &str) -> String {
+    format!(
+        "Invoice #{} — {client_name}, {:.2} {}, {} {}.",
+        invoice.number, invoice.total, invoice.currency, invoice.status, invoice.issue_date
+    )
 }
 
 fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
@@ -130,11 +148,13 @@ pub fn new(
     due_date: Option<&str>,
     currency: &str,
     items: &[String],
+    notes: Option<&str>,
+    terms: Option<&str>,
 ) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let parsed = parse_items(items)?;
     let id = create_invoice(
-        &conn, client_id, issue_date, due_date, currency, &parsed, None, None,
+        &conn, client_id, issue_date, due_date, currency, &parsed, notes, terms,
     )?;
     let invoice = get_invoice(&conn, id)?;
     println!(
@@ -142,6 +162,87 @@ pub fn new(
         invoice.number, invoice.total, invoice.currency
     );
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn edit(
+    number: i64,
+    issue_date: Option<String>,
+    due_date: Option<String>,
+    clear_due: bool,
+    currency: Option<String>,
+    notes: Option<String>,
+    terms: Option<String>,
+    items: &[String],
+) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let invoice = find_invoice(&conn, number)?;
+    let had_link = invoice.stripe_payment_link_id.is_some();
+
+    let update = InvoiceUpdate {
+        issue_date,
+        due_date: if clear_due {
+            Some(None)
+        } else {
+            due_date.map(Some)
+        },
+        currency,
+        notes: notes.map(Some),
+        terms: terms.map(Some),
+        items: optional_items(items)?,
+    };
+    update_invoice(&conn, invoice.id, &update)?;
+
+    let updated = get_invoice(&conn, invoice.id)?;
+    println!(
+        "Updated draft invoice #{number} — {:.2} {}",
+        updated.total, updated.currency
+    );
+    if had_link && updated.stripe_payment_link_id.is_none() {
+        println!(
+            "Cleared the stale Stripe payment link; `nigel invoice send {number}` will create a new one."
+        );
+    }
+    Ok(())
+}
+
+pub fn void(number: i64, yes: bool, today: &str) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let invoice = find_invoice(&conn, number)?;
+    let client = get_client(&conn, invoice.client_id)?;
+
+    println!("{}", void_summary(&invoice, &client.name));
+    if !confirm_void(&invoice, yes)? {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    void_invoice(&conn, invoice.id, today)?;
+    println!("Voided invoice #{number}.");
+    if invoice.published_at.is_some() {
+        println!(
+            "Warning: this invoice was already published. Its page and Stripe payment link stay live — \
+             deactivate the link in Stripe if you do not want it paid."
+        );
+    }
+    Ok(())
+}
+
+fn confirm_void(invoice: &Invoice, yes: bool) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(NigelError::Other(format!(
+            "Refusing to void invoice #{} without confirmation. Pass --yes.",
+            invoice.number
+        )));
+    }
+    print!("Void it? [y/N] ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
 pub fn list() -> Result<()> {
@@ -314,6 +415,33 @@ mod tests {
         let err = parse_items(&[]).map(|_| ()).unwrap_err().to_string();
         assert!(err.contains("--item"), "got: {err}");
         assert_eq!(parse_items(&["W:1:10".to_string()]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parse_items_is_optional_for_an_edit() {
+        assert!(optional_items(&[]).unwrap().is_none());
+
+        let parsed = optional_items(&["Rework:2:250".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].description, "Rework");
+        assert_eq!(parsed[0].unit_amount, 250.0);
+
+        assert!(optional_items(&["Rework:2".to_string()]).is_err());
+    }
+
+    #[test]
+    fn confirm_prompt_names_the_invoice() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn);
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        let line = void_summary(&invoice, "Acme Co");
+        assert!(line.contains("#1248"), "got: {line}");
+        assert!(line.contains("Acme Co"), "got: {line}");
+        assert!(line.contains("100.00 USD"), "got: {line}");
+        assert!(line.contains("draft"), "got: {line}");
     }
 
     fn test_config() -> InvoicingConfig {
