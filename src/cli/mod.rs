@@ -399,6 +399,14 @@ pub enum InvoiceCommands {
         /// Invoice number (shown in `nigel invoice list`)
         number: i64,
     },
+    /// Render an invoice to local files without sending it.
+    Preview {
+        /// Invoice number (shown in `nigel invoice list`)
+        number: i64,
+        /// Directory to write into (default: <data_dir>/previews)
+        #[arg(long)]
+        output_dir: Option<String>,
+    },
     /// Render, publish to R2, and email an invoice.
     Send {
         /// Invoice number

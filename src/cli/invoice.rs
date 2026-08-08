@@ -1,5 +1,5 @@
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use comfy_table::{Cell, Table};
 use rusqlite::Connection;
@@ -14,6 +14,8 @@ use crate::invoicing::invoices::{
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
+use crate::invoicing::render::render_invoice;
+use crate::invoicing::render_html::PayButton;
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
 use crate::invoicing::sync::sync_all;
@@ -73,10 +75,14 @@ fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
     })
 }
 
+/// `voided_at` is the fact; `status` is derived from it. Reading the timestamp
+/// first means a void whose status write did not land still reads as void.
+fn is_void(invoice: &Invoice) -> bool {
+    invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str()
+}
+
 fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
-    // `voided_at` is the fact; `status` is derived from it. Reading the timestamp
-    // first means a void whose status write did not land is still refused.
-    if invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str() {
+    if is_void(invoice) {
         return Err(NigelError::Conflict {
             code: "void",
             message: format!(
@@ -310,6 +316,97 @@ pub fn show(number: i64) -> Result<()> {
     Ok(())
 }
 
+/// The direct-deposit contact line when `from_email` is not configured. Preview
+/// is the one invoicing command that runs without any configuration, so it
+/// renders a visible stand-in rather than refusing.
+const PREVIEW_CONTACT_PLACEHOLDER: &str = "(from_email not configured)";
+
+fn preview_dir(output_dir: Option<String>) -> (PathBuf, bool) {
+    match output_dir {
+        Some(dir) => (
+            PathBuf::from(crate::settings::shellexpand_path(&dir)),
+            false,
+        ),
+        None => (get_data_dir().join("previews"), true),
+    }
+}
+
+fn preview_paths(dir: &Path, number: i64) -> (PathBuf, PathBuf) {
+    (
+        dir.join(format!("invoice-{number}.html")),
+        dir.join(format!("invoice-{number}.pdf")),
+    )
+}
+
+fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
+    // A voided invoice can still carry a live Stripe URL, and rendering a
+    // working Pay button on a cancelled invoice is the one way this command
+    // could cost someone money.
+    if is_void(invoice) {
+        return PayButton::Omitted;
+    }
+    match invoice.stripe_payment_link_url.as_deref() {
+        Some(url) => PayButton::Link(url),
+        None => PayButton::Placeholder,
+    }
+}
+
+fn contact_email_for_preview(cfg: &InvoicingConfig) -> (String, bool) {
+    match cfg.from_email.as_deref() {
+        Some(email) => (email.to_string(), false),
+        None => (PREVIEW_CONTACT_PLACEHOLDER.to_string(), true),
+    }
+}
+
+pub fn preview(number: i64, output_dir: Option<String>) -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    let invoice = find_invoice(&conn, number)?;
+    let client = get_client(&conn, invoice.client_id)?;
+
+    if is_void(&invoice) {
+        eprintln!("notice: invoice #{number} is void — this preview is for reference only.");
+    }
+    let (contact_email, is_placeholder) = contact_email_for_preview(&invoicing_config());
+    if is_placeholder {
+        eprintln!(
+            "notice: from_email is not configured — the direct-deposit contact line is a placeholder"
+        );
+    }
+
+    // Both artifacts are rendered before either is written, so a PDF failure
+    // cannot leave fresh HTML beside a stale PDF.
+    let rendered = render_invoice(
+        &conn,
+        &invoice,
+        &client,
+        pay_button_for(&invoice),
+        &contact_email,
+    )?;
+
+    let (dir, is_default) = preview_dir(output_dir);
+    std::fs::create_dir_all(&dir)?;
+    if is_default {
+        // Only the directory Nigel chose. A directory the user named may be
+        // shared on purpose, and tightening it would be a surprise.
+        crate::settings::restrict_dir_permissions(&dir)?;
+    }
+    let (html_path, pdf_path) = preview_paths(&dir, number);
+
+    std::fs::write(&html_path, &rendered.html)?;
+    crate::settings::restrict_file_permissions(&html_path)?;
+    println!("Wrote {}", html_path.display());
+
+    match rendered.pdf {
+        Some(bytes) => {
+            std::fs::write(&pdf_path, &bytes)?;
+            crate::settings::restrict_file_permissions(&pdf_path)?;
+            println!("Wrote {}", pdf_path.display());
+        }
+        None => eprintln!("notice: {}", crate::cli::report::PDF_DISABLED_MESSAGE),
+    }
+    Ok(())
+}
+
 pub fn send(number: i64, today: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
@@ -376,7 +473,7 @@ mod tests {
     use super::*;
     use crate::db::init_db;
     use crate::invoicing::clients::add_client;
-    use crate::invoicing::invoices::create_invoice;
+    use crate::invoicing::invoices::{create_invoice, set_payment_link};
     use crate::migrations::run_migrations;
 
     fn test_conn() -> (tempfile::TempDir, Connection) {
@@ -590,6 +687,97 @@ mod tests {
         let invoice = find_invoice(&conn, 1248).unwrap();
         assert!(ensure_not_void(&invoice, "sent").is_ok());
         assert!(ensure_not_void(&invoice, "paid").is_ok());
+    }
+
+    #[test]
+    fn preview_paths_are_stable_and_undated() {
+        let (html, pdf) = preview_paths(Path::new("/tmp/p"), 1248);
+        assert_eq!(html, Path::new("/tmp/p/invoice-1248.html"));
+        assert_eq!(pdf, Path::new("/tmp/p/invoice-1248.pdf"));
+    }
+
+    #[test]
+    fn explicit_output_dir_wins_and_is_not_the_default() {
+        let (dir, is_default) = preview_dir(Some("/tmp/elsewhere".into()));
+        assert_eq!(dir, PathBuf::from("/tmp/elsewhere"));
+        assert!(
+            !is_default,
+            "a directory the user named is not re-permissioned"
+        );
+
+        let (dir, is_default) = preview_dir(None);
+        assert!(is_default && dir.ends_with("previews"), "got: {dir:?}");
+    }
+
+    #[test]
+    fn a_draft_with_no_link_gets_the_placeholder_button() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn);
+        let invoice = find_invoice(&conn, 1248).unwrap();
+        assert!(matches!(pay_button_for(&invoice), PayButton::Placeholder));
+    }
+
+    #[test]
+    fn a_sent_invoice_previews_with_its_real_link() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn);
+        set_payment_link(&conn, id, "pl_1", "https://pay/x").unwrap();
+        let invoice = find_invoice(&conn, 1248).unwrap();
+        assert!(matches!(
+            pay_button_for(&invoice),
+            PayButton::Link("https://pay/x")
+        ));
+    }
+
+    #[test]
+    fn a_void_invoice_never_renders_a_pay_button_even_with_a_live_link() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn);
+        set_payment_link(&conn, id, "pl_1", "https://pay/x").unwrap();
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+        let invoice = find_invoice(&conn, 1248).unwrap();
+
+        assert!(
+            matches!(pay_button_for(&invoice), PayButton::Omitted),
+            "a cancelled invoice must not offer a working payment link"
+        );
+    }
+
+    #[test]
+    fn a_stale_void_status_still_omits_the_pay_button() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn);
+        // A void whose status write did not land: the timestamp is the fact,
+        // the same reading `ensure_not_void` takes.
+        conn.execute(
+            "UPDATE invoices SET voided_at='2026-08-06', status='draft',
+                                 stripe_payment_link_url='https://pay/x' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        let invoice = find_invoice(&conn, 1248).unwrap();
+        assert!(matches!(pay_button_for(&invoice), PayButton::Omitted));
+    }
+
+    #[test]
+    fn missing_from_email_becomes_a_flagged_placeholder() {
+        let (value, placeholder) = contact_email_for_preview(&test_config());
+        assert!(placeholder && value.contains("from_email"), "got: {value}");
+
+        let cfg = InvoicingConfig {
+            from_email: Some("billing@example.test".into()),
+            ..test_config()
+        };
+        assert_eq!(
+            contact_email_for_preview(&cfg),
+            ("billing@example.test".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn preview_requires_no_invoicing_config_at_all() {
+        assert!(build_clients(test_config()).is_err()); // send cannot run
+        assert!(!contact_email_for_preview(&test_config()).0.is_empty()); // preview can
     }
 
     #[test]

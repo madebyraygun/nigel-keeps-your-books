@@ -126,6 +126,7 @@ nigel client edit 1 --email billing@acme.test         # Applies on the next send
 nigel invoice new --client 1 --issue 2026-08-04 --item "Consulting:10:150"
 nigel invoice edit 1248 --due 2026-09-30              # Drafts only
 nigel invoice void 1248                               # Cancel (confirms; --yes to skip)
+nigel invoice preview 1248                            # Render it locally first — no network, no config
 nigel invoice send 1248                               # Publish, email, attach a payment link
 nigel invoice sync                                    # Record Stripe payments
 nigel invoice pay 1248 --date 2026-08-20              # Record a payment received directly

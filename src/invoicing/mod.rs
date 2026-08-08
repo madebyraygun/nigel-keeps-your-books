@@ -4,6 +4,7 @@ pub mod import_invoiceshelf;
 pub mod invoices;
 pub mod mailgun;
 pub mod r2;
+pub mod render;
 pub mod render_html;
 pub mod send;
 pub mod stripe;

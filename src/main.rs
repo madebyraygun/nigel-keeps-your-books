@@ -110,7 +110,9 @@ fn dispatch(command: Commands) -> error::Result<()> {
     // `restore` is excluded because it overwrites the database a sync would
     // write to, `invoice sync` because it does the same work itself, and
     // `serve` because its database may still be locked (no stdin to prompt on)
-    // and its startup shouldn't block on a network poll.
+    // and its startup shouldn't block on a network poll. `invoice preview` is
+    // defined to make no network call at all, and a launch sync would make that
+    // false on any machine with a Stripe key configured.
     if !matches!(
         command,
         Commands::Init { .. }
@@ -122,7 +124,7 @@ fn dispatch(command: Commands) -> error::Result<()> {
             | Commands::Restore { .. }
             | Commands::Serve { .. }
             | Commands::Invoice {
-                command: InvoiceCommands::Sync
+                command: InvoiceCommands::Sync | InvoiceCommands::Preview { .. }
             }
     ) {
         sync_invoice_payments();
@@ -224,6 +226,9 @@ fn dispatch(command: Commands) -> error::Result<()> {
             InvoiceCommands::Void { number, yes } => cli::invoice::void(number, yes, &today()),
             InvoiceCommands::List => cli::invoice::list(),
             InvoiceCommands::Show { number } => cli::invoice::show(number),
+            InvoiceCommands::Preview { number, output_dir } => {
+                cli::invoice::preview(number, output_dir)
+            }
             InvoiceCommands::Send { number } => cli::invoice::send(number, &today()),
             InvoiceCommands::Sync => cli::invoice::sync(&today()),
             InvoiceCommands::Pay {

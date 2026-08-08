@@ -658,6 +658,255 @@ fn invoice_void_with_yes_voids_and_blocks_pay() {
         .stderr(predicate::str::contains("void and cannot be paid"));
 }
 
+/// The default preview directory for a `TestEnv`.
+fn previews_dir(env: &TestEnv) -> PathBuf {
+    env.data_dir().join("previews")
+}
+
+#[test]
+fn invoice_preview_writes_html_to_the_data_dir() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("invoice-1248.html"));
+
+    let html = std::fs::read_to_string(previews_dir(&env).join("invoice-1248.html"))
+        .expect("preview html missing");
+    assert!(html.contains("Invoice #1248"), "got: {html}");
+    assert!(html.contains("1500.00"), "got: {html}");
+}
+
+#[test]
+fn invoice_preview_of_a_draft_shows_an_inert_pay_placeholder() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success();
+
+    let html = std::fs::read_to_string(previews_dir(&env).join("invoice-1248.html")).unwrap();
+    assert!(html.contains("pay-placeholder"), "got: {html}");
+    assert!(!html.contains("<a class=\"pay\""), "got: {html}");
+}
+
+#[test]
+fn invoice_preview_needs_no_invoicing_config_and_makes_no_network_call() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    // TestEnv clears every NIGEL_* invoicing var, so this runs with no config
+    // at all; anything reaching the network would hang into TEST_TIMEOUT.
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("missing invoicing config").not());
+}
+
+#[test]
+fn invoice_preview_leaves_the_invoice_a_draft() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success();
+
+    let (status, published): (String, Option<String>) = env
+        .db()
+        .query_row(
+            "SELECT status, published_at FROM invoices WHERE number = 1248",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("invoice row missing");
+    assert_eq!(status, "draft");
+    assert_eq!(published, None);
+}
+
+#[test]
+fn invoice_preview_honors_output_dir() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    let elsewhere = env.data_dir().join("elsewhere");
+
+    env.cmd()
+        .args([
+            "invoice",
+            "preview",
+            "1248",
+            "--output-dir",
+            &elsewhere.to_string_lossy(),
+        ])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            elsewhere.to_string_lossy().to_string(),
+        ));
+
+    assert!(elsewhere.join("invoice-1248.html").exists());
+    assert!(
+        !previews_dir(&env).exists(),
+        "a named output directory must not also seed the default one"
+    );
+}
+
+#[test]
+fn invoice_preview_overwrites_in_place_on_a_second_run() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    for _ in 0..2 {
+        env.cmd()
+            .args(["invoice", "preview", "1248"])
+            .timeout(TEST_TIMEOUT)
+            .assert()
+            .success();
+    }
+
+    let names: Vec<String> = std::fs::read_dir(previews_dir(&env))
+        .expect("previews directory missing")
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    for name in &names {
+        assert!(
+            name == "invoice-1248.html" || name == "invoice-1248.pdf",
+            "unexpected preview artifact: {name}"
+        );
+    }
+    assert_eq!(
+        names.iter().filter(|n| n.ends_with(".html")).count(),
+        1,
+        "re-previewing must overwrite, not accumulate: {names:?}"
+    );
+}
+
+#[test]
+fn invoice_preview_of_an_unknown_number_fails_with_the_shared_message() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "preview", "9999"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No invoice #9999"));
+}
+
+#[test]
+fn invoice_preview_of_a_void_invoice_warns_and_omits_the_pay_button() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "void", "1248", "--yes"])
+        .assert()
+        .success();
+    // An invoice voided after it was sent still carries a live Stripe URL.
+    env.db()
+        .execute(
+            "UPDATE invoices SET stripe_payment_link_url = 'https://pay/x' WHERE number = 1248",
+            [],
+        )
+        .unwrap();
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("is void"));
+
+    let html = std::fs::read_to_string(previews_dir(&env).join("invoice-1248.html")).unwrap();
+    assert!(
+        !html.contains("https://pay/x"),
+        "a void invoice must not publish a live payment link"
+    );
+    assert!(!html.contains("Pay online"), "got: {html}");
+}
+
+#[test]
+fn invoice_preview_skips_the_launch_stripe_sync() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    // The launch sync only polls invoices that carry a payment link and are
+    // open, so this is the state in which a sync would reach Stripe at all.
+    env.db()
+        .execute(
+            "UPDATE invoices SET stripe_payment_link_id = 'pl_1', status = 'sent'
+             WHERE number = 1248",
+            [],
+        )
+        .unwrap();
+
+    // Preview is in the skip list, so the key is never used and nothing leaves
+    // the machine. Drop that arm and this run reaches Stripe with a bogus key,
+    // which reports itself on stderr.
+    env.cmd()
+        .env("NIGEL_STRIPE_SECRET_KEY", "sk_test_bogus")
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("invoice sync skipped")
+                .not()
+                .and(predicate::str::contains("new invoice payment").not()),
+        );
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn invoice_preview_writes_a_real_pdf() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("invoice-1248.pdf"));
+
+    let pdf =
+        std::fs::read(previews_dir(&env).join("invoice-1248.pdf")).expect("preview pdf missing");
+    assert!(pdf.starts_with(b"%PDF"));
+}
+
+#[cfg(not(feature = "pdf"))]
+#[test]
+fn invoice_preview_without_the_pdf_feature_still_writes_html_and_says_why() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    // Exit 0: "HTML, and PDF when the feature is on" is the documented outcome,
+    // not a failure.
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "PDF export requires the 'pdf' feature",
+        ));
+
+    assert!(previews_dir(&env).join("invoice-1248.html").exists());
+    assert!(!previews_dir(&env).join("invoice-1248.pdf").exists());
+}
+
 #[test]
 fn invoice_new_with_an_unknown_client_reports_not_found() {
     let env = TestEnv::new();

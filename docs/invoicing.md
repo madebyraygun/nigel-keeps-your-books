@@ -11,7 +11,9 @@ you would any other income.
 
 Sending requires a build with the `pdf` feature (the default). Without it,
 `nigel invoice send` stops at the render step — nothing is published or emailed,
-because there is no PDF to upload or attach.
+because there is no PDF to upload or attach. `nigel invoice preview` is the
+exception: without the feature it writes the HTML and says why there is no PDF,
+rather than stopping.
 
 ## Configuration
 
@@ -113,6 +115,65 @@ nigel invoice list            # number, status, client, total, due date
 nigel invoice show 1248       # line items, amount paid, balance, payment link
 ```
 
+## Previewing
+
+```bash
+nigel invoice preview 1248
+nigel invoice preview 1248 --output-dir ~/Desktop
+```
+
+Preview renders exactly what `send` would publish — the same HTML page, the same
+PDF — to local files, and prints where they landed:
+
+```
+Wrote /home/you/Documents/nigel/previews/invoice-1248.html
+Wrote /home/you/Documents/nigel/previews/invoice-1248.pdf
+```
+
+| | Path |
+|---|---|
+| Default | `<data_dir>/previews/invoice-<number>.html` and `.pdf` |
+| `--output-dir DIR` | `DIR/invoice-<number>.html` and `.pdf` |
+
+The filenames carry no date. An exported report is a period snapshot you keep
+beside its neighbours; a preview is a scratch view of one invoice, so
+re-previewing after an edit overwrites in place and a browser reload shows the
+new render. The default directory is created 0700 and every file 0600, the same
+handling `nigel report` gives an export; a directory you name yourself is not
+re-permissioned.
+
+The Pay button is the only thing that can differ from what a client receives:
+
+| Invoice state | Preview renders |
+|---|---|
+| Has a Stripe payment link, not void | The real link, exactly as sent |
+| No link yet, not void | An inert placeholder where the button will go |
+| Void | Nothing — even if the invoice still carries a live link |
+
+A void invoice previews rather than refusing, with
+`notice: invoice #1248 is void — this preview is for reference only.` on stderr.
+Looking at what you cancelled is legitimate; offering a working payment link for
+it is not, which is why the button is dropped even when the Stripe URL is still
+in the row.
+
+Preview is the one invoicing command that works on a fresh install: it needs no
+Stripe, R2, or Mailgun configuration and makes no network call. With `from_email`
+unset the direct-deposit contact line renders `(from_email not configured)` and
+the command says so on stderr — the page is still complete enough to check the
+figures and the layout.
+
+In a build without the `pdf` feature the HTML is written, no PDF is, and the exit
+status is still 0:
+
+```
+Wrote /home/you/Documents/nigel/previews/invoice-1248.html
+notice: PDF export requires the 'pdf' feature — build with `cargo build --features pdf`
+```
+
+A PDF left over from an earlier `pdf`-enabled run is left alone rather than
+deleted — it may have been kept deliberately, and the notice already explains why
+it was not refreshed.
+
 ## Editing a draft invoice
 
 ```bash
@@ -182,7 +243,9 @@ One command does the whole publish:
 1. Creates a Stripe Payment Link for the invoice total, if the invoice does not
    already have one. Resending reuses the existing link, so a client who bookmarked
    it can still pay.
-2. Renders the invoice to HTML and PDF.
+2. Renders the invoice to HTML and PDF — the same `render_invoice` seam
+   `nigel invoice preview` writes locally, so a preview cannot disagree with
+   what is published.
 3. Uploads both to R2 as `i/{token}/index.html` and `i/{token}/invoice.pdf`, where
    `token` is the invoice's random 16-character identifier.
 4. Emails the client through Mailgun — HTML body, PDF attached, subject
@@ -230,8 +293,9 @@ Stripe secret key is configured. It is best-effort: it prints
 `notice: recorded 2 new invoice payment(s)` when it finds something and
 `notice: invoice sync skipped: <reason>` when Stripe or the network is unavailable,
 and either way the command you typed runs normally. `init`, `demo`, `load`,
-`update`, `password`, `restore`, `completions`, and `invoice sync` itself skip the
-hook.
+`update`, `password`, `restore`, `completions`, `invoice sync` itself, and
+`invoice preview` skip the hook — preview is defined to make no network call, and
+the launch sync would make that false on a configured machine.
 
 ## Trying it end to end in test mode
 

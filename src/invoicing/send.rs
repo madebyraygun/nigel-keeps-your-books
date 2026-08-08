@@ -3,8 +3,9 @@ use rusqlite::Connection;
 use crate::error::{NigelError, Result};
 use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
-use crate::invoicing::invoices::{get_invoice, line_items, mark_published, set_payment_link};
-use crate::invoicing::render_html::render_invoice_html;
+use crate::invoicing::invoices::{get_invoice, mark_published, set_payment_link};
+use crate::invoicing::render::render_invoice;
+use crate::invoicing::render_html::PayButton;
 
 pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     conn: &Connection,
@@ -30,41 +31,26 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     }
     let pay_url = invoice.stripe_payment_link_url.clone();
 
-    let items = line_items(conn, invoice_id)?;
-    let html = render_invoice_html(&invoice, &client, &items, pay_url.as_deref(), contact_email);
-    let pdf = render_pdf(&invoice, &client, &items)?;
+    let pay = match pay_url.as_deref() {
+        Some(url) => PayButton::Link(url),
+        None => PayButton::Omitted,
+    };
+    let rendered = render_invoice(conn, &invoice, &client, pay, contact_email)?;
+    let pdf = rendered.pdf.ok_or_else(|| {
+        NigelError::Other("PDF support not compiled in (build with --features pdf)".into())
+    })?;
 
-    let public_url = publisher.publish(&invoice.token, html.as_bytes(), &pdf)?;
+    let public_url = publisher.publish(&invoice.token, rendered.html.as_bytes(), &pdf)?;
 
     let subject = format!("Invoice #{} from Raygun", invoice.number);
-    mailer.send_invoice(&email, &subject, &html, &pdf)?;
+    mailer.send_invoice(&email, &subject, &rendered.html, &pdf)?;
 
     mark_published(conn, invoice_id, today)?;
     Ok(public_url)
 }
 
-#[cfg(feature = "pdf")]
-fn render_pdf(
-    invoice: &crate::models::Invoice,
-    client: &crate::models::Client,
-    items: &[crate::models::InvoiceLineItem],
-) -> Result<Vec<u8>> {
-    crate::pdf::render_invoice_pdf(invoice, client, items)
-}
-
-#[cfg(not(feature = "pdf"))]
-fn render_pdf(
-    _invoice: &crate::models::Invoice,
-    _client: &crate::models::Client,
-    _items: &[crate::models::InvoiceLineItem],
-) -> Result<Vec<u8>> {
-    Err(NigelError::Other(
-        "PDF support not compiled in (build with --features pdf)".into(),
-    ))
-}
-
 // Sending needs a real PDF to publish and attach, so these exercise the orchestration
-// only in the `pdf` build; without the feature `render_pdf` above always errors.
+// only in the `pdf` build; without the feature the seam renders no PDF and send refuses.
 #[cfg(all(test, feature = "pdf"))]
 mod tests {
     use super::*;
