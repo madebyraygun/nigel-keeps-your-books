@@ -70,9 +70,11 @@ fn void_summary(invoice: &Invoice, client_name: &str) -> String {
     )
 }
 
+/// The data layer already answers an absent invoice as `NotFound`; this only
+/// rewrites the sentence, because a terminal can be told what to run next.
 fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
     get_invoice_by_number(conn, number).map_err(|e| match e {
-        NigelError::Db(rusqlite::Error::QueryReturnedNoRows) => NigelError::NotFound(format!(
+        NigelError::NotFound(_) => NigelError::NotFound(format!(
             "No invoice #{number}. Run `nigel invoice list` to see invoice numbers."
         )),
         other => other,
@@ -327,7 +329,7 @@ fn preview_paths(dir: &Path, number: i64) -> (PathBuf, PathBuf) {
     )
 }
 
-fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
+pub(crate) fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
     // A voided invoice can still carry a live Stripe URL, and rendering a
     // working Pay button on a cancelled invoice is the one way this command
     // could cost someone money.
@@ -340,7 +342,7 @@ fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
     }
 }
 
-fn contact_email_for_preview(cfg: &InvoicingConfig) -> (String, bool) {
+pub(crate) fn contact_email_for_preview(cfg: &InvoicingConfig) -> (String, bool) {
     match cfg.from_email.as_deref() {
         Some(email) => (email.to_string(), false),
         None => (PREVIEW_CONTACT_PLACEHOLDER.to_string(), true),

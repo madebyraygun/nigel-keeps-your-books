@@ -62,6 +62,11 @@ pub(crate) struct StatusResponse {
     data_dir: String,
     pdf_export: bool,
     update_available: Option<String>,
+    /// Absent while the database is locked. `/api/status` is ungated by design,
+    /// and which integrations an installation has configured is not something
+    /// to advertise to a caller who has not passed the gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invoicing: Option<crate::settings::InvoicingStatus>,
 }
 
 /// Everything `GET /api/status` reports, computed fresh.
@@ -112,6 +117,8 @@ pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse
         // until GitHub answers — and stays `None` when the user has opted out
         // or the 24-hour cooldown has not elapsed.
         update_available: state.update_available(),
+        invoicing: (!locked)
+            .then(|| crate::settings::invoicing_status(&crate::settings::invoicing_config())),
     })
 }
 
@@ -217,6 +224,66 @@ fn open_failed() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::testutil::*;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn status_reports_which_invoicing_config_is_missing_by_name() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let status = status_json(&app, &token).await;
+        let invoicing = &status["invoicing"];
+        assert_eq!(invoicing["sendConfigured"], false, "{status}");
+        assert_eq!(invoicing["syncConfigured"], false, "{status}");
+
+        let missing = invoicing["missing"].as_array().expect("missing keys");
+        // Nothing is configured under a temporary config directory, so all nine
+        // are named, in `docs/invoicing.md`'s order.
+        assert_eq!(missing.len(), 9, "{status}");
+        assert_eq!(missing[0], "stripe_secret_key");
+        assert_eq!(missing[8], "public_base_url");
+        assert!(
+            missing.contains(&serde_json::json!("r2_bucket")),
+            "{status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_configured_stripe_key_makes_sync_available_on_its_own() {
+        let _config = TempConfig::new();
+        let mut settings = crate::settings::load_settings();
+        settings.stripe_secret_key = Some("sk_test_not_a_real_key".to_string());
+        crate::settings::save_settings(&settings).expect("settings");
+
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let status = status_json(&app, &token).await;
+        assert_eq!(status["invoicing"]["syncConfigured"], true, "{status}");
+        assert_eq!(status["invoicing"]["sendConfigured"], false, "{status}");
+        // The key that is set is simply absent from `missing` — never echoed.
+        let rendered = status.to_string();
+        assert!(!rendered.contains("sk_test_not_a_real_key"), "{rendered}");
+    }
+
+    /// `/api/status` answers while the database is still encrypted, so it must
+    /// not use that answer to say which integrations this installation has.
+    #[tokio::test]
+    async fn a_locked_database_reports_no_invoicing_block_at_all() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        let status = status_json(&app, &token).await;
+        assert_eq!(status["locked"], true, "{status}");
+        assert!(status.get("invoicing").is_none(), "{status}");
+
+        let (code, _) = get_json(&app, "/api/clients", &token).await;
+        assert_eq!(code, StatusCode::LOCKED);
+    }
 
     #[test]
     fn unlock_request_debug_redacts_the_password() {

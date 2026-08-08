@@ -223,7 +223,7 @@ pub(super) fn parse_month(value: &str) -> ApiResult<(i32, u32)> {
 /// `YYYY-MM-DD`, strictly. The length check rejects `2025-1-5`, which chrono
 /// would otherwise accept and which does not compare correctly against the
 /// zero-padded dates stored in the database.
-fn parse_date(param: &str, value: &str) -> ApiResult<String> {
+pub(super) fn parse_date(param: &str, value: &str) -> ApiResult<String> {
     if value.len() == 10 && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() {
         return Ok(value.to_string());
     }

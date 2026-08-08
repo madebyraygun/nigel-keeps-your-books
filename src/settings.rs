@@ -227,6 +227,46 @@ pub fn invoicing_config() -> InvoicingConfig {
     invoicing_config_from(&load_settings())
 }
 
+/// Which invoicing keys are set, by name.
+///
+/// Key names only, never values: three of the nine are plaintext secrets, and
+/// the names are already published in `docs/invoicing.md`. It is what greys out
+/// a Send button and what an empty state points at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicingStatus {
+    pub send_configured: bool,
+    pub sync_configured: bool,
+    pub missing: Vec<&'static str>,
+}
+
+pub fn invoicing_status(cfg: &InvoicingConfig) -> InvoicingStatus {
+    // `docs/invoicing.md`'s order, which is also `build_clients`' requirement
+    // list: every one of the nine is needed to send.
+    let keys: [(&'static str, &Option<String>); 9] = [
+        ("stripe_secret_key", &cfg.stripe_secret_key),
+        ("mailgun_api_key", &cfg.mailgun_api_key),
+        ("mailgun_domain", &cfg.mailgun_domain),
+        ("from_email", &cfg.from_email),
+        ("r2_account_id", &cfg.r2_account_id),
+        ("r2_access_key", &cfg.r2_access_key),
+        ("r2_secret_key", &cfg.r2_secret_key),
+        ("r2_bucket", &cfg.r2_bucket),
+        ("public_base_url", &cfg.public_base_url),
+    ];
+    let missing: Vec<&'static str> = keys
+        .iter()
+        .filter(|(_, value)| value.is_none())
+        .map(|(name, _)| *name)
+        .collect();
+
+    InvoicingStatus {
+        send_configured: missing.is_empty(),
+        sync_configured: cfg.stripe_secret_key.is_some(),
+        missing,
+    }
+}
+
 pub fn get_data_dir() -> PathBuf {
     PathBuf::from(&load_settings().data_dir)
 }
@@ -276,6 +316,59 @@ pub fn restrict_dir_permissions(path: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fully_configured() -> InvoicingConfig {
+        InvoicingConfig {
+            stripe_secret_key: Some("sk_live_secret".into()),
+            mailgun_api_key: Some("key-secret".into()),
+            mailgun_domain: Some("mg.example.com".into()),
+            from_email: Some("billing@example.com".into()),
+            r2_account_id: Some("acct-secret".into()),
+            r2_access_key: Some("access-secret".into()),
+            r2_secret_key: Some("secret-secret".into()),
+            r2_bucket: Some("billing".into()),
+            public_base_url: Some("https://billing.example.com/i".into()),
+        }
+    }
+
+    #[test]
+    fn the_invoicing_status_never_carries_a_value() {
+        let status = invoicing_status(&fully_configured());
+        assert!(status.send_configured);
+        assert!(status.sync_configured);
+        assert!(status.missing.is_empty());
+
+        let rendered = serde_json::to_string(&status).expect("serializes");
+        for value in [
+            "sk_live_secret",
+            "key-secret",
+            "mg.example.com",
+            "billing@example.com",
+            "acct-secret",
+            "access-secret",
+            "secret-secret",
+            "billing",
+            "https://billing.example.com/i",
+        ] {
+            assert!(!rendered.contains(value), "{value} leaked into {rendered}");
+        }
+    }
+
+    #[test]
+    fn invoicing_status_names_the_missing_keys_in_the_documented_order() {
+        let mut cfg = fully_configured();
+        cfg.r2_bucket = None;
+        cfg.stripe_secret_key = None;
+        cfg.public_base_url = None;
+
+        let status = invoicing_status(&cfg);
+        assert!(!status.send_configured);
+        assert!(!status.sync_configured, "sync is stripe_secret_key alone");
+        assert_eq!(
+            status.missing,
+            vec!["stripe_secret_key", "r2_bucket", "public_base_url"]
+        );
+    }
 
     #[test]
     fn test_save_and_load_roundtrip() {

@@ -8,8 +8,10 @@
 
 pub mod accounts;
 pub mod categories;
+pub mod clients;
 pub mod exports;
 pub mod imports;
+pub mod invoices;
 pub mod reconcile;
 pub mod reports;
 pub mod review;
@@ -51,7 +53,9 @@ fn data_router() -> Router<AppState> {
         .merge(transactions::routes())
         .merge(review::routes())
         .merge(reconcile::routes())
-        .merge(settings::routes());
+        .merge(settings::routes())
+        .merge(clients::routes())
+        .merge(invoices::routes());
 
     // A route that exists only to prove `api_router` — the assembly every
     // endpoint is mounted into — actually applies the guard, without pinning
@@ -127,6 +131,20 @@ pub(super) fn ensure_account_exists(conn: &Connection, name: &str) -> crate::err
         Ok(())
     } else {
         Err(crate::error::NigelError::UnknownAccount(name.to_string()))
+    }
+}
+
+/// Re-answer a data-layer `NotFound` with the name of the thing this route was
+/// looking up.
+///
+/// The data layer says only that something was not found, which is right for a
+/// terminal and not enough for a handler that resolves both an invoice and its
+/// client: a client branching on the status alone has to guess which one is
+/// missing. Everything else passes through untouched.
+pub(super) fn not_found_because(err: crate::error::NigelError, reason: &str) -> ApiError {
+    match err {
+        crate::error::NigelError::NotFound(message) => ApiError::not_found_because(message, reason),
+        other => ApiError::from(other),
     }
 }
 
