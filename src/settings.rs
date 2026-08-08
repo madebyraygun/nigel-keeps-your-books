@@ -17,6 +17,24 @@ pub struct Settings {
     pub update_check: bool,
     #[serde(default)]
     pub last_update_check: Option<String>,
+    #[serde(default)]
+    pub stripe_secret_key: Option<String>,
+    #[serde(default)]
+    pub mailgun_api_key: Option<String>,
+    #[serde(default)]
+    pub mailgun_domain: Option<String>,
+    #[serde(default)]
+    pub from_email: Option<String>,
+    #[serde(default)]
+    pub r2_account_id: Option<String>,
+    #[serde(default)]
+    pub r2_access_key: Option<String>,
+    #[serde(default)]
+    pub r2_secret_key: Option<String>,
+    #[serde(default)]
+    pub r2_bucket: Option<String>,
+    #[serde(default)]
+    pub public_base_url: Option<String>,
 }
 
 impl Default for Settings {
@@ -26,6 +44,15 @@ impl Default for Settings {
             user_name: String::new(),
             update_check: true,
             last_update_check: None,
+            stripe_secret_key: None,
+            mailgun_api_key: None,
+            mailgun_domain: None,
+            from_email: None,
+            r2_account_id: None,
+            r2_access_key: None,
+            r2_secret_key: None,
+            r2_bucket: None,
+            public_base_url: None,
         }
     }
 }
@@ -162,6 +189,44 @@ pub fn migrate_company_name() -> Option<String> {
     Some(name)
 }
 
+/// Resolved invoicing credentials and endpoints.
+pub struct InvoicingConfig {
+    pub stripe_secret_key: Option<String>,
+    pub mailgun_api_key: Option<String>,
+    pub mailgun_domain: Option<String>,
+    pub from_email: Option<String>,
+    pub r2_account_id: Option<String>,
+    pub r2_access_key: Option<String>,
+    pub r2_secret_key: Option<String>,
+    pub r2_bucket: Option<String>,
+    pub public_base_url: Option<String>,
+}
+
+pub fn invoicing_config_from(s: &Settings) -> InvoicingConfig {
+    invoicing_config_with(s, |name| std::env::var(name).ok())
+}
+
+/// The env lookup is injected so tests can exercise the env-wins precedence
+/// without mutating the process environment.
+fn invoicing_config_with(s: &Settings, env: impl Fn(&str) -> Option<String>) -> InvoicingConfig {
+    let env_or = |name: &str, file_val: &Option<String>| env(name).or_else(|| file_val.clone());
+    InvoicingConfig {
+        stripe_secret_key: env_or("NIGEL_STRIPE_SECRET_KEY", &s.stripe_secret_key),
+        mailgun_api_key: env_or("NIGEL_MAILGUN_API_KEY", &s.mailgun_api_key),
+        mailgun_domain: env_or("NIGEL_MAILGUN_DOMAIN", &s.mailgun_domain),
+        from_email: env_or("NIGEL_FROM_EMAIL", &s.from_email),
+        r2_account_id: env_or("NIGEL_R2_ACCOUNT_ID", &s.r2_account_id),
+        r2_access_key: env_or("NIGEL_R2_ACCESS_KEY", &s.r2_access_key),
+        r2_secret_key: env_or("NIGEL_R2_SECRET_KEY", &s.r2_secret_key),
+        r2_bucket: env_or("NIGEL_R2_BUCKET", &s.r2_bucket),
+        public_base_url: env_or("NIGEL_PUBLIC_BASE_URL", &s.public_base_url),
+    }
+}
+
+pub fn invoicing_config() -> InvoicingConfig {
+    invoicing_config_from(&load_settings())
+}
+
 pub fn get_data_dir() -> PathBuf {
     PathBuf::from(&load_settings().data_dir)
 }
@@ -221,6 +286,7 @@ mod tests {
             user_name: "Alice".to_string(),
             update_check: true,
             last_update_check: None,
+            ..Settings::default()
         };
         let json = serde_json::to_string_pretty(&settings).unwrap();
         std::fs::write(&path, &json).unwrap();
@@ -277,6 +343,7 @@ mod tests {
             user_name: "Alice".to_string(),
             update_check: false,
             last_update_check: Some("2025-06-15T10:30:00".to_string()),
+            ..Settings::default()
         };
         let json = serde_json::to_string_pretty(&settings).unwrap();
         let loaded: Settings = serde_json::from_str(&json).unwrap();
@@ -285,6 +352,42 @@ mod tests {
             loaded.last_update_check.as_deref(),
             Some("2025-06-15T10:30:00")
         );
+    }
+
+    #[test]
+    fn invoicing_config_prefers_env_over_settings() {
+        let file_settings = Settings {
+            data_dir: "/x".into(),
+            user_name: String::new(),
+            update_check: true,
+            last_update_check: None,
+            stripe_secret_key: Some("rk_file".into()),
+            public_base_url: Some("https://file.example/i".into()),
+            ..Settings::default()
+        };
+
+        let cfg = invoicing_config_with(&file_settings, |name| match name {
+            "NIGEL_STRIPE_SECRET_KEY" => Some("rk_env".into()),
+            "NIGEL_PUBLIC_BASE_URL" => Some("https://env.example/i".into()),
+            _ => None,
+        });
+        assert_eq!(cfg.stripe_secret_key.as_deref(), Some("rk_env"));
+        assert_eq!(
+            cfg.public_base_url.as_deref(),
+            Some("https://env.example/i")
+        );
+
+        let cfg2 = invoicing_config_with(&file_settings, |_| None);
+        assert_eq!(cfg2.stripe_secret_key.as_deref(), Some("rk_file"));
+        assert_eq!(
+            cfg2.public_base_url.as_deref(),
+            Some("https://file.example/i")
+        );
+
+        let cfg3 = invoicing_config_with(&Settings::default(), |_| None);
+        assert_eq!(cfg3.public_base_url, None);
+        assert_eq!(cfg3.mailgun_domain, None);
+        assert_eq!(cfg3.from_email, None);
     }
 
     #[test]

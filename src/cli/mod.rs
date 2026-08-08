@@ -5,6 +5,7 @@ pub mod browse;
 pub mod categories;
 pub mod categorize;
 pub mod category_manager;
+pub mod client;
 pub mod dashboard;
 pub mod demo;
 pub mod export;
@@ -12,6 +13,7 @@ pub mod goodbye;
 pub mod import;
 pub mod import_manager;
 pub mod init;
+pub mod invoice;
 pub mod load;
 pub mod load_manager;
 pub mod onboarding;
@@ -77,6 +79,16 @@ pub enum Commands {
     Categories {
         #[command(subcommand)]
         command: CategoriesCommands,
+    },
+    /// Manage clients.
+    Client {
+        #[command(subcommand)]
+        command: ClientCommands,
+    },
+    /// Create, publish, and track invoices.
+    Invoice {
+        #[command(subcommand)]
+        command: InvoiceCommands,
     },
     /// Import a CSV/XLSX file and auto-categorize transactions.
     Import {
@@ -278,6 +290,81 @@ pub enum CategoriesCommands {
     Delete {
         /// Category ID
         id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ClientCommands {
+    /// Add a client.
+    Add {
+        /// Client name, e.g. 'Acme Co'
+        name: String,
+        /// Billing email (required before an invoice can be sent)
+        #[arg(long)]
+        email: Option<String>,
+        /// Billing address
+        #[arg(long)]
+        address: Option<String>,
+    },
+    /// List all clients.
+    List,
+}
+
+#[derive(Subcommand)]
+pub enum InvoiceCommands {
+    /// Create a draft invoice. Line items as "desc:qty:unit", repeatable.
+    New {
+        /// Client ID (shown in `nigel client list`)
+        #[arg(long)]
+        client: i64,
+        /// Issue date: YYYY-MM-DD
+        #[arg(long = "issue")]
+        issue_date: String,
+        /// Due date: YYYY-MM-DD
+        #[arg(long = "due")]
+        due_date: Option<String>,
+        /// Currency code
+        #[arg(long, default_value = "USD")]
+        currency: String,
+        /// Line item as "desc:qty:unit" (repeatable)
+        #[arg(long = "item")]
+        items: Vec<String>,
+    },
+    /// List invoices.
+    List,
+    /// Show one invoice by number.
+    Show {
+        /// Invoice number (shown in `nigel invoice list`)
+        number: i64,
+    },
+    /// Render, publish to R2, and email an invoice.
+    Send {
+        /// Invoice number
+        number: i64,
+    },
+    /// Poll Stripe and record any new payments.
+    Sync,
+    /// Manually record a payment (direct deposit, etc.).
+    Pay {
+        /// Invoice number
+        number: i64,
+        /// Amount paid (default: the full outstanding balance)
+        #[arg(long)]
+        amount: Option<f64>,
+        /// Payment date: YYYY-MM-DD
+        #[arg(long)]
+        date: String,
+        /// Payment method
+        #[arg(long, default_value = "direct_deposit")]
+        method: String,
+    },
+    /// A/R aging report.
+    Aging,
+    /// One-time import from an InvoiceShelf SQLite file.
+    Import {
+        /// Path to the InvoiceShelf SQLite database
+        #[arg(long = "from-invoiceshelf")]
+        db: String,
     },
 }
 

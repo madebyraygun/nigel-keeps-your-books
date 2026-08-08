@@ -5,6 +5,20 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// Every `NIGEL_*` key `settings::invoicing_config()` reads. Env vars win over the
+/// settings file, and the temp HOME cannot mask them, so they are cleared per command.
+const INVOICING_ENV_VARS: [&str; 9] = [
+    "NIGEL_STRIPE_SECRET_KEY",
+    "NIGEL_MAILGUN_API_KEY",
+    "NIGEL_MAILGUN_DOMAIN",
+    "NIGEL_FROM_EMAIL",
+    "NIGEL_R2_ACCOUNT_ID",
+    "NIGEL_R2_ACCESS_KEY",
+    "NIGEL_R2_SECRET_KEY",
+    "NIGEL_R2_BUCKET",
+    "NIGEL_PUBLIC_BASE_URL",
+];
+
 /// Bounds any run that could reach the interactive password prompt, so a test
 /// inheriting a tty fails instead of blocking on `rpassword` forever.
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -29,10 +43,15 @@ impl TestEnv {
         self.home.path().join("nigel-data")
     }
 
-    /// Build a `nigel` Command with HOME pointed at our temp dir.
+    /// Build a `nigel` Command with HOME pointed at our temp dir and every
+    /// invoicing credential cleared from the inherited environment, so no test
+    /// can reach Stripe, R2, or Mailgun on a machine where those are exported.
     fn cmd(&self) -> Command {
         let mut cmd: Command = cargo_bin_cmd!("nigel");
         cmd.env("HOME", self.home.path());
+        for var in INVOICING_ENV_VARS {
+            cmd.env_remove(var);
+        }
         cmd
     }
 
@@ -405,6 +424,28 @@ fn init_without_db_then_status() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Transactions:  0"));
+}
+
+#[test]
+fn client_add_and_list_roundtrip() {
+    let env = TestEnv::new();
+
+    env.cmd()
+        .args(["init", "--data-dir", &env.data_dir().to_string_lossy()])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["client", "add", "Acme Co", "--email", "a@b.test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Acme Co"));
+
+    env.cmd()
+        .args(["client", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Acme Co").and(predicate::str::contains("a@b.test")));
 }
 
 #[test]

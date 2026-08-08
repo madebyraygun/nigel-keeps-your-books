@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Invoice {{NUMBER}}</title>
+<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:.4rem;border-bottom:1px solid #ddd}
+.total{font-weight:700}.pay{display:inline-block;margin:1rem 0;padding:.6rem 1rem;background:#111;color:#fff;text-decoration:none;border-radius:.4rem}</style>
+</head><body>
+<h1>Invoice #{{NUMBER}}</h1>
+<p>Billed to: {{CLIENT}}<br>Issued: {{ISSUE}}{{DUE}}</p>
+<table><thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Amount</th></tr></thead>
+<tbody>{{ROWS}}</tbody></table>
+<p class="total">Total: {{CURRENCY}} {{TOTAL}}</p>
+{{PAY}}
+<h3>Direct deposit</h3>
+<p>To pay by bank transfer, reference invoice <strong>#{{NUMBER}}</strong>. Contact {{CONTACT}} for account details.</p>
+</body></html>

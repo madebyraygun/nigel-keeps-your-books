@@ -1,10 +1,33 @@
 use clap::{CommandFactory, Parser};
 
 use nigel::cli::{
-    self, AccountsCommands, BrowseCommands, CategoriesCommands, Cli, Commands, PasswordCommand,
-    RulesCommands,
+    self, AccountsCommands, BrowseCommands, CategoriesCommands, Cli, ClientCommands, Commands,
+    InvoiceCommands, PasswordCommand, RulesCommands,
 };
 use nigel::error;
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// Reconcile Stripe payments before a data-bearing command runs. Best-effort:
+/// with no Stripe key configured it does nothing, and any failure prints a
+/// notice instead of failing the command the user actually asked for.
+fn sync_invoice_payments() {
+    let Some(secret_key) = nigel::settings::invoicing_config().stripe_secret_key else {
+        return;
+    };
+    let gateway = nigel::invoicing::stripe::StripeClient { secret_key };
+    let db_path = nigel::settings::get_data_dir().join("nigel.db");
+    let result = nigel::db::get_connection(&db_path)
+        .and_then(|conn| nigel::invoicing::sync::sync_all(&conn, &today(), &gateway));
+
+    match result {
+        Ok(0) => {}
+        Ok(n) => eprintln!("notice: recorded {n} new invoice payment(s)"),
+        Err(e) => eprintln!("notice: invoice sync skipped: {e}"),
+    }
+}
 
 fn main() {
     // Install ratatui panic hook once — restores terminal on panic for all TUI screens
@@ -83,6 +106,28 @@ fn dispatch(command: Commands) -> error::Result<()> {
         nigel::db::init_db(&conn)?;
     }
 
+    // Reconcile Stripe payments for commands that read or write the books.
+    // `restore` is excluded because it overwrites the database a sync would
+    // write to, `invoice sync` because it does the same work itself, and
+    // `serve` because its database may still be locked (no stdin to prompt on)
+    // and its startup shouldn't block on a network poll.
+    if !matches!(
+        command,
+        Commands::Init { .. }
+            | Commands::Demo
+            | Commands::Load { .. }
+            | Commands::Update
+            | Commands::Completions { .. }
+            | Commands::Password { .. }
+            | Commands::Restore { .. }
+            | Commands::Serve { .. }
+            | Commands::Invoice {
+                command: InvoiceCommands::Sync
+            }
+    ) {
+        sync_invoice_payments();
+    }
+
     match command {
         Commands::Init { data_dir } => cli::init::run(data_dir),
         Commands::Accounts { command } => match command {
@@ -129,6 +174,35 @@ fn dispatch(command: Commands) -> error::Result<()> {
                 form_line.as_deref(),
             ),
             CategoriesCommands::Delete { id } => cli::categories::delete(id),
+        },
+        Commands::Client { command } => match command {
+            ClientCommands::Add {
+                name,
+                email,
+                address,
+            } => cli::client::add(&name, email.as_deref(), address.as_deref()),
+            ClientCommands::List => cli::client::list(),
+        },
+        Commands::Invoice { command } => match command {
+            InvoiceCommands::New {
+                client,
+                issue_date,
+                due_date,
+                currency,
+                items,
+            } => cli::invoice::new(client, &issue_date, due_date.as_deref(), &currency, &items),
+            InvoiceCommands::List => cli::invoice::list(),
+            InvoiceCommands::Show { number } => cli::invoice::show(number),
+            InvoiceCommands::Send { number } => cli::invoice::send(number, &today()),
+            InvoiceCommands::Sync => cli::invoice::sync(&today()),
+            InvoiceCommands::Pay {
+                number,
+                amount,
+                date,
+                method,
+            } => cli::invoice::pay(number, amount, &date, &method),
+            InvoiceCommands::Aging => cli::invoice::aging(&today()),
+            InvoiceCommands::Import { db } => cli::invoice::import(&db),
         },
         Commands::Import {
             file,

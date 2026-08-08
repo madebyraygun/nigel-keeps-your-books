@@ -55,6 +55,63 @@ const MIGRATIONS: &[Migration] = &[
             Ok(())
         },
     },
+    Migration {
+        version: 4,
+        description: "add invoicing tables (clients, invoices, line items, payments)",
+        up: |conn| {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS clients (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    email TEXT,
+                    billing_address TEXT,
+                    notes TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+                CREATE TABLE IF NOT EXISTS invoices (
+                    id INTEGER PRIMARY KEY,
+                    number INTEGER NOT NULL UNIQUE,
+                    client_id INTEGER NOT NULL,
+                    issue_date TEXT NOT NULL,
+                    due_date TEXT,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    currency TEXT NOT NULL DEFAULT 'USD',
+                    subtotal REAL NOT NULL DEFAULT 0,
+                    tax REAL NOT NULL DEFAULT 0,
+                    total REAL NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    terms TEXT,
+                    token TEXT NOT NULL UNIQUE,
+                    stripe_payment_link_id TEXT,
+                    stripe_payment_link_url TEXT,
+                    published_at TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY (client_id) REFERENCES clients(id)
+                );
+                CREATE TABLE IF NOT EXISTS invoice_line_items (
+                    id INTEGER PRIMARY KEY,
+                    invoice_id INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    quantity REAL NOT NULL DEFAULT 1,
+                    unit_amount REAL NOT NULL DEFAULT 0,
+                    line_total REAL NOT NULL DEFAULT 0,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+                );
+                CREATE TABLE IF NOT EXISTS invoice_payments (
+                    id INTEGER PRIMARY KEY,
+                    invoice_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    paid_date TEXT NOT NULL,
+                    method TEXT NOT NULL CHECK (method IN ('stripe','ach','direct_deposit','other')),
+                    stripe_checkout_session_id TEXT UNIQUE,
+                    recorded_at TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+                );",
+            )?;
+            Ok(())
+        },
+    },
 ];
 
 pub const LATEST_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
@@ -187,6 +244,35 @@ mod tests {
             )
             .unwrap();
         assert!(!table_exists);
+    }
+}
+
+#[cfg(test)]
+mod invoicing_migration_tests {
+    use crate::db::{get_connection, init_db};
+    use crate::migrations::run_migrations;
+
+    #[test]
+    fn invoicing_tables_exist_after_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = get_connection(&dir.path().join("t.db")).unwrap();
+        init_db(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        for table in [
+            "clients",
+            "invoices",
+            "invoice_line_items",
+            "invoice_payments",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "missing table {table}");
+        }
     }
 }
 

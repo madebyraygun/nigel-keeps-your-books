@@ -13,6 +13,7 @@ pub mod effects;
 pub mod error;
 pub mod fmt;
 pub mod importer;
+pub mod invoicing;
 pub mod migrations;
 pub mod models;
 #[cfg(feature = "pdf")]
