@@ -442,6 +442,26 @@ pub enum InvoiceCommands {
         #[arg(long = "from-invoiceshelf")]
         db: String,
     },
+    /// Manage the invoice page template.
+    Template {
+        #[command(subcommand)]
+        command: InvoiceTemplateCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InvoiceTemplateCommands {
+    /// Write the built-in invoice template out as a starting point.
+    Export {
+        /// Destination (default: <data_dir>/templates/invoice.html)
+        #[arg(long)]
+        output: Option<String>,
+        /// Overwrite an existing file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show where Nigel looks for a custom invoice template.
+    Path,
 }
 
 #[derive(Subcommand)]

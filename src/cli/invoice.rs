@@ -15,7 +15,9 @@ use crate::invoicing::invoices::{
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
 use crate::invoicing::render::render_invoice;
-use crate::invoicing::render_html::PayButton;
+use crate::invoicing::render_html::{
+    load_template, template_path, Branding, PayButton, DEFAULT_TEMPLATE,
+};
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
 use crate::invoicing::sync::sync_all;
@@ -125,6 +127,12 @@ fn require(value: Option<String>, what: &str) -> Result<String> {
             "missing invoicing config: {what} (set it in settings.json or the matching NIGEL_ env var)"
         ))
     })
+}
+
+/// The business name the settings screen writes, as the invoice page and the
+/// email subject want it: a plain string, empty when nobody has set one.
+fn company_name(conn: &Connection) -> String {
+    crate::db::get_metadata(conn, "company_name").unwrap_or_default()
 }
 
 fn build_gateway(cfg: &InvoicingConfig) -> Result<StripeClient> {
@@ -373,6 +381,14 @@ pub fn preview(number: i64, output_dir: Option<String>) -> Result<()> {
         );
     }
 
+    let template = load_template(&get_data_dir())?;
+    let company = company_name(&conn);
+    let branding = Branding {
+        template: &template,
+        company: &company,
+        contact_email: &contact_email,
+    };
+
     // Both artifacts are rendered before either is written, so a PDF failure
     // cannot leave fresh HTML beside a stale PDF.
     let rendered = render_invoice(
@@ -380,7 +396,7 @@ pub fn preview(number: i64, output_dir: Option<String>) -> Result<()> {
         &invoice,
         &client,
         pay_button_for(&invoice),
-        &contact_email,
+        &branding,
     )?;
 
     let (dir, is_default) = preview_dir(output_dir);
@@ -411,17 +427,17 @@ pub fn send(number: i64, today: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
     ensure_not_void(&invoice, "sent")?;
+    // The template is loaded before anything is built or created, so a broken
+    // one fails the send with no Stripe link made and nothing published.
+    let template = load_template(&get_data_dir())?;
     let (stripe, r2, mail) = build_clients(invoicing_config())?;
-    let contact_email = mail.from.clone();
-    let url = send_invoice(
-        &conn,
-        invoice.id,
-        today,
-        &contact_email,
-        &stripe,
-        &r2,
-        &mail,
-    )?;
+    let company = company_name(&conn);
+    let branding = Branding {
+        template: &template,
+        company: &company,
+        contact_email: &mail.from,
+    };
+    let url = send_invoice(&conn, invoice.id, today, &branding, &stripe, &r2, &mail)?;
     println!("Sent invoice #{number}: {url}");
     Ok(())
 }
@@ -451,6 +467,49 @@ pub fn pay(number: i64, amount: Option<f64>, date: &str, method: &str) -> Result
 
 pub fn aging(today: &str) -> Result<()> {
     println!("{}", crate::cli::report::text::aging(today)?);
+    Ok(())
+}
+
+pub fn template_export(output: Option<&str>, force: bool) -> Result<()> {
+    let destination = match output {
+        Some(path) => PathBuf::from(crate::settings::shellexpand_path(path)),
+        None => template_path(&get_data_dir()),
+    };
+
+    if destination.exists() && !force {
+        return Err(NigelError::Invalid(format!(
+            "{} already exists. Pass --force to overwrite it.",
+            destination.display()
+        )));
+    }
+    let write_error = |e: std::io::Error| {
+        NigelError::Invalid(format!(
+            "Cannot write invoice template to {}: {e}",
+            destination.display()
+        ))
+    };
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(write_error)?;
+    }
+    std::fs::write(&destination, DEFAULT_TEMPLATE).map_err(write_error)?;
+
+    println!("Wrote invoice template to {}", destination.display());
+    println!(
+        "Edit it, then check it with `nigel invoice preview <number>` — see docs/invoicing.md."
+    );
+    Ok(())
+}
+
+pub fn template_show_path() -> Result<()> {
+    let path = template_path(&get_data_dir());
+    println!("{}", path.display());
+
+    if !path.exists() {
+        println!("No custom template — the built-in one is in use.");
+        return Ok(());
+    }
+    load_template(&get_data_dir())?;
+    println!("Custom template in effect.");
     Ok(())
 }
 

@@ -5,13 +5,13 @@ use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{get_invoice, mark_published, set_payment_link};
 use crate::invoicing::render::render_invoice;
-use crate::invoicing::render_html::PayButton;
+use crate::invoicing::render_html::{Branding, PayButton};
 
 pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     conn: &Connection,
     invoice_id: i64,
     today: &str,
-    contact_email: &str,
+    branding: &Branding<'_>,
     gateway: &G,
     publisher: &P,
     mailer: &M,
@@ -35,14 +35,17 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
         Some(url) => PayButton::Link(url),
         None => PayButton::Omitted,
     };
-    let rendered = render_invoice(conn, &invoice, &client, pay, contact_email)?;
+    let rendered = render_invoice(conn, &invoice, &client, pay, branding)?;
     let pdf = rendered.pdf.ok_or_else(|| {
         NigelError::Other("PDF support not compiled in (build with --features pdf)".into())
     })?;
 
     let public_url = publisher.publish(&invoice.token, rendered.html.as_bytes(), &pdf)?;
 
-    let subject = format!("Invoice #{} from Raygun", invoice.number);
+    let subject = match branding.company.trim() {
+        "" => format!("Invoice #{}", invoice.number),
+        company => format!("Invoice #{} from {company}", invoice.number),
+    };
     mailer.send_invoice(&email, &subject, &rendered.html, &pdf)?;
 
     mark_published(conn, invoice_id, today)?;
@@ -61,9 +64,18 @@ mod tests {
         AssetPublisher, Mailer, PaidSession, PaymentGateway, PaymentLink,
     };
     use crate::invoicing::invoices::{create_invoice, get_invoice, NewLineItem};
+    use crate::invoicing::render_html::DEFAULT_TEMPLATE;
     use crate::migrations::run_migrations;
     use crate::models::{Client, Invoice};
     use std::cell::RefCell;
+
+    fn brand(contact_email: &str) -> Branding<'_> {
+        Branding {
+            template: DEFAULT_TEMPLATE,
+            company: "",
+            contact_email,
+        }
+    }
 
     fn test_conn() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -109,12 +121,15 @@ mod tests {
             Err(NigelError::Other("upload down".into()))
         }
     }
+    #[derive(Default)]
     struct FakeMail {
         sent: RefCell<u32>,
+        subject: RefCell<String>,
     }
     impl Mailer for FakeMail {
-        fn send_invoice(&self, _to: &str, _s: &str, _h: &str, _p: &[u8]) -> Result<()> {
+        fn send_invoice(&self, _to: &str, s: &str, _h: &str, _p: &[u8]) -> Result<()> {
             *self.sent.borrow_mut() += 1;
+            *self.subject.borrow_mut() = s.to_string();
             Ok(())
         }
     }
@@ -136,14 +151,12 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let url = send_invoice(
             &conn,
             id,
             "2026-08-04",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FakePub,
             &mail,
@@ -163,14 +176,12 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let err = send_invoice(
             &conn,
             id,
             "2026-08-04",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FailPub,
             &mail,
@@ -187,9 +198,7 @@ mod tests {
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         let publisher = CapturePub {
             html: RefCell::new(String::new()),
         };
@@ -197,7 +206,7 @@ mod tests {
             &conn,
             id,
             "2026-08-04",
-            "ap@acme.test",
+            &brand("ap@acme.test"),
             &gw,
             &publisher,
             &mail,
@@ -207,20 +216,79 @@ mod tests {
     }
 
     #[test]
+    fn send_renders_with_the_supplied_template() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail::default();
+        let publisher = CapturePub {
+            html: RefCell::new(String::new()),
+        };
+        let branding = Branding {
+            template: "<p>CUSTOM {{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}}</p>",
+            company: "",
+            contact_email: "billing@example.test",
+        };
+        send_invoice(&conn, id, "2026-08-04", &branding, &gw, &publisher, &mail).unwrap();
+
+        let html = publisher.html.borrow();
+        assert!(html.contains("CUSTOM"), "got: {html}");
+        assert!(!html.contains("Direct deposit"));
+    }
+
+    #[test]
+    fn the_subject_names_the_company_when_there_is_one() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail::default();
+        let branding = Branding {
+            template: DEFAULT_TEMPLATE,
+            company: "Acme LLC",
+            contact_email: "billing@example.test",
+        };
+        send_invoice(&conn, id, "2026-08-04", &branding, &gw, &FakePub, &mail).unwrap();
+        assert_eq!(*mail.subject.borrow(), "Invoice #1248 from Acme LLC");
+    }
+
+    #[test]
+    fn the_subject_omits_the_from_clause_when_there_is_no_company() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail::default();
+        send_invoice(
+            &conn,
+            id,
+            "2026-08-04",
+            &brand("billing@example.test"),
+            &gw,
+            &FakePub,
+            &mail,
+        )
+        .unwrap();
+        assert_eq!(*mail.subject.borrow(), "Invoice #1248");
+    }
+
+    #[test]
     fn resend_reuses_existing_payment_link() {
         let (_d, conn) = test_conn();
         let id = seed(&conn);
         let gw = FakeGw {
             create_calls: RefCell::new(0),
         };
-        let mail = FakeMail {
-            sent: RefCell::new(0),
-        };
+        let mail = FakeMail::default();
         send_invoice(
             &conn,
             id,
             "2026-08-04",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FakePub,
             &mail,
@@ -230,7 +298,7 @@ mod tests {
             &conn,
             id,
             "2026-08-05",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FakePub,
             &mail,
