@@ -40,7 +40,7 @@ impl R2Publisher {
         let action = bucket.put_object(Some(&creds), key);
         let signed = action.sign(Duration::from_secs(300));
 
-        let resp = reqwest::blocking::Client::new()
+        let resp = crate::invoicing::http_client()
             .put(signed)
             .header("content-type", content_type)
             .body(body.to_vec())
