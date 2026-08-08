@@ -136,7 +136,9 @@ pub struct InvoiceManager {
     scroll_offset: usize,
     last_visible_rows: usize,
     screen: Screen,
-    detail: Option<Detail>,
+    /// Boxed: inline, `Detail` makes `DashboardScreen` several times the size
+    /// of every other screen it holds.
+    detail: Option<Box<Detail>>,
     detail_scroll: usize,
     status_message: Option<String>,
     /// Remaining keypresses before the status message is cleared.
@@ -184,7 +186,7 @@ impl InvoiceManager {
 
     /// Load (or reload) the detail for one invoice.
     fn load_detail(&mut self, conn: &Connection, invoice_id: i64) -> Result<()> {
-        self.detail = Some(Detail::load(conn, invoice_id)?);
+        self.detail = Some(Box::new(Detail::load(conn, invoice_id)?));
         Ok(())
     }
 
@@ -1214,7 +1216,7 @@ mod tests {
     }
 
     fn detail_of(mgr: &InvoiceManager) -> &Detail {
-        mgr.detail.as_ref().expect("no detail loaded")
+        mgr.detail.as_deref().expect("no detail loaded")
     }
 
     #[test]
