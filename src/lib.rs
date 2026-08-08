@@ -1,4 +1,4 @@
-//! Nigel — cash-basis bookkeeping for small consultancies.
+//! Nigel — cash-basis bookkeeping for small consultancies and personal finances.
 //!
 //! This library holds the whole implementation: the SQLite data layer, importers,
 //! the rules engine, reports, and the CLI/TUI modules. The `nigel` binary

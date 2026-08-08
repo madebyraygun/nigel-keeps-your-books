@@ -2,7 +2,7 @@
 
 ![Onboarding](docs/screenshots/onboarding.png)
 
-Nigel is a cash-basis bookkeeping CLI for small consultancies. Replace QuickBooks with a simple, local-first workflow: import bank CSVs and payroll reports, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal.
+Nigel is a cash-basis bookkeeping CLI for small consultancies — and for personal finances. Replace QuickBooks with a simple, local-first workflow: import bank CSVs and payroll reports, auto-categorize transactions via rules, review flagged items, and generate reports — all from the terminal. Choose **business books** (a Schedule C / Form 1120-S chart of accounts, tax summaries, and a K-1 prep worksheet) or **personal books** (a household chart of accounts with the same imports, rules, review, and reports) during onboarding or with `nigel init --profile personal`.
 
 Nigel is designed for humans but works extremely well with AI agents. The repo includes [Claude skills](docs/skills.md) to add new importers and intelligently create new rules from your statements before importing into Nigel. With a tool like Claude Cowork, point it at your CSV statement and say "Import my latest statements into Nigel and generate my monthly P&L" or "Generate a Schedule K-1 prep report for 2026."
 
@@ -27,6 +27,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
 - **Invoicing** — draft invoices for your clients, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. See [docs/invoicing.md](docs/invoicing.md)
 - **Monthly reconciliation** — compare calculated balances against bank statements
+- **Personal books** — `nigel init --profile personal` seeds a household chart of accounts (groceries, rent, utilities, …) instead of the business one; the K-1 worksheet steps aside and everything else works the same. Transfers between your own accounts (the `Transfer` category) never count as income or spending in any report, on either profile
 - **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. Every report the CLI prints is there too, for any period, with text and PDF downloads and a print-friendly layout
 - **SQLite storage** — single portable database, no server required
 - **Database encryption** — optional SQLCipher encryption; set a password during onboarding or manage via the Settings screen (`p` from dashboard) or `nigel password set`; returning users enter their password inline on the splash screen, or in the browser when using `nigel serve`; backups preserve encryption state
@@ -49,6 +50,9 @@ cargo install --path .
 ```bash
 # Initialize — prompts for data directory on first run
 nigel init
+
+# Or keep personal books instead of business books
+nigel init --profile personal
 
 # Load sample data to explore
 nigel demo

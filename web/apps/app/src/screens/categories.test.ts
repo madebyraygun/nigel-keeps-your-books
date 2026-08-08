@@ -8,6 +8,7 @@ import type {
   WcManagerTable,
 } from '@nigel/ui';
 import { conflictError, FakeApiClient } from '../__mocks__/fake-api-client.js';
+import { initializeAppStore, resetAppStore } from '../state/app-store.js';
 import type { CategoryRow } from '../api/types.js';
 import type { ScreenId } from './registry.js';
 
@@ -54,6 +55,12 @@ interface Mounted {
 }
 
 async function mount(fake: FakeApiClient = client()): Promise<Mounted> {
+  // The screen reads the books profile off the app store for its description.
+  resetAppStore();
+  const store = initializeAppStore(fake, { reload: () => {} });
+  await store.refreshStatus();
+  fake.calls.length = 0;
+
   const navigations: Mounted['navigations'] = [];
   const el = document.createElement('nigel-categories-screen');
   el.client = fake;
@@ -131,6 +138,16 @@ describe('nigel-categories-screen', () => {
   afterEach(() => {
     document.body.innerHTML = '';
     vi.restoreAllMocks();
+  });
+
+  it('describes the screen for the books profile', async () => {
+    const { el } = await mount();
+    expect(layout(el).getAttribute('description')).toContain('1120-S');
+
+    const personal = client();
+    personal.status = { ...personal.status, profile: 'personal' };
+    const { el: personalEl } = await mount(personal);
+    expect(layout(personalEl).getAttribute('description')).not.toContain('1120-S');
   });
 
   it('lists the chart of accounts in the order the server sends it', async () => {

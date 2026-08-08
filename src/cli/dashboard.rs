@@ -87,10 +87,51 @@ const EXPORT_TYPES: &[&str] = &[
     "All Reports",
 ];
 
+/// The export picker for personal books: `EXPORT_TYPES` without the K-1 prep
+/// worksheet, which only means something under the business chart of accounts.
+const PERSONAL_EXPORT_TYPES: &[&str] = &[
+    "Profit & Loss",
+    "Expense Breakdown",
+    "Tax Summary",
+    "Cash Flow",
+    "Transaction Register",
+    "Flagged Transactions",
+    "Cash Position",
+    "All Reports",
+];
+
 #[derive(Clone, Copy)]
 enum ReportPickerMode {
     View,
     Export,
+}
+
+/// The rows a report picker shows for the given profile. Personal books drop
+/// the K-1 worksheet; every dispatch index below stays keyed to the business
+/// lists, with `canonical_report_idx` translating a picker selection back.
+fn report_picker_items(profile: crate::db::Profile, mode: ReportPickerMode) -> &'static [&'static str] {
+    use crate::db::Profile;
+    match (mode, profile) {
+        (ReportPickerMode::View, Profile::Business) => REPORT_TYPES,
+        // K-1 is the last row, so dropping it is a truncation.
+        (ReportPickerMode::View, Profile::Personal) => &REPORT_TYPES[..REPORT_TYPES.len() - 1],
+        (ReportPickerMode::Export, Profile::Business) => EXPORT_TYPES,
+        (ReportPickerMode::Export, Profile::Personal) => PERSONAL_EXPORT_TYPES,
+    }
+}
+
+/// Translate a picker selection into the canonical report index the dispatch
+/// functions match on. Identity everywhere except the personal export list,
+/// whose "All Reports" row sits where K-1 (canonical 7) used to be.
+fn canonical_report_idx(
+    profile: crate::db::Profile,
+    mode: ReportPickerMode,
+    selection: usize,
+) -> usize {
+    match (mode, profile) {
+        (ReportPickerMode::Export, crate::db::Profile::Personal) if selection == 7 => 8,
+        _ => selection,
+    }
 }
 
 #[cfg(feature = "pdf")]
@@ -149,6 +190,9 @@ struct Dashboard {
     /// Tracks which report index is currently displayed (for reload on date change)
     current_report_idx: Option<usize>,
     update_notification: Option<String>,
+    /// Which chart of accounts this database keeps books under; refreshed with
+    /// the home data so a data-directory switch picks up the new profile.
+    profile: crate::db::Profile,
 }
 
 impl Dashboard {
@@ -176,12 +220,15 @@ impl Dashboard {
             needs_reload: false,
             current_report_idx: None,
             update_notification,
+            profile: crate::db::Profile::default(),
         }
     }
 
     fn load_data(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         let now = chrono::Local::now();
         let year = now.year();
+
+        self.profile = crate::db::get_profile(conn);
 
         let pnl = reports::get_pnl(conn, Some(year), None, None, None)?;
         let balance = reports::get_balance(conn)?;
@@ -325,10 +372,11 @@ impl Dashboard {
             return;
         }
         if let DashboardScreen::ReportPicker { selection, mode } = self.screen {
-            let (title, items) = match mode {
-                ReportPickerMode::View => ("Select a report to view", REPORT_TYPES as &[&str]),
-                ReportPickerMode::Export => ("Select a report to export", EXPORT_TYPES as &[&str]),
+            let title = match mode {
+                ReportPickerMode::View => "Select a report to view",
+                ReportPickerMode::Export => "Select a report to export",
             };
+            let items = report_picker_items(self.profile, mode);
             self.draw_picker(frame, title, items, selection);
             return;
         }
@@ -865,6 +913,8 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
             5 => super::export::flagged(None)?,
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
+            // `export::all` reads the profile itself and skips K-1 for
+            // personal books.
             8 => return super::export::all(year, None),
             _ => return Ok(String::new()),
         };
@@ -872,7 +922,12 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
     }
 }
 
-fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
+fn do_text_export(
+    idx: usize,
+    year: Option<i32>,
+    month: Option<String>,
+    profile: crate::db::Profile,
+) -> Result<String> {
     let year = year.or_else(|| Some(chrono::Local::now().year()));
     let names = [
         "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep",
@@ -884,7 +939,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
         let dir = crate::settings::get_data_dir().join("exports");
         std::fs::create_dir_all(&dir)?;
         let mut count = 0;
-        let reports: Vec<(&str, Result<String>)> = vec![
+        let mut reports: Vec<(&str, Result<String>)> = vec![
             ("pnl", super::report::text::pnl(None, year, None, None)),
             ("expenses", super::report::text::expenses(None, year)),
             ("tax", super::report::text::tax(year)),
@@ -895,8 +950,10 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ),
             ("flagged", super::report::text::flagged()),
             ("balance", super::report::text::balance()),
-            ("k1-prep", super::report::text::k1(year)),
         ];
+        if profile == crate::db::Profile::Business {
+            reports.push(("k1-prep", super::report::text::k1(year)));
+        }
         let mut failed = Vec::new();
         for (name, result) in reports {
             match result {
@@ -957,6 +1014,7 @@ pub fn run() -> Result<()> {
     // First-run: show onboarding, then ensure data dir + DB exist
     let mut post_setup_action = None;
     let mut onboarding_company = None;
+    let mut onboarding_profile = crate::db::Profile::default();
     if is_first_run {
         if let Some(result) = super::onboarding::run()? {
             let mut settings = load_settings();
@@ -969,6 +1027,7 @@ pub fn run() -> Result<()> {
                 onboarding_company = Some(result.company_name);
             }
             post_setup_action = Some(result.action);
+            onboarding_profile = result.profile;
 
             if let Some(ref pw) = result.password {
                 crate::db::set_db_password(Some(pw.clone()));
@@ -991,7 +1050,7 @@ pub fn run() -> Result<()> {
     std::fs::create_dir_all(&backups_dir)?;
     crate::settings::restrict_dir_permissions(&backups_dir)?;
     let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
-    crate::db::init_db(&conn)?;
+    crate::db::init_db_with_profile(&conn, onboarding_profile)?;
 
     // Save company_name from onboarding to DB metadata
     if let Some(company) = onboarding_company {
@@ -1218,19 +1277,21 @@ pub fn run() -> Result<()> {
                             false
                         }
                         DashboardScreen::ReportPicker { selection, mode } => {
-                            let max_idx = match mode {
-                                ReportPickerMode::View => REPORT_TYPES.len() - 1,
-                                ReportPickerMode::Export => EXPORT_TYPES.len() - 1,
-                            };
+                            let max_idx =
+                                report_picker_items(dashboard.profile, *mode).len() - 1;
                             match key.code {
                                 KeyCode::Up => *selection = selection.saturating_sub(1),
                                 KeyCode::Down => *selection = (*selection + 1).min(max_idx),
                                 KeyCode::Esc | KeyCode::Char('q') => return_home = true,
                                 KeyCode::Enter => match mode {
                                     ReportPickerMode::View => {
+                                        // View lists only ever truncate, so the
+                                        // selection is already canonical.
                                         dashboard.pending_report_view = Some(*selection);
                                     }
                                     ReportPickerMode::Export => {
+                                        // Keep the picker index here so Esc from
+                                        // the format picker restores the row.
                                         dashboard.screen = DashboardScreen::ExportFormatPicker {
                                             report_idx: *selection,
                                             selection: 0,
@@ -1257,10 +1318,15 @@ pub fn run() -> Result<()> {
                                 }
                                 KeyCode::Enter => {
                                     let format = EXPORT_FORMATS[*selection];
+                                    let idx = canonical_report_idx(
+                                        dashboard.profile,
+                                        ReportPickerMode::Export,
+                                        *report_idx,
+                                    );
                                     if format == "Text" {
-                                        dashboard.pending_text_export = Some(*report_idx);
+                                        dashboard.pending_text_export = Some(idx);
                                     } else {
-                                        dashboard.pending_export = Some(*report_idx);
+                                        dashboard.pending_export = Some(idx);
                                     }
                                 }
                                 _ => {}
@@ -1325,7 +1391,7 @@ pub fn run() -> Result<()> {
                             } else {
                                 (None, None)
                             };
-                        match do_text_export(idx, year, month) {
+                        match do_text_export(idx, year, month, dashboard.profile) {
                             Ok(msg) => dashboard.status_message = Some(msg),
                             Err(e) => {
                                 dashboard.status_message = Some(format!("Export failed: {e}"))

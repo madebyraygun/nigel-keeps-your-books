@@ -555,7 +555,7 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
       </div>
       <wc-link-grid
         label="Reports"
-        .items=${reportDefs().map((def) => ({
+        .items=${reportDefs(this.appStore.status.get()?.profile).map((def) => ({
           href: `#/reports?report=${def.slug}`,
           label: def.title,
           description: def.description,

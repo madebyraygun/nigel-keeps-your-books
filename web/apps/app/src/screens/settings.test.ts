@@ -66,6 +66,16 @@ describe('settings screen', () => {
     expect(el.shadowRoot?.textContent).toContain('/tmp/nigel');
   });
 
+  it('labels the name field from the books profile', async () => {
+    const { el } = await mount();
+    expect(panel(el, 0)?.getAttribute('heading')).toBe('Business name');
+
+    const client = new FakeApiClient();
+    client.status = { ...client.status, profile: 'personal' };
+    const { el: personal } = await mount(client);
+    expect(panel(personal, 0)?.getAttribute('heading')).toBe('Household name');
+  });
+
   describe('business name', () => {
     it('saves the name and re-reads status so the sidebar follows', async () => {
       const { el, client } = await mount();

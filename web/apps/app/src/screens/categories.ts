@@ -24,6 +24,7 @@ import {
   toCategoryForm,
 } from './categories-data.js';
 import { guardrailAction, guardrailMessage } from './manager-errors.js';
+import { getAppStore } from '../state/app-store.js';
 import type { ScreenContext } from './context.js';
 import type { ScreenId } from './registry.js';
 
@@ -240,7 +241,9 @@ export class NigelCategoriesScreen extends LitElement {
     return html`
       <wc-manager-layout
         heading="Chart of Accounts"
-        description="Categories map transactions onto Schedule C and Form 1120-S lines."
+        description=${getAppStore().status.get()?.profile === 'personal'
+          ? 'Categories organize your transactions for reports.'
+          : 'Categories map transactions onto Schedule C and Form 1120-S lines.'}
         .count=${this.loading ? null : this.categories.length}
         add-label="Add category"
         ?busy=${this.loading}

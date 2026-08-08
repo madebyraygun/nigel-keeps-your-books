@@ -142,7 +142,7 @@ fn export_all_text(year: Option<i32>, output_dir: Option<String>) -> Result<()> 
         crate::settings::restrict_dir_permissions(&dir)?;
     }
 
-    let reports: Vec<(&str, Result<String>)> = vec![
+    let mut reports: Vec<(&str, Result<String>)> = vec![
         ("pnl", text::pnl(None, year, None, None)),
         ("expenses", text::expenses(None, year)),
         ("tax", text::tax(year)),
@@ -150,8 +150,14 @@ fn export_all_text(year: Option<i32>, output_dir: Option<String>) -> Result<()> 
         ("register", text::register(None, year, None, None, None)),
         ("flagged", text::flagged()),
         ("balance", text::balance()),
-        ("k1-prep", text::k1(year)),
     ];
+    // The K-1 worksheet only means something under the business chart of
+    // accounts; personal books skip it in the bulk export.
+    let conn = crate::db::get_connection(&data_dir.join("nigel.db"))?;
+    if crate::db::get_profile(&conn) == crate::db::Profile::Business {
+        reports.push(("k1-prep", text::k1(year)));
+    }
+    drop(conn);
 
     for (name, result) in reports {
         match result {

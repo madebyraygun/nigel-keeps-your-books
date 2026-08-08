@@ -10,6 +10,7 @@ use ratatui::{
 };
 use zeroize::Zeroize;
 
+use crate::db::Profile;
 use crate::effects::{self, Particle, LOGO};
 use crate::error::Result;
 use crate::tui::{self, FOOTER_STYLE, HEADER_STYLE, SELECTED_STYLE};
@@ -28,6 +29,20 @@ const ACTION_ITEMS: &[&str] = &[
     "Load existing data directory",
 ];
 
+/// Order matches `profile_from_selection`.
+const PROFILE_ITEMS: &[&str] = &[
+    "Business bookkeeping (Schedule C / 1120-S)",
+    "Personal finances",
+];
+
+fn profile_from_selection(selection: usize) -> Profile {
+    if selection == 1 {
+        Profile::Personal
+    } else {
+        Profile::Business
+    }
+}
+
 /// Intro animation timing (milliseconds)
 const INTRO_PARTICLES_MS: f64 = 500.0;
 const INTRO_REVEAL_MS: f64 = 500.0;
@@ -40,6 +55,7 @@ const FIELD_PASSWORD: usize = 2;
 const FIELD_BUTTON: usize = 3;
 
 enum Screen {
+    ProfilePicker,
     NameInput,
     ConfirmPassword,
     ActionPicker,
@@ -57,6 +73,7 @@ pub struct OnboardingResult {
     pub company_name: String,
     pub password: Option<String>,
     pub action: PostSetupAction,
+    pub profile: Profile,
 }
 
 struct Onboarding {
@@ -69,6 +86,7 @@ struct Onboarding {
     active_field: usize,
     cursor_pos: usize,
     action_selection: usize,
+    profile_selection: usize,
     screen: Screen,
     phase: f64,
     particles: Vec<Particle>,
@@ -92,7 +110,8 @@ impl Onboarding {
             active_field: 0,
             cursor_pos: 0,
             action_selection: 0,
-            screen: Screen::NameInput,
+            profile_selection: 0,
+            screen: Screen::ProfilePicker,
             phase: 0.0,
             particles: effects::pre_seed_particles(width, height),
             width,
@@ -141,10 +160,93 @@ impl Onboarding {
         }
 
         match self.screen {
+            Screen::ProfilePicker => self.draw_profile_picker(frame, area),
             Screen::NameInput => self.draw_name_input(frame, area),
             Screen::ConfirmPassword => self.draw_confirm_password(frame, area),
             Screen::ActionPicker => self.draw_action_picker(frame, area),
         }
+    }
+
+    fn draw_profile_picker(&self, frame: &mut Frame, area: Rect) {
+        let logo_height = LOGO.len() as u16;
+        let menu_height = PROFILE_ITEMS.len() as u16;
+        let [_top_pad, logo_area, _gap1, prompt_area, _gap2, menu_area, _gap3, hints_area, _bottom_pad, version_area] =
+            Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(logo_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(menu_height),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+        if !self.intro_done {
+            // The intro animation belongs to the first screen shown; reuse the
+            // name-input drawing which owns the reveal timing.
+            let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms < INTRO_PARTICLES_MS {
+                return;
+            }
+            let logo_elapsed = elapsed_ms - INTRO_PARTICLES_MS;
+            if logo_elapsed < INTRO_REVEAL_MS {
+                let progress = logo_elapsed / INTRO_REVEAL_MS;
+                let total = self.reveal_order.len();
+                let chars_visible = (progress * total as f64) as usize;
+                effects::render_logo_reveal(
+                    self.phase,
+                    frame,
+                    logo_area,
+                    Some((&self.reveal_order, chars_visible)),
+                );
+            } else {
+                effects::render_logo(self.phase, frame, logo_area);
+            }
+            return;
+        }
+
+        effects::render_logo(self.phase, frame, logo_area);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "What will you keep books for?",
+                HEADER_STYLE,
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
+            prompt_area,
+        );
+
+        let menu_width = 50u16.min(area.width.saturating_sub(4));
+        let menu_x = area.x + (area.width.saturating_sub(menu_width)) / 2;
+        let centered_menu = Rect::new(menu_x, menu_area.y, menu_width, menu_area.height);
+
+        let menu_lines: Vec<Line> = PROFILE_ITEMS
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let marker = if i == self.profile_selection { ">" } else { " " };
+                let style = if i == self.profile_selection {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(format!(" {marker} {label}"), style))
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(menu_lines), centered_menu);
+
+        frame.render_widget(
+            Paragraph::new(" Up/Down=navigate  Enter=select  Esc=skip")
+                .style(FOOTER_STYLE)
+                .alignment(ratatui::layout::Alignment::Center),
+            hints_area,
+        );
+
+        tui::render_version(frame, version_area);
     }
 
     fn draw_name_input(&self, frame: &mut Frame, area: Rect) {
@@ -219,10 +321,14 @@ impl Onboarding {
             FIELD_NAME,
             false,
         );
+        let company_label = match profile_from_selection(self.profile_selection) {
+            Profile::Business => "Business name:",
+            Profile::Personal => "Household name:",
+        };
         self.draw_field(
             frame,
             biz_row,
-            "Business name:",
+            company_label,
             &self.company_name,
             FIELD_COMPANY,
             false,
@@ -579,6 +685,21 @@ impl Onboarding {
         }
         StepResult::Continue
     }
+
+    fn handle_profile_key(&mut self, code: KeyCode) -> StepResult {
+        match code {
+            KeyCode::Up => {
+                self.profile_selection = self.profile_selection.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                self.profile_selection = (self.profile_selection + 1).min(PROFILE_ITEMS.len() - 1);
+            }
+            KeyCode::Enter => return StepResult::NextScreen,
+            KeyCode::Esc => return StepResult::Skip,
+            _ => {}
+        }
+        StepResult::Continue
+    }
 }
 
 /// Convert a char-index cursor position to a byte offset.
@@ -642,6 +763,7 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                     }
 
                     let step = match onboarding.screen {
+                        Screen::ProfilePicker => onboarding.handle_profile_key(key.code),
                         Screen::NameInput => onboarding.handle_name_key(key.code),
                         Screen::ConfirmPassword => onboarding.handle_confirm_key(key.code),
                         Screen::ActionPicker => onboarding.handle_action_key(key.code),
@@ -650,6 +772,9 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                     match step {
                         StepResult::Continue => {}
                         StepResult::NextScreen => match onboarding.screen {
+                            Screen::ProfilePicker => {
+                                onboarding.screen = Screen::NameInput;
+                            }
                             Screen::NameInput => {
                                 if onboarding.password.trim().is_empty() {
                                     onboarding.screen = Screen::ActionPicker;
@@ -677,6 +802,7 @@ pub fn run() -> Result<Option<OnboardingResult>> {
                                 company_name: onboarding.company_name.trim().to_string(),
                                 password: if pw.is_empty() { None } else { Some(pw) },
                                 action,
+                                profile: profile_from_selection(onboarding.profile_selection),
                             }));
                         }
                         StepResult::Skip => break Ok(None),
@@ -709,6 +835,7 @@ mod tests {
             active_field: 0,
             cursor_pos: 0,
             action_selection: 0,
+            profile_selection: 0,
             screen: Screen::NameInput,
             phase: 0.0,
             particles: vec![],
@@ -778,7 +905,39 @@ mod tests {
             company_name: ob.company_name.trim().to_string(),
             password: if pw.is_empty() { None } else { Some(pw) },
             action,
+            profile: profile_from_selection(ob.profile_selection),
         }
+    }
+
+    #[test]
+    fn profile_picker_defaults_to_business() {
+        let ob = make_onboarding();
+        assert_eq!(finish_result(&ob).profile, Profile::Business);
+    }
+
+    #[test]
+    fn profile_picker_selects_personal_and_advances() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::ProfilePicker;
+        ob.handle_profile_key(KeyCode::Down);
+        let step = ob.handle_profile_key(KeyCode::Enter);
+        assert!(matches!(step, StepResult::NextScreen));
+        assert_eq!(finish_result(&ob).profile, Profile::Personal);
+        // Down at the bottom stays put; Up returns to business.
+        ob.handle_profile_key(KeyCode::Down);
+        assert_eq!(ob.profile_selection, PROFILE_ITEMS.len() - 1);
+        ob.handle_profile_key(KeyCode::Up);
+        assert_eq!(finish_result(&ob).profile, Profile::Business);
+    }
+
+    #[test]
+    fn profile_picker_esc_skips_onboarding() {
+        let mut ob = make_onboarding();
+        ob.screen = Screen::ProfilePicker;
+        assert!(matches!(
+            ob.handle_profile_key(KeyCode::Esc),
+            StepResult::Skip
+        ));
     }
 
     #[test]

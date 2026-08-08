@@ -55,7 +55,7 @@ pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u3
 #[derive(Parser)]
 #[command(
     name = "nigel",
-    about = "Cash-basis bookkeeping CLI for small consultancies."
+    about = "Cash-basis bookkeeping CLI for small consultancies and personal finances."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -69,6 +69,10 @@ pub enum Commands {
         /// Path for Nigel data (default: ~/Documents/nigel)
         #[arg(long = "data-dir")]
         data_dir: Option<String>,
+        /// Chart of accounts to seed a new database with: business (Schedule
+        /// C / 1120-S mapping) or personal. Existing databases are unchanged.
+        #[arg(long, default_value = "business")]
+        profile: String,
     },
     /// Manage accounts.
     Accounts {

@@ -2,7 +2,7 @@
 name = "nigel"
 version = "1.0.1"
 edition = "2021"
-description = "Cash-basis bookkeeping CLI for small consultancies"
+description = "Cash-basis bookkeeping CLI for small consultancies and personal finances"
 
 [features]
 default = ["gusto", "pdf", "serve"]
