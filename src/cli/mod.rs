@@ -6,6 +6,7 @@ pub mod categories;
 pub mod categorize;
 pub mod category_manager;
 pub mod client;
+pub mod client_manager;
 pub mod dashboard;
 pub mod demo;
 pub mod export;
