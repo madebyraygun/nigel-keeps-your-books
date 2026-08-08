@@ -25,7 +25,7 @@ Nigel also includes a **demo mode** — `nigel demo` which generates more than a
 - **Reports** — Profit & Loss, expense breakdown, tax summary (IRS Schedule C / 1120-S), cash flow, balance, K-1 prep; interactive ratatui views by default with date navigation (Left/Right arrows to page between periods, `m` to toggle month/year), with `--mode export` for PDF or `--format text` for text files
 - **Interactive browser** — paginated register browser showing all transactions, starting at today with full backwards scrolling, keyboard navigation, jump-to-date, and transaction search
 - **PDF export** — export any report to PDF or text with `nigel report <type> --mode export`
-- **Invoicing** — draft invoices for your clients, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. See [docs/invoicing.md](docs/invoicing.md)
+- **Invoicing** — draft invoices for your clients, edit or void them while they are still drafts, publish them as a static page and PDF on Cloudflare R2, email them via Mailgun with a Stripe payment link attached, and pull payments back in with `nigel invoice sync`; manual payments, A/R aging, and a one-time InvoiceShelf import are included. See [docs/invoicing.md](docs/invoicing.md)
 - **Monthly reconciliation** — compare calculated balances against bank statements
 - **Web UI** — `nigel serve` runs a local web interface and JSON API from the same binary on 127.0.0.1, opening a browser with a one-time session link; nothing is exposed to your network. Every report the CLI prints is there too, for any period, with text and PDF downloads and a print-friendly layout
 - **SQLite storage** — single portable database, no server required
@@ -121,7 +121,11 @@ nigel browse register --account "BofA Checking"
 
 # Invoicing (see docs/invoicing.md for the Stripe/R2/Mailgun setup)
 nigel client add "Acme Co" --email ap@acme.test
+nigel client show 1                                   # Details plus invoice history
+nigel client edit 1 --email billing@acme.test         # Applies on the next send
 nigel invoice new --client 1 --issue 2026-08-04 --item "Consulting:10:150"
+nigel invoice edit 1248 --due 2026-09-30              # Drafts only
+nigel invoice void 1248                               # Cancel (confirms; --yes to skip)
 nigel invoice send 1248                               # Publish, email, attach a payment link
 nigel invoice sync                                    # Record Stripe payments
 nigel invoice pay 1248 --date 2026-08-20              # Record a payment received directly

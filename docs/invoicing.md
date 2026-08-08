@@ -62,6 +62,28 @@ nigel client list
 `--email` is optional at creation, but an invoice cannot be sent to a client
 without one. `nigel client list` prints the client IDs that `invoice new` takes.
 
+### Inspecting and editing a client
+
+```bash
+nigel client show 1
+nigel client edit 1 --email billing@acme.test
+nigel client edit 1 --name "Acme Corporation" --address "500 Market St"
+```
+
+`client show` prints the client's details, every invoice it has ever had (newest
+number first) and the balance still open against it — void and fully paid
+invoices contribute nothing.
+
+`client edit` takes `--name`, `--email`, `--address` and `--notes`; the flags you
+leave off are left alone, and passing none at all is an error rather than a silent
+no-op. A blank `--name` is refused, since the column is required. `--notes` is
+internal and never appears on an invoice.
+
+Edits take effect on the **next** send. Published pages are static snapshots on
+R2, so a corrected address reaches the client when the invoice is next sent —
+including a re-send of the same invoice, which overwrites the same URL. Emails
+already delivered keep the old details.
+
 ## Creating an invoice
 
 ```bash
@@ -75,7 +97,11 @@ nigel invoice new --client 1 --issue 2026-08-04 --due 2026-09-03 \
   cannot contain a colon.
 - `--due` is optional. An invoice with no due date never goes overdue and ages
   from its issue date.
-- `--currency` defaults to `USD`.
+- `--currency` defaults to `USD` and must be a 3-letter code; it is stored
+  uppercase.
+- `--notes` and `--terms` are free text rendered on the invoice under their own
+  headings, e.g. `--notes "Thanks for the work this quarter."` and
+  `--terms "Net 30. Late payments accrue 1.5% monthly."`.
 - Numbers are assigned sequentially, starting at 1248, and are not reused.
 
 New invoices are drafts. Nothing has been rendered, uploaded, or emailed yet.
@@ -84,6 +110,64 @@ New invoices are drafts. Nothing has been rendered, uploaded, or emailed yet.
 nigel invoice list            # number, status, client, total, due date
 nigel invoice show 1248       # line items, amount paid, balance, payment link
 ```
+
+## Editing a draft invoice
+
+```bash
+nigel invoice edit 1248 --due 2026-09-30
+nigel invoice edit 1248 --item "Discovery:1:2000" --item "Build:40:150"
+nigel invoice edit 1248 --currency EUR --terms "Net 15"
+nigel invoice edit 1248 --clear-due
+```
+
+| Flag | Effect |
+|---|---|
+| `--issue <YYYY-MM-DD>` | New issue date |
+| `--due <YYYY-MM-DD>` | New due date |
+| `--clear-due` | Remove the due date, so the invoice never goes overdue |
+| `--currency <CODE>` | New 3-letter currency code, stored uppercase |
+| `--notes <s>` | Replace the notes |
+| `--terms <s>` | Replace the terms |
+| `--item "desc:qty:unit"` | **Replaces every line item**, repeatable |
+
+`--item` is all or nothing: leave it off and the existing lines stand, supply it
+and the whole set is rewritten and the subtotal and total recomputed. There is no
+way to leave an invoice with no lines. Passing no flags at all is an error.
+
+Editing is **draft only**. A published invoice answers
+`Invoice #1248 has already been sent and cannot be edited. Void it and issue a new
+one.`, and a void one answers `Invoice #1248 is void and cannot be edited.` An
+invoice with any payment recorded against it is also refused, whatever its status
+— the client has settled against those figures, and restating them under a
+recorded payment would misdescribe what was paid. That is also why a currency
+change after a payment is unreachable.
+
+If the edit moves the total or the currency on an invoice that already carried a
+Stripe payment link — which happens when a send failed after the link was created
+— the link is cleared, and the next `send` makes a fresh one at the right amount.
+
+## Voiding an invoice
+
+```bash
+nigel invoice void 1248
+nigel invoice void 1248 --yes
+```
+
+Void cancels an invoice. On a terminal it names the invoice and asks
+`Void it? [y/N]`; anything but `y` prints `Aborted.` and changes nothing. Without
+a terminal, `--yes` is required — a script gets a refusal rather than a silently
+cancelled invoice.
+
+A voided invoice leaves the aging buckets and stops being polled for Stripe
+payments, but stays in `invoice list` with status `void`, and its number is never
+reused. Void is terminal: there is no unvoid, and a void invoice refuses send,
+pay, and edit. An invoice with payments recorded against it cannot be voided —
+cancel the money side by recording the offsetting movement in the transaction
+register, which is where cash actually lives.
+
+Voiding does **not** tear down a published invoice: the R2 page and PDF stay
+served and the Stripe payment link stays chargeable, so the command warns you to
+deactivate the link in Stripe yourself.
 
 ## Sending
 
@@ -173,7 +257,7 @@ whenever it is published or paid:
 | `partial` | Published, paid in part |
 | `overdue` | Published, past its due date, with a balance |
 | `paid` | Paid in full (settled to within half a cent) |
-| `void` | Cancelled; cannot be sent or paid |
+| `void` | Cancelled; cannot be sent, paid, or edited |
 
 ## A/R aging
 
