@@ -187,6 +187,18 @@ pub fn balance(output: Option<String>) -> Result<String> {
 }
 
 #[cfg(feature = "pdf")]
+pub fn aging(output: Option<String>) -> Result<String> {
+    let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
+    let report = crate::invoicing::invoices::ar_aging_detail(&conn, &crate::cli::today())?;
+    let company = get_metadata(&conn, "company_name").unwrap_or_default();
+    let bytes = crate::pdf::render_aging(&report, &company)?;
+    let path = output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_path("aging"));
+    write_pdf(&bytes, &path)
+}
+
+#[cfg(feature = "pdf")]
 pub fn k1(year: Option<i32>, output: Option<String>) -> Result<String> {
     let conn = crate::db::get_connection(&get_data_dir().join("nigel.db"))?;
     let report = crate::reports::get_k1_prep(&conn, year)?;
@@ -264,6 +276,12 @@ pub fn all(year: Option<i32>, output_dir: Option<String>) -> Result<String> {
     write_pdf(
         &crate::pdf::render_k1(&report, &company, &range)?,
         &path("k1-prep"),
+    )?;
+
+    let report = crate::invoicing::invoices::ar_aging_detail(&conn, &crate::cli::today())?;
+    write_pdf(
+        &crate::pdf::render_aging(&report, &company)?,
+        &path("aging"),
     )?;
 
     Ok(format!("All reports exported to {}", dir.display()))

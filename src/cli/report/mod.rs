@@ -151,6 +151,7 @@ fn export_all_text(year: Option<i32>, output_dir: Option<String>) -> Result<()> 
         ("flagged", text::flagged()),
         ("balance", text::balance()),
         ("k1-prep", text::k1(year)),
+        ("aging", text::aging(&crate::cli::today())),
     ];
 
     for (name, result) in reports {

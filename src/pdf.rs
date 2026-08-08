@@ -603,6 +603,97 @@ pub fn render_balance(report: &BalanceReport, company: &str) -> Result<Vec<u8>> 
     pdf.into_bytes()
 }
 
+pub fn render_aging(
+    report: &crate::invoicing::invoices::AgingReport,
+    company: &str,
+) -> Result<Vec<u8>> {
+    let mut pdf = PdfWriter::new("A/R Aging")?;
+    pdf.header("A/R Aging", company, &format!("As of {}", report.as_of));
+
+    let summary_cols = &[
+        Col {
+            width: 80.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 50.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 47.8,
+            align: Align::Right,
+        },
+    ];
+    pdf.section_label("Summary");
+    pdf.table_header(summary_cols, &["Bucket", "Invoices", "Amount"]);
+    for b in &report.buckets {
+        let count = b.count.to_string();
+        let total = money(b.total);
+        pdf.table_row(summary_cols, &[b.label, &count, &total], false);
+    }
+    pdf.separator();
+    let count = report
+        .buckets
+        .iter()
+        .map(|b| b.count)
+        .sum::<usize>()
+        .to_string();
+    let outstanding = money(report.outstanding);
+    pdf.table_row(
+        summary_cols,
+        &["Total Outstanding", &count, &outstanding],
+        true,
+    );
+
+    pdf.blank_row();
+    pdf.section_label("Open Invoices");
+
+    if report.invoices.is_empty() {
+        pdf.text("No open invoices.", MARGIN_LEFT, FONT_SIZE, false);
+        return pdf.into_bytes();
+    }
+
+    let cols = &[
+        Col {
+            width: 25.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 62.8,
+            align: Align::Left,
+        },
+        Col {
+            width: 30.0,
+            align: Align::Left,
+        },
+        Col {
+            width: 20.0,
+            align: Align::Right,
+        },
+        Col {
+            width: 40.0,
+            align: Align::Right,
+        },
+    ];
+    pdf.table_header(cols, &["Invoice", "Client", "Due", "Days", "Balance"]);
+    for i in &report.invoices {
+        let number = format!("#{}", i.number);
+        let days = if i.days_past_due > 0 {
+            i.days_past_due.to_string()
+        } else {
+            "\u{2014}".to_string()
+        };
+        let balance = money(i.balance);
+        pdf.table_row(
+            cols,
+            &[&number, &i.client, &i.due_date, &days, &balance],
+            false,
+        );
+    }
+
+    pdf.into_bytes()
+}
+
 pub fn render_k1(report: &K1PrepReport, company: &str, date_range: &str) -> Result<Vec<u8>> {
     let mut pdf = PdfWriter::new("K-1 Preparation Worksheet")?;
     pdf.header(
@@ -1062,6 +1153,39 @@ mod tests {
         seed(&conn);
         let report = get_balance(&conn).unwrap();
         let bytes = render_balance(&report, "Test Corp").unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn test_render_aging_produces_pdf() {
+        use crate::invoicing::invoices::{AgingBucket, AgingInvoice, AgingReport};
+        let report = AgingReport {
+            as_of: "2026-08-04".into(),
+            buckets: vec![
+                AgingBucket {
+                    label: "current",
+                    count: 0,
+                    total: 0.0,
+                },
+                AgingBucket {
+                    label: "31-60",
+                    count: 1,
+                    total: 100.0,
+                },
+            ],
+            invoices: vec![AgingInvoice {
+                number: 1248,
+                client: "Acme Co".into(),
+                due_date: "2026-06-20".into(),
+                days_past_due: 45,
+                bucket: "31-60",
+                total: 100.0,
+                paid: 0.0,
+                balance: 100.0,
+            }],
+            outstanding: 100.0,
+        };
+        let bytes = render_aging(&report, "Test Corp").unwrap();
         assert!(bytes.starts_with(b"%PDF"));
     }
 
