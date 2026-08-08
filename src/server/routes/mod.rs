@@ -143,9 +143,7 @@ pub(super) fn ensure_account_exists(conn: &Connection, name: &str) -> crate::err
 /// missing. Everything else passes through untouched.
 pub(super) fn not_found_because(err: crate::error::NigelError, reason: &str) -> ApiError {
     match err {
-        crate::error::NigelError::NotFound(message) => {
-            ApiError::not_found_because(message, reason)
-        }
+        crate::error::NigelError::NotFound(message) => ApiError::not_found_because(message, reason),
         other => ApiError::from(other),
     }
 }
