@@ -752,8 +752,8 @@ const AGING_LABELS: [&str; 5] = ["current", "1-30", "31-60", "61-90", "90+"];
 
 pub fn ar_aging_detail(conn: &Connection, today: &str) -> Result<AgingReport> {
     let as_of = today.to_string();
-    let today = NaiveDate::parse_from_str(today, "%Y-%m-%d")
-        .map_err(|e| crate::error::NigelError::Other(format!("bad date {today}: {e}")))?;
+    validate_date(today, "as-of")?;
+    let today = NaiveDate::parse_from_str(today, "%Y-%m-%d").expect("validate_date just parsed it");
 
     let mut buckets: Vec<AgingBucket> = AGING_LABELS
         .iter()
@@ -2036,6 +2036,18 @@ mod tests {
         assert_eq!(report.outstanding, summed);
         assert_eq!(report.outstanding, 700.0);
         assert_eq!(report.as_of, AGING_TODAY);
+    }
+
+    #[test]
+    fn a_malformed_as_of_date_is_invalid_not_other() {
+        let (_d, conn) = test_conn();
+        // Zero-padding is not checked here: chrono's %Y-%m-%d accepts
+        // "2026-3-1" and every other validate_date caller lives with that. The
+        // HTTP layer is where the stricter parse belongs.
+        for as_of in ["March", "2026-08-32", ""] {
+            let err = ar_aging_detail(&conn, as_of).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "{as_of}: {err:?}");
+        }
     }
 
     #[test]
