@@ -738,8 +738,9 @@ Dates on these routes follow the API's own rule, not the CLI's: zero-padded
 { "confirm": true }
 ```
 
-Anything else — an empty object, `false`, no body at all — is `400`
-`confirmation_required`, and nothing happens. The screen's confirm dialog is a
+An empty object or `"confirm": false` is `400` `confirmation_required`, and
+nothing happens. (A request with no body at all, or one that is not JSON, is
+also `400` — that one from the body extractor, before this route is reached.) The screen's confirm dialog is a
 convention the next screen can forget; the flag makes the dialog the only way to
 reach the endpoint and an accidental `curl` a no-op. `pay` and `sync` do not
 require it: one writes a row a person typed, and the other is idempotent.
@@ -749,9 +750,15 @@ link, renders the HTML and PDF, uploads both to R2, emails the client and marks
 the invoice published, then answers. There is no job id and no polling endpoint:
 the invoice row is already the job record — `publishedAt` and
 `stripePaymentLinkUrl` are the durable state a job store would duplicate — and
-two sources of truth for "did this go out" is how they drift. Each of the three
-external calls is bounded at 10s to connect and 30s in total, so the worst case
-is a request of about a minute and a half rather than an open socket.
+two sources of truth for "did this go out" is how they drift.
+
+A send makes **five** outbound calls: two to Stripe (the price, then the payment
+link), two to R2 (the HTML, then the PDF), and one to Mailgun. Each is bounded
+at 10s to connect and 30s in total, so a send that hangs everywhere it can is a
+request of about **150 seconds** plus rendering — long, but bounded, where
+before it was an open socket. There is no deadline over the orchestration as a
+whole: the per-call timeouts and the step trace are the design, and a run cut
+off part-way would leave a client unable to tell which steps had happened.
 
 A completed send answers with the refreshed invoice and what each step did:
 
@@ -835,6 +842,14 @@ forever, and one of those must not hide the payments the run did record. Only a
 run where every invoice failed answers with an error — `502 upstream_failed`,
 `service: "stripe"`. With no `stripe_secret_key` set it is `409`
 `send_not_configured` naming that one key.
+
+The whole run is bounded at **60 seconds**, checked before each invoice — one
+invoice is bounded by the same 30s call timeout a send uses, so without a
+deadline N open invoices would be N × 30s of a request holding the database
+against an encrypt, a decrypt or a data-directory switch. Invoices the budget
+did not reach come back in `failures` saying so, never silently dropped, so the
+count still accounts for every invoice in `invoicesChecked` and calling it again
+picks up where it stopped.
 
 ## Running an import
 

@@ -158,6 +158,13 @@ impl ApiError {
         self.code
     }
 
+    /// Tag a refusal raised outside the orchestration with the step it belongs
+    /// to, so every answer a send can give carries `details.step`.
+    pub(crate) fn at_step(mut self, step: SendStep) -> Self {
+        self.merge_details(serde_json::json!({ "step": step.as_str() }));
+        self
+    }
+
     /// Add context to whatever `details` this error already carries, leaving
     /// what is there alone. A send failure keeps the data layer's own reason and
     /// gains the step it stopped at.
@@ -237,11 +244,17 @@ impl From<SendFailure> for ApiError {
             source,
         } = failure;
 
+        // Enumerated rather than defaulted, for the reason the code match below
+        // is: a step added to the vocabulary has to say whose service it is.
         let service = match step {
             SendStep::PaymentLink => Some("stripe"),
             SendStep::Publish => Some("r2"),
             SendStep::Email => Some("mailgun"),
-            _ => None,
+            SendStep::Config
+            | SendStep::Load
+            | SendStep::Precheck
+            | SendStep::Render
+            | SendStep::Record => None,
         };
 
         // A rusqlite failure is never an upstream failure, whichever step it

@@ -16,6 +16,8 @@
 //! recorded payments as well as on status, and a status-only copy of that rule
 //! in a client would disagree with the 409 it is meant to predict.
 
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
@@ -34,7 +36,7 @@ use crate::invoicing::invoices::{
 use crate::invoicing::render::{render_invoice, RenderedInvoice};
 use crate::invoicing::render_html::{load_template, Branding};
 use crate::invoicing::send::{send_invoice_traced, SendFailure, SendStep, StepOutcome};
-use crate::invoicing::sync::{sync_all_report, SyncReport};
+use crate::invoicing::sync::{sync_all_report_within, SyncReport};
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 
 use super::super::error::{ApiError, ApiErrorCode, ApiResult};
@@ -509,7 +511,11 @@ fn not_configured(what: &str, missing: &[&'static str]) -> ApiError {
 /// "did this go out" is how they drift. The gateway clients are synchronous
 /// `reqwest::blocking` and `with_conn_api` is already `spawn_blocking`, so the
 /// work lands on that pool either way; what makes the open request bounded is
-/// `invoicing::REQUEST_TIMEOUT` on each of the three calls.
+/// `invoicing::REQUEST_TIMEOUT` on each of the five calls it makes — two to
+/// Stripe, two to R2, one to Mailgun — for a ceiling of about 150s plus
+/// rendering. There is no deadline over the whole orchestration on purpose: a
+/// run cut off part-way would leave the caller unable to say which steps had
+/// happened, which is the one thing the trace exists to answer.
 async fn send(
     State(state): State<AppState>,
     ApiPath(number): ApiPath<i64>,
@@ -567,10 +573,12 @@ fn send_with<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     publisher: &P,
     mailer: &M,
 ) -> ApiResult<SendResult> {
-    let invoice = find_invoice(conn, number)?;
-    // Refused before the template is read and before any client is called, the
-    // way `nigel invoice send` refuses it.
-    inv::ensure_not_void(&invoice, "sent")?;
+    // The only lookup this route owes the orchestration: `send_invoice_traced`
+    // works from an id, and the URL carries a number. Every *guard* below it —
+    // void, the client's address, an invoice with nothing to charge — is the
+    // traced precheck's, called once, and the precheck runs before any network
+    // call, so a refusal still costs nothing.
+    let invoice = find_invoice(conn, number).map_err(|e| e.at_step(SendStep::Load))?;
     // Loaded before the Stripe link, so a broken override costs no link, no
     // upload and no email.
     let template = load_template(data_dir)?;
@@ -640,6 +648,16 @@ async fn sync(State(state): State<AppState>) -> ApiResult<Json<SyncReport>> {
     Ok(Json(report))
 }
 
+/// How long a sync request may spend at the gateway in total.
+///
+/// One invoice is bounded by `invoicing::REQUEST_TIMEOUT`; without a deadline
+/// for the run, N open invoices would be N × 30s of an open request holding
+/// `db_gate` — which blocks encrypting, decrypting and switching data
+/// directories for as long as it lasts. Invoices the budget did not reach come
+/// back as failures, so the report still accounts for all of them and a second
+/// call picks up where this one stopped.
+const SYNC_BUDGET: Duration = Duration::from_secs(60);
+
 /// Sync with the gateway passed in, for the same reason [`send_with`] takes
 /// three: a test drives the whole route with fakes and no network.
 ///
@@ -651,7 +669,7 @@ fn sync_with<G: PaymentGateway>(
     today: &str,
     gateway: &G,
 ) -> ApiResult<SyncReport> {
-    sync_all_report(conn, today, gateway).map_err(|err| match err {
+    sync_all_report_within(conn, today, gateway, SYNC_BUDGET).map_err(|err| match err {
         // A failure reading the books is ours, not Stripe's.
         NigelError::Db(_) => ApiError::from(err),
         other => ApiError::new(ApiErrorCode::UpstreamFailed, other.to_string())
@@ -1960,6 +1978,47 @@ mod tests {
         );
     }
 
+    /// Both routes resolve the invoicing settings themselves, and the `NIGEL_*`
+    /// environment wins over settings.json in production — so on a machine with
+    /// those variables exported, "nothing is configured" would otherwise become
+    /// a real Stripe call. `TempConfig` takes the environment out of the
+    /// resolution for its lifetime; this is the test that says so.
+    #[tokio::test]
+    async fn a_configured_environment_cannot_turn_these_tests_into_a_real_send() {
+        let _config = TempConfig::new();
+        // Safe here: the suite runs on one thread, `#[tokio::test]` is a
+        // current-thread runtime, and the variable is removed at the end.
+        std::env::set_var("NIGEL_STRIPE_SECRET_KEY", "sk_live_not_a_real_key");
+
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, json) =
+            post_json(&app, "/api/invoices/sync", &token, &serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "send_not_configured");
+
+        let (status, json) = post_json(
+            &app,
+            "/api/invoices/1252/send",
+            &token,
+            &serde_json::json!({ "confirm": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"]["details"]["reason"], "send_not_configured");
+        assert_eq!(
+            json["error"]["details"]["missing"]
+                .as_array()
+                .expect("the missing key names")
+                .len(),
+            9,
+            "the exported key was read: {json}"
+        );
+
+        std::env::remove_var("NIGEL_STRIPE_SECRET_KEY");
+    }
+
     /// `sync` is a literal beside `{number}`, and would otherwise be read as an
     /// invoice number — which `ApiPath<i64>` refuses with a 400.
     #[tokio::test]
@@ -2000,6 +2059,9 @@ mod tests {
         let (status, json) = error_json(err).await;
         assert_eq!(status, StatusCode::CONFLICT, "{json}");
         assert_eq!(json["error"]["details"]["reason"], "void");
+        // The data layer's guard, reached through the traced precheck — which
+        // is why it names the step like every other send answer.
+        assert_eq!(json["error"]["details"]["step"], "precheck");
         assert_eq!(*gateway.create_calls.borrow(), 0);
         assert_eq!(*mailer.sent.borrow(), 0);
     }
@@ -2055,6 +2117,7 @@ mod tests {
         let (status, json) = error_json(err).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
         assert_eq!(json["error"]["details"]["reason"], "invoice_not_found");
+        assert_eq!(json["error"]["details"]["step"], "load");
     }
 
     #[cfg(feature = "pdf")]

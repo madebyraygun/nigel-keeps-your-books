@@ -1,9 +1,15 @@
+use std::time::{Duration, Instant};
+
 use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::error::{NigelError, Result};
 use crate::invoicing::gateway::PaymentGateway;
 use crate::invoicing::invoices::{get_invoice, record_payment};
+
+/// What an invoice the run never reached is reported as.
+pub const BUDGET_EXHAUSTED: &str =
+    "not checked: the sync time budget was used up before this invoice was reached";
 
 /// One invoice the gateway refused, named by the number a person reads off it.
 #[derive(Debug, Clone, Serialize)]
@@ -63,10 +69,40 @@ pub fn sync_invoice<G: PaymentGateway>(
 ///
 /// The failures are returned rather than printed, because a browser cannot read
 /// the server's stderr — the CLI prints the same notices from the report.
+///
+/// Unbounded: a terminal can be interrupted, and `nigel invoice sync` is a
+/// command someone chose to wait for. A caller that cannot be interrupted —
+/// the HTTP route, which holds the database gate while it runs — uses
+/// [`sync_all_report_within`] instead.
 pub fn sync_all_report<G: PaymentGateway>(
     conn: &Connection,
     today: &str,
     gateway: &G,
+) -> Result<SyncReport> {
+    run_sync(conn, today, gateway, None)
+}
+
+/// [`sync_all_report`] with a deadline for the whole run.
+///
+/// The budget is checked before each invoice rather than enforced mid-request:
+/// the per-call timeouts in [`crate::invoicing::http_client`] already bound one
+/// invoice, and this bounds how many of them a single run can queue up. The
+/// invoices that were never reached are reported as failures rather than
+/// silently dropped, so the report still accounts for every invoice it counted.
+pub fn sync_all_report_within<G: PaymentGateway>(
+    conn: &Connection,
+    today: &str,
+    gateway: &G,
+    budget: Duration,
+) -> Result<SyncReport> {
+    run_sync(conn, today, gateway, Some(Instant::now() + budget))
+}
+
+fn run_sync<G: PaymentGateway>(
+    conn: &Connection,
+    today: &str,
+    gateway: &G,
+    deadline: Option<Instant>,
 ) -> Result<SyncReport> {
     let mut stmt = conn.prepare(
         "SELECT id, number FROM invoices
@@ -80,7 +116,16 @@ pub fn sync_all_report<G: PaymentGateway>(
         invoices_checked: invoices.len() as u32,
         ..SyncReport::default()
     };
-    for (id, number) in &invoices {
+    for (index, (id, number)) in invoices.iter().enumerate() {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            report
+                .failures
+                .extend(invoices[index..].iter().map(|(_, number)| SyncFailure {
+                    number: *number,
+                    message: BUDGET_EXHAUSTED.to_string(),
+                }));
+            break;
+        }
         match sync_invoice(conn, *id, today, gateway) {
             Ok(recorded) => report.recorded += recorded,
             Err(e) => report.failures.push(SyncFailure {
@@ -344,6 +389,74 @@ mod tests {
             .to_string();
         assert!(err.contains("no such payment link pl_bad"), "got: {err}");
         assert!(err.contains("no such payment link pl_worse"), "got: {err}");
+    }
+
+    /// A gateway whose first call outlasts the run's whole budget, so what the
+    /// deadline does is decided by arithmetic rather than by how fast the test
+    /// machine happens to be.
+    struct SlowFirstCall {
+        calls: std::cell::RefCell<u32>,
+    }
+    impl PaymentGateway for SlowFirstCall {
+        fn create_payment_link(&self, _i: &Invoice, _c: &Client) -> Result<PaymentLink> {
+            unreachable!()
+        }
+        fn paid_sessions(&self, id: &str) -> Result<Vec<PaidSession>> {
+            let mut calls = self.calls.borrow_mut();
+            *calls += 1;
+            if *calls == 1 {
+                std::thread::sleep(Duration::from_millis(60));
+            }
+            Ok(vec![PaidSession {
+                session_id: format!("cs_{id}"),
+                amount: 100.0,
+            }])
+        }
+    }
+
+    /// The bound exists for the HTTP route, which holds the database gate for
+    /// as long as the run takes and cannot be interrupted from a terminal.
+    #[test]
+    fn an_exhausted_budget_reports_the_invoices_it_never_reached() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let first = open_invoice(&conn, cid, "pl_1");
+        let second = open_invoice(&conn, cid, "pl_2");
+        let skipped = get_invoice(&conn, second).unwrap().number;
+
+        let gateway = SlowFirstCall {
+            calls: std::cell::RefCell::new(0),
+        };
+        let report =
+            sync_all_report_within(&conn, "2026-08-10", &gateway, Duration::from_millis(20))
+                .unwrap();
+
+        // The first invoice was already running when the budget ran out; the
+        // second is reported rather than silently dropped.
+        assert_eq!(report.recorded, 1);
+        assert_eq!(report.invoices_checked, 2);
+        assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+        assert_eq!(report.failures[0].number, skipped);
+        assert_eq!(report.failures[0].message, BUDGET_EXHAUSTED);
+        assert_eq!(*gateway.calls.borrow(), 1, "the second was never asked for");
+        assert_eq!(paid_amount(&conn, first).unwrap(), 100.0);
+        assert_eq!(paid_amount(&conn, second).unwrap(), 0.0);
+    }
+
+    /// And a budget with room in it changes nothing.
+    #[test]
+    fn a_budget_that_is_not_reached_checks_every_invoice() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        open_invoice(&conn, cid, "pl_1");
+        open_invoice(&conn, cid, "pl_2");
+
+        let report =
+            sync_all_report_within(&conn, "2026-08-10", &PerLinkGw, Duration::from_secs(60))
+                .unwrap();
+        assert_eq!(report.recorded, 2);
+        assert_eq!(report.invoices_checked, 2);
+        assert!(report.failures.is_empty());
     }
 
     #[test]

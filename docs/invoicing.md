@@ -309,9 +309,11 @@ not, because the client already has the invoice. Nothing retries automatically.
 A completed send answers with the same trace, so a screen can say what happened
 rather than just "done".
 
-The three outbound calls are bounded (10s to connect, 30s in total, each), which
+Every outbound call is bounded (10s to connect, 30s in total, each), which
 `nigel invoice send` benefits from too: before that, a connection that was
-accepted and never answered hung the terminal.
+accepted and never answered hung the terminal. A send makes five of them — two
+to Stripe, two to R2, one to Mailgun — so the slowest possible send is about
+150 seconds rather than forever.
 
 ## Customizing the invoice page
 
