@@ -12,6 +12,7 @@ use ratatui::{
 use crate::browser::{BrowseAction, RegisterBrowser};
 use crate::cli::account_manager::{AccountAction, AccountManager};
 use crate::cli::category_manager::{CategoryAction, CategoryManager};
+use crate::cli::client_manager::{ClientAction, ClientManager};
 use crate::cli::import_manager::{ImportAction, ImportScreen};
 use crate::cli::load_manager::{LoadAction, LoadScreen};
 use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
@@ -54,6 +55,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[t] Edit chart of accounts", 't'),
     ("[u] View or edit categorization rules", 'u'),
     ("[z] Undo last import", 'z'),
+    ("[k] Clients", 'k'),
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
     ("[l] Load a different data file", 'l'),
@@ -114,6 +116,7 @@ enum DashboardScreen {
     Review(TransactionReviewer),
     Accounts(AccountManager),
     Categories(CategoryManager),
+    Clients(ClientManager),
     Rules(RulesManager),
     Reconcile(ReconcileScreen),
     Load(LoadScreen),
@@ -344,6 +347,10 @@ impl Dashboard {
             return;
         }
         if let DashboardScreen::Categories(ref mut manager) = self.screen {
+            manager.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Clients(ref mut manager) = self.screen {
             manager.draw(frame);
             return;
         }
@@ -728,24 +735,25 @@ impl Dashboard {
                 Ok(screen) => self.screen = DashboardScreen::Undo(screen),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            8 => {
+            8 => self.screen = DashboardScreen::Clients(ClientManager::new(conn, &self.greeting)),
+            9 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::View,
                 }
             }
-            9 => {
+            10 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::Export,
                 }
             }
-            10 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            11 => match SettingsManager::new(conn, &self.greeting) {
+            11 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            12 => match SettingsManager::new(conn, &self.greeting) {
                 Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            12 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            13 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -1214,6 +1222,15 @@ pub fn run() -> Result<()> {
                             }
                             false
                         }
+                        DashboardScreen::Clients(ref mut manager) => {
+                            match manager.handle_key(key.code, &conn) {
+                                ClientAction::Close => {
+                                    return_home = true;
+                                }
+                                ClientAction::Continue => {}
+                            }
+                            false
+                        }
                         DashboardScreen::Rules(ref mut rules) => {
                             match rules.handle_key(key.code, &conn) {
                                 RulesAction::Close => {
@@ -1566,6 +1583,47 @@ mod tests {
         );
         assert!(row.contains("$999,999.99"), "amount truncated: {row:?}");
         assert!(row.contains("(current)"), "hint truncated: {row:?}");
+    }
+
+    #[test]
+    fn menu_shortcuts_are_unique_and_leave_quit_alone() {
+        let mut seen = std::collections::HashSet::new();
+        for (label, key) in MENU_ITEMS {
+            assert!(seen.insert(*key), "{key} is bound twice ({label})");
+            assert_ne!(*key, 'q', "q quits the dashboard ({label})");
+        }
+    }
+
+    #[test]
+    fn menu_labels_advertise_their_own_shortcut() {
+        for (label, key) in MENU_ITEMS {
+            assert!(
+                label.starts_with(&format!("[{key}] ")),
+                "{label} does not announce {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_right_column_has_room_for_every_item() {
+        // The menu block is MENU_LEFT_COUNT + 1 rows and the title takes one,
+        // so the right column can only ever show MENU_LEFT_COUNT items.
+        assert!(
+            MENU_ITEMS.len() - MENU_LEFT_COUNT <= MENU_LEFT_COUNT,
+            "{} items in the right column, room for {MENU_LEFT_COUNT}",
+            MENU_ITEMS.len() - MENU_LEFT_COUNT
+        );
+    }
+
+    #[test]
+    fn the_flagged_count_is_still_on_the_review_row() {
+        // menu_item_line's `if i == 2` special case is positional.
+        assert_eq!(MENU_ITEMS[2].1, 'r');
+        let dash = home_with(None);
+        assert!(
+            format!("{:?}", dash.menu_item_line(2, 7)).contains("(7)"),
+            "the flagged count moved off Review"
+        );
     }
 
     #[test]
