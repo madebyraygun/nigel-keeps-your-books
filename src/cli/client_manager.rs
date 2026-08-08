@@ -867,6 +867,19 @@ mod tests {
     }
 
     #[test]
+    fn every_screen_survives_a_terminal_narrower_than_its_columns() {
+        let (_d, conn) = test_conn();
+        seed_cedar(&conn);
+        let mut mgr = manager(&conn);
+
+        let mut narrow =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 10)).unwrap();
+        narrow.draw(|frame| mgr.draw(frame)).unwrap(); // list
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        narrow.draw(|frame| mgr.draw(frame)).unwrap(); // edit form
+    }
+
+    #[test]
     fn the_empty_list_says_how_to_add_one() {
         let (_d, conn) = test_conn();
         let mut mgr = manager(&conn);

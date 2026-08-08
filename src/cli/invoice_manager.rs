@@ -2254,6 +2254,34 @@ mod tests {
     }
 
     #[test]
+    fn every_screen_survives_a_terminal_narrower_than_its_columns() {
+        let (dir, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        record_payment(&conn, id, 1_250.0, "2026-08-01", "ach", None).unwrap();
+        let mut mgr = manager(&conn);
+
+        let mut narrow =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 10)).unwrap();
+        let mut draw = |mgr: &mut InvoiceManager| {
+            narrow.draw(|frame| mgr.draw(frame)).unwrap();
+        };
+
+        draw(&mut mgr); // list
+        mgr.handle_key(KeyCode::Enter, &conn);
+        draw(&mut mgr); // detail
+        mgr.handle_key(KeyCode::Char('v'), &conn);
+        draw(&mut mgr); // confirm void
+        mgr.handle_key(KeyCode::Char('n'), &conn);
+        mgr.handle_key(KeyCode::Char('p'), &conn);
+        draw(&mut mgr); // payment form
+        mgr.handle_key(KeyCode::Esc, &conn);
+        mgr.begin_send(full_config(), dir.path());
+        draw(&mut mgr); // confirm send
+        mgr.handle_key(KeyCode::Char('y'), &conn);
+        draw(&mut mgr); // sending
+    }
+
+    #[test]
     fn the_empty_list_points_at_the_command_that_creates_one() {
         let (_d, conn) = test_conn();
         let mut mgr = manager(&conn);
