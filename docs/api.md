@@ -489,6 +489,13 @@ refused with `423 locked` until an encrypted database is unlocked. Three are
 | `/api/reconcile` | `POST` | `account`, `month`, `statementBalance` | `ReconcileResult` |
 | `/api/reconciliations` | `GET` | `account` (query) | `ReconciliationRecord[]` |
 | `/api/imports/:id` | `DELETE` | — | `{ id, deletedTransactions }` |
+| `/api/clients` | `POST` | `name`, `email?`, `billingAddress?`, `notes?` | `Client` (`201`) |
+| `/api/clients/:id` | `PATCH` | `name?`, `email?`, `billingAddress?`, `notes?` | `Client` |
+| `/api/clients/:id` | `DELETE` | — | `{ id, deleted }` |
+| `/api/invoices` | `POST` | `clientId`, `issueDate`, `dueDate?`, `currency?`, `items`, `notes?`, `terms?` | `InvoiceDetail` (`201`) |
+| `/api/invoices/:number` | `PATCH` | `issueDate?`, `dueDate?`, `currency?`, `notes?`, `terms?`, `items?` | `InvoiceDetail` |
+| `/api/invoices/:number/void` | `POST` | — | `InvoiceDetail` |
+| `/api/invoices/:number/pay` | `POST` | `date`, `amount?`, `method?` | `InvoiceDetail` |
 
 ### Write conventions
 
@@ -501,9 +508,10 @@ refused with `423 locked` until an encrypted database is unlocked. Three are
   work. A `PATCH` with no recognized field is `400` — an empty edit is more
   likely a bug than an intention.
 - **`null` clears a field**, where clearing makes sense: `vendor` on a
-  transaction or a rule, `taxLine` and `formLine` on a category. `categoryId` is
-  the exception — `null` there is `400`, because uncategorizing is what
-  `/api/review/:id/undo` is for.
+  transaction or a rule, `taxLine` and `formLine` on a category, `email`,
+  `billingAddress` and `notes` on a client, `dueDate`, `notes` and `terms` on an
+  invoice. `categoryId` is the exception — `null` there is `400`, because
+  uncategorizing is what `/api/review/:id/undo` is for.
 - Unknown fields in a body are ignored, except on `/api/imports/preview` and
   `/api/imports/confirm`, where an unrecognized key is a `400`: those two carry
   the column mapping, and a misspelled field there would silently import the
@@ -616,6 +624,100 @@ an optional `?account=`, returns that history newest month first.
 record — the way `nigel undo` rolls back the most recent one. It answers with
 `{ "id": 3, "deletedTransactions": 42 }`. An import that is already gone is
 `404`, not a successful undo of nothing.
+
+### Invoicing
+
+`{number}` is the invoice number, as it is on the read routes.
+
+#### Clients
+
+```json
+{ "name": "Initech", "email": "ap@initech.test", "billingAddress": "9 Cubicle Way" }
+```
+
+`POST /api/clients` answers `201` with the created `Client`. An empty or
+whitespace-only `name` is `400`; a name another client already has is `409`
+`duplicate_name` carrying the `name`. `PATCH` takes the same four fields, all
+optional, with `email`, `billingAddress` and `notes` clearable by `null`; an
+all-absent body is `400`.
+
+`DELETE /api/clients/:id` is a hard delete, and is refused while the client has
+**any** invoice — void and paid included, because those invoices still name the
+client on a page that has already gone out:
+
+```json
+{
+  "error": {
+    "code": "conflict",
+    "message": "Cannot delete: client has 2 invoices",
+    "details": { "reason": "has_invoices", "count": 2 }
+  }
+}
+```
+
+There is no CLI equivalent: `nigel client` has no `delete`, and the TUI's client
+manager offers none for the same reason this route guards it.
+
+#### Creating and editing an invoice
+
+```json
+{
+  "clientId": 1,
+  "issueDate": "2026-04-01",
+  "dueDate": "2026-05-01",
+  "currency": "USD",
+  "items": [{ "description": "Consulting: April", "quantity": 10, "unitAmount": 150 }],
+  "notes": "Thanks",
+  "terms": "Net 30"
+}
+```
+
+`currency` defaults to `USD`. The response is the whole `InvoiceDetail` at
+`201`, carrying the number the counter handed out — a refused create reserves
+nothing, since `create_invoice` advances the counter in the same transaction it
+inserts the row.
+
+The line-item rules apply to `POST` and to `PATCH` alike: at least one item, a
+finite `quantity` and `unitAmount` on each, and a total above zero. All three
+are `400`. A non-finite figure is rejected for `payment_amount`'s reason — it
+would poison every later `SUM` over the column — and although JSON cannot spell
+`NaN`, an overflowing literal deserializes to infinity. Descriptions may contain
+anything, including a colon: the CLI's `desc:qty:unit` restriction is an artifact
+of parsing one argv string.
+
+`PATCH /api/invoices/:number` is **draft-only**, and `items` is a whole-list
+replacement rather than a per-row edit — present means "these are the line items
+now", positions are re-derived, and `subtotal`/`total` are recomputed. An edit
+that moves the total or the currency **clears a stale Stripe payment link**, so
+the next send creates one at the right amount.
+
+The draft-only rule is read from the current row inside the write's own
+transaction, never from anything the client sent, and it is more than a status
+comparison — see the conflict table below.
+
+#### Voiding and paying
+
+`POST /api/invoices/:number/void` takes no body. It writes `voidedAt` and lets
+the status derive from it; `void` is terminal, so the returned detail has all
+four `can*` flags false.
+
+```json
+{ "date": "2026-03-14", "amount": 500.0, "method": "ach" }
+```
+
+`amount` omitted records the **whole outstanding balance**, exactly as omitting
+`--amount` does. `method` defaults to `direct_deposit` and is validated against
+the `invoice_payments` CHECK set — `stripe`, `ach`, `direct_deposit`, `other` —
+before the insert, so an unknown one is a `400` naming the set rather than a
+constraint violation surfacing as a `500`. A zero, negative or non-finite
+`amount` is `400`.
+
+Both answer the refreshed `InvoiceDetail`, as every invoice write does: the
+status is derived by `refresh_status` on almost all of them, so a response
+echoing only the field that was sent would be showing the old one.
+
+Dates on these routes follow the API's own rule, not the CLI's: zero-padded
+`YYYY-MM-DD`, so `2026-4-1` is a `400` here where `nigel invoice pay` accepts it.
 
 ## Running an import
 
@@ -755,6 +857,20 @@ its own words instead of parsing ours:
 | `no_transactions` | `account`, `month` | Reconciling a month with nothing in it |
 | `already_encrypted` | — | Setting a password on an encrypted database |
 | `not_encrypted` | — | Changing or removing the password on a plaintext one |
+| `has_invoices` | `count` | Deleting a client that has invoices, any status |
+| `void` | — | Editing or paying a void invoice |
+| `not_draft` | `status` | Editing an invoice that has been sent |
+| `has_payments` | `total`, `paid` | Editing or voiding an invoice with payments |
+| `already_void` | — | Voiding an invoice that is already void |
+| `no_balance` | `total`, `paid` | Paying an invoice with nothing outstanding |
+
+The five invoice-state reasons are the data layer's own, raised by
+`ensure_editable`, `ensure_voidable`, `ensure_not_void` and `payment_amount`, so
+the CLI, the TUI and the API refuse the same things in the same words. **A
+client must not re-derive them from `status`:** an edit is blocked by recorded
+payments as well as by status, which is why a draft that has been part-paid
+answers `has_payments` rather than anything about being a draft. The route adds
+the figures beside them; the code and the sentence are the data layer's.
 
 ```json
 {

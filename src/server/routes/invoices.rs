@@ -1,5 +1,8 @@
-//! Invoices: the list, one invoice in full, the A/R aging report, and the
-//! number the next draft will get.
+//! Invoices: the list, one invoice in full, the A/R aging report, the number
+//! the next draft will get, and the writes — create, edit, void and pay.
+//!
+//! Every write answers the whole refreshed detail, because the status is
+//! derived rather than set and almost every write moves it.
 //!
 //! Every guard the detail response reports as a `can*` flag is 68.1's own
 //! function, called rather than re-derived — `ensure_editable` blocks on
@@ -17,8 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::NigelError;
 use crate::invoicing::clients::get_client;
-use crate::invoicing::invoices::NewLineItem;
-use crate::invoicing::invoices::{self as inv, AgingReport, InvoiceListRow, InvoiceUpdate};
+use crate::invoicing::invoices::{
+    self as inv, AgingReport, InvoiceListRow, InvoiceUpdate, NewLineItem,
+};
 use crate::invoicing::render::{render_invoice, RenderedInvoice};
 use crate::invoicing::render_html::{load_template, Branding};
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
@@ -348,8 +352,8 @@ struct InvoicePatch {
 }
 
 impl InvoicePatch {
-    /// Field for field into 68.1's update struct, with the line items checked
-    /// on the way through.
+    /// Field for field into the data layer's update struct, with the dates and
+    /// the line items checked on the way through.
     fn into_update(self) -> ApiResult<InvoiceUpdate> {
         if let Some(ref issue) = self.issue_date {
             checked_date("issueDate", issue)?;
