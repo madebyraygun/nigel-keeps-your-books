@@ -327,7 +327,7 @@ fn preview_paths(dir: &Path, number: i64) -> (PathBuf, PathBuf) {
     )
 }
 
-fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
+pub(crate) fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
     // A voided invoice can still carry a live Stripe URL, and rendering a
     // working Pay button on a cancelled invoice is the one way this command
     // could cost someone money.
@@ -340,7 +340,7 @@ fn pay_button_for(invoice: &Invoice) -> PayButton<'_> {
     }
 }
 
-fn contact_email_for_preview(cfg: &InvoicingConfig) -> (String, bool) {
+pub(crate) fn contact_email_for_preview(cfg: &InvoicingConfig) -> (String, bool) {
     match cfg.from_email.as_deref() {
         Some(email) => (email.to_string(), false),
         None => (PREVIEW_CONTACT_PLACEHOLDER.to_string(), true),

@@ -6,7 +6,10 @@
 //! recorded payments as well as on status, and a status-only copy of that rule
 //! in a client would disagree with the 409 it is meant to predict.
 
+use axum::body::Body;
 use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use rusqlite::Connection;
@@ -14,6 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::invoicing::clients::get_client;
 use crate::invoicing::invoices::{self as inv, AgingReport, InvoiceListRow};
+use crate::invoicing::render::{render_invoice, RenderedInvoice};
+use crate::invoicing::render_html::{load_template, Branding};
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 
 use super::super::error::{ApiError, ApiResult};
@@ -30,6 +35,8 @@ pub fn routes() -> Router<AppState> {
         .route("/invoices/aging", get(aging))
         .route("/invoices/next-number", get(next_number))
         .route("/invoices/{number}", get(detail))
+        .route("/invoices/{number}/preview", get(preview_html))
+        .route("/invoices/{number}/preview.pdf", get(preview_pdf))
 }
 
 // ---------------------------------------------------------------------------
@@ -76,12 +83,9 @@ fn find_invoice(conn: &Connection, number: i64) -> ApiResult<Invoice> {
     // the global mapping would call a 500. The CLI narrows it the same way.
     match inv::get_invoice_by_number(conn, number) {
         Ok(invoice) => Ok(invoice),
-        Err(crate::error::NigelError::Db(rusqlite::Error::QueryReturnedNoRows)) => {
-            Err(ApiError::not_found_because(
-                format!("No invoice #{number}."),
-                "invoice_not_found",
-            ))
-        }
+        Err(crate::error::NigelError::Db(rusqlite::Error::QueryReturnedNoRows)) => Err(
+            ApiError::not_found_because(format!("No invoice #{number}."), "invoice_not_found"),
+        ),
         Err(other) => Err(ApiError::from(other)),
     }
 }
@@ -162,7 +166,11 @@ async fn list(
         }
         // `statuses_for` already refuses an unknown word by naming the legal
         // set, and that refusal is an `Invalid`, so it arrives as a 400.
-        Ok(inv::list_invoices(conn, query.status.as_deref(), client_id)?)
+        Ok(inv::list_invoices(
+            conn,
+            query.status.as_deref(),
+            client_id,
+        )?)
     })
     .await?;
     Ok(Json(rows))
@@ -204,6 +212,94 @@ async fn aging(
 async fn next_number(State(state): State<AppState>) -> ApiResult<Json<NextNumber>> {
     let number = with_conn(&state, inv::next_number).await?;
     Ok(Json(NextNumber { number }))
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+// ---------------------------------------------------------------------------
+
+/// Render an invoice through the seam `send` publishes through.
+///
+/// No gateway is passed in, which is the proof it makes no network call, and no
+/// invoicing config is required: an unset `from_email` renders the same visible
+/// placeholder `nigel invoice preview` prints a notice about.
+fn render(
+    conn: &Connection,
+    data_dir: &std::path::Path,
+    number: i64,
+) -> ApiResult<RenderedInvoice> {
+    let invoice = find_invoice(conn, number)?;
+    let client = get_client(conn, invoice.client_id)
+        .map_err(|e| not_found_because(e, "client_not_found"))?;
+
+    // Loaded before anything is rendered, so a broken override is a 400 naming
+    // the path rather than a page nobody approved.
+    let template = load_template(data_dir)?;
+    let company = crate::cli::invoice::company_name(conn);
+    let (contact_email, _placeholder) =
+        crate::cli::invoice::contact_email_for_preview(&crate::settings::invoicing_config());
+    let branding = Branding {
+        template: &template,
+        company: &company,
+        contact_email: &contact_email,
+    };
+
+    Ok(render_invoice(
+        conn,
+        &invoice,
+        &client,
+        crate::cli::invoice::pay_button_for(&invoice),
+        &branding,
+    )?)
+}
+
+async fn preview_html(
+    State(state): State<AppState>,
+    ApiPath(number): ApiPath<i64>,
+) -> ApiResult<Response> {
+    let data_dir = state.data_dir();
+    let rendered = with_conn_api(&state, move |conn| render(conn, &data_dir, number)).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            // The SPA frames this in a sandboxed iframe, but the route is also
+            // openable in a tab, where the document would otherwise be a
+            // same-origin page rendering database text.
+            (header::CONTENT_SECURITY_POLICY, "sandbox"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        rendered.html,
+    )
+        .into_response())
+}
+
+async fn preview_pdf(
+    State(state): State<AppState>,
+    ApiPath(number): ApiPath<i64>,
+) -> ApiResult<Response> {
+    let data_dir = state.data_dir();
+    let bytes = with_conn_api(&state, move |conn| {
+        // The same sentence the CLI prints, answered the way `exports.rs`
+        // answers it: HTML still renders in such a build, only the PDF cannot.
+        render(conn, &data_dir, number)?
+            .pdf
+            .ok_or_else(|| ApiError::feature_disabled(crate::cli::report::PDF_DISABLED_MESSAGE))
+    })
+    .await?;
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/pdf".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                // Nothing from the database reaches the header: the stem is a
+                // fixed string and the number is digits.
+                format!("attachment; filename=\"invoice-{number}.pdf\""),
+            ),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
 }
 
 #[cfg(test)]
@@ -273,7 +369,9 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "bad_request");
         let message = body["error"]["message"].as_str().unwrap();
-        for word in ["draft", "sent", "partial", "paid", "overdue", "void", "open"] {
+        for word in [
+            "draft", "sent", "partial", "paid", "overdue", "void", "open",
+        ] {
             assert!(message.contains(word), "{word} missing from {message}");
         }
     }
@@ -449,5 +547,163 @@ mod tests {
         let first = ok_json(&app, "/api/invoices/next-number", &token).await;
         let second = ok_json(&app, "/api/invoices/next-number", &token).await;
         assert_eq!(first, second);
+    }
+
+    // -----------------------------------------------------------------------
+    // Preview
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn the_preview_route_answers_html_with_a_sandbox_csp() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = get_response(&app, "/api/invoices/1248/preview", &token).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(content_type(&response), "text/html; charset=utf-8");
+        assert_eq!(
+            header_str(&response, axum::http::header::CONTENT_SECURITY_POLICY),
+            "sandbox"
+        );
+        assert_eq!(
+            header_str(&response, axum::http::header::X_CONTENT_TYPE_OPTIONS),
+            "nosniff"
+        );
+
+        let body = body_string(response).await;
+        assert!(body.contains("1248"), "{body}");
+        assert!(body.contains("Northwind Traders"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_draft_previews_with_a_placeholder_pay_button() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        // 1252 is the draft: no Stripe link, and the route takes no gateway,
+        // which is what makes "no network call" structural rather than asserted.
+        let body =
+            body_string(get_response(&app, "/api/invoices/1252/preview", &token).await).await;
+        assert!(!body.contains("buy.stripe.com"), "{body}");
+        assert!(body.contains("Brand refresh"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_published_invoice_previews_with_its_real_pay_link() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let body =
+            body_string(get_response(&app, "/api/invoices/1251/preview", &token).await).await;
+        assert!(
+            body.contains("https://buy.stripe.com/test_seed_1251"),
+            "{body}"
+        );
+    }
+
+    /// 68.2's second acceptance criterion: preview needs no invoicing config.
+    #[tokio::test]
+    async fn preview_works_with_no_invoicing_config_set() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = get_response(&app, "/api/invoices/1250/preview", &token).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+        // The contact line renders the same visible placeholder the CLI notices
+        // about, rather than an empty address or a 500.
+        assert!(body.contains("(from_email not configured)"), "{body}");
+    }
+
+    /// A byte route still answers its failures as JSON — the `exports.rs`
+    /// property, restated here because it is easy to lose on a document route.
+    #[tokio::test]
+    async fn previewing_an_unknown_invoice_is_a_404_in_the_envelope() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        for uri in PREVIEW_ROUTES.map(|route| route.replace("1248", "9999")) {
+            let (status, body) = get_json(&app, &uri, &token).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
+            assert_eq!(body["error"]["details"]["reason"], "invoice_not_found");
+        }
+    }
+
+    /// The override is validated when it is loaded, so a typo is a 400 naming
+    /// the file rather than a stock page nobody approved.
+    #[tokio::test]
+    async fn a_broken_template_is_a_400_naming_the_path() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let data_dir = db_path.parent().unwrap();
+        let templates = data_dir.join("templates");
+        std::fs::create_dir_all(&templates).expect("templates dir");
+        std::fs::write(templates.join("invoice.html"), "<p>{{NOPE}}</p>").expect("template");
+
+        let (app, token) = app_for(&db_path);
+        let (status, body) = get_json(&app, "/api/invoices/1248/preview", &token).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("invoice.html"),
+            "{body}"
+        );
+    }
+
+    #[cfg(feature = "pdf")]
+    #[tokio::test]
+    async fn preview_pdf_answers_bytes_with_the_feature() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let response = get_response(&app, "/api/invoices/1248/preview.pdf", &token).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(content_type(&response), "application/pdf");
+        assert_eq!(
+            header_str(&response, axum::http::header::CONTENT_DISPOSITION),
+            "attachment; filename=\"invoice-1248.pdf\""
+        );
+        let bytes = body_bytes(response).await;
+        assert!(bytes.starts_with(b"%PDF"), "not a PDF");
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    #[tokio::test]
+    async fn preview_pdf_is_501_without_the_feature_and_html_still_works() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
+
+        let (status, body) = get_json(&app, "/api/invoices/1248/preview.pdf", &token).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+        assert_eq!(body["error"]["code"], "feature_disabled");
+        assert_eq!(
+            body["error"]["message"],
+            crate::cli::report::PDF_DISABLED_MESSAGE
+        );
+
+        let html = get_response(&app, "/api/invoices/1248/preview", &token).await;
+        assert_eq!(html.status(), StatusCode::OK, "HTML preview still works");
+    }
+
+    #[tokio::test]
+    async fn a_locked_database_refuses_both_preview_routes() {
+        let (_dir, db_path) = seeded_db();
+        encrypt(&db_path);
+        let (app, token) = app_for(&db_path);
+
+        for uri in PREVIEW_ROUTES {
+            let (status, body) = get_json(&app, uri, &token).await;
+            assert_eq!(status, StatusCode::LOCKED, "{uri} while locked: {body}");
+            assert_eq!(body["error"]["code"], "locked", "for {uri}");
+        }
     }
 }

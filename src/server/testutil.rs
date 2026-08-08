@@ -296,6 +296,14 @@ pub const DATA_ROUTES: [&str; 24] = [
     "/api/invoices/next-number",
 ];
 
+/// The two invoice preview routes. Kept out of [`DATA_ROUTES`] for the reason
+/// [`EXPORT_ROUTES`] is: a successful preview is a document, not JSON — only
+/// the failures share a shape with the rest of the API.
+pub const PREVIEW_ROUTES: [&str; 2] = [
+    "/api/invoices/1248/preview",
+    "/api/invoices/1248/preview.pdf",
+];
+
 /// Every export route, named without the `format` each of them requires. They
 /// are kept out of [`DATA_ROUTES`] because a successful export is bytes, not
 /// JSON — only the failure cases share a shape with the rest of the API.
@@ -589,8 +597,14 @@ fn seed_invoicing(conn: &Connection) {
     .expect("acme");
     // No email: the client a send refuses, and the em dash every list prints.
     let globex = add_client(conn, "Globex", None, None, None).expect("globex");
-    let northwind = add_client(conn, "Northwind Traders", Some("billing@nw.test"), None, None)
-        .expect("northwind");
+    let northwind = add_client(
+        conn,
+        "Northwind Traders",
+        Some("billing@nw.test"),
+        None,
+        None,
+    )
+    .expect("northwind");
 
     // 1247 — void.
     let id = inv::create_invoice(
