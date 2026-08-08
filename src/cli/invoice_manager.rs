@@ -136,8 +136,6 @@ pub struct InvoiceManager {
     scroll_offset: usize,
     last_visible_rows: usize,
     screen: Screen,
-    /// Boxed: inline, `Detail` makes `DashboardScreen` several times the size
-    /// of every other screen it holds.
     detail: Option<Box<Detail>>,
     detail_scroll: usize,
     status_message: Option<String>,
