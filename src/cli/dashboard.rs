@@ -73,6 +73,7 @@ const REPORT_TYPES: &[&str] = &[
     "Flagged Transactions",
     "Cash Position",
     "K-1 Prep (1120-S)",
+    "A/R Aging",
 ];
 
 const EXPORT_TYPES: &[&str] = &[
@@ -84,7 +85,15 @@ const EXPORT_TYPES: &[&str] = &[
     "Flagged Transactions",
     "Cash Position",
     "K-1 Prep (1120-S)",
+    "A/R Aging",
     "All Reports",
+];
+
+/// The report slug behind each picker index. `REPORT_TYPES`, `EXPORT_TYPES`,
+/// `enter_report_view_with_date`, `do_export` and `do_text_export` are all keyed
+/// by that bare index; this is what the guard test holds them to.
+const REPORT_SLUGS: &[&str] = &[
+    "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep", "aging",
 ];
 
 #[derive(Clone, Copy)]
@@ -793,6 +802,7 @@ impl Dashboard {
             5 => super::report::view::build_flagged(),
             6 => super::report::view::build_balance(),
             7 => super::report::view::build_k1(year),
+            8 => super::report::view::build_aging(),
             _ => return DashboardScreen::Home,
         };
         match result {
@@ -865,7 +875,8 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
             5 => super::export::flagged(None)?,
             6 => super::export::balance(None)?,
             7 => super::export::k1(year, None)?,
-            8 => return super::export::all(year, None),
+            8 => super::export::aging(None)?,
+            9 => return super::export::all(year, None),
             _ => return Ok(String::new()),
         };
         Ok(format!("Exported {path}"))
@@ -874,11 +885,8 @@ fn do_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<Str
 
 fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Result<String> {
     let year = year.or_else(|| Some(chrono::Local::now().year()));
-    let names = [
-        "pnl", "expenses", "tax", "cashflow", "register", "flagged", "balance", "k1-prep",
-    ];
 
-    if idx == 8 {
+    if idx == REPORT_SLUGS.len() {
         // "All Reports" text export
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         let dir = crate::settings::get_data_dir().join("exports");
@@ -896,6 +904,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
             ("flagged", super::report::text::flagged()),
             ("balance", super::report::text::balance()),
             ("k1-prep", super::report::text::k1(year)),
+            ("aging", super::report::text::aging(&crate::cli::today())),
         ];
         let mut failed = Vec::new();
         for (name, result) in reports {
@@ -915,7 +924,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
         return Ok(format!("{msg} (skipped: {})", failed.join(", ")));
     }
 
-    let name = names.get(idx).unwrap_or(&"report");
+    let name = REPORT_SLUGS.get(idx).unwrap_or(&"report");
     let content = match idx {
         0 => super::report::text::pnl(month, year, None, None)?,
         1 => super::report::text::expenses(month, year)?,
@@ -925,6 +934,7 @@ fn do_text_export(idx: usize, year: Option<i32>, month: Option<String>) -> Resul
         5 => super::report::text::flagged()?,
         6 => super::report::text::balance()?,
         7 => super::report::text::k1(year)?,
+        8 => super::report::text::aging(&crate::cli::today())?,
         _ => return Ok(String::new()),
     };
 
@@ -1357,5 +1367,20 @@ pub fn run() -> Result<()> {
             }
             Ok(false) => continue, // reload (data directory changed)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_picker_indices_match_report_slugs() {
+        assert_eq!(REPORT_TYPES.len(), REPORT_SLUGS.len());
+        assert_eq!(EXPORT_TYPES.len(), REPORT_SLUGS.len() + 1);
+        assert_eq!(REPORT_TYPES[8], "A/R Aging");
+        assert_eq!(EXPORT_TYPES[8], "A/R Aging");
+        assert_eq!(REPORT_SLUGS[8], "aging");
+        assert_eq!(EXPORT_TYPES[REPORT_SLUGS.len()], "All Reports");
     }
 }
