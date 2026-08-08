@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::db::{get_metadata, set_metadata};
 use crate::error::{NigelError, Result};
 use crate::invoicing::clients::ensure_client_exists;
-use crate::models::{Invoice, InvoiceLineItem, InvoiceStatus};
+use crate::models::{Invoice, InvoiceLineItem, InvoicePayment, InvoiceStatus};
 
 const NEXT_NUMBER_KEY: &str = "next_invoice_number";
 const NEXT_NUMBER_DEFAULT: i64 = 1248;
@@ -502,6 +502,66 @@ pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineI
                 unit_amount: r.get(4)?,
                 line_total: r.get(5)?,
                 position: r.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// One row of the invoice list: everything a list screen prints, including the
+/// balance, without a second query per invoice.
+#[derive(Debug, Clone)]
+pub struct InvoiceListRow {
+    pub id: i64,
+    pub number: i64,
+    pub status: String,
+    pub client_name: String,
+    pub total: f64,
+    pub paid: f64,
+    pub due_date: Option<String>,
+}
+
+/// Every invoice, newest number first, with its client and paid-to-date.
+pub fn list_invoices(conn: &Connection) -> Result<Vec<InvoiceListRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT i.id, i.number, i.status, c.name, i.total,
+                COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                          WHERE p.invoice_id = i.id), 0),
+                i.due_date
+         FROM invoices i JOIN clients c ON c.id = i.client_id
+         ORDER BY i.number DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(InvoiceListRow {
+                id: r.get(0)?,
+                number: r.get(1)?,
+                status: r.get(2)?,
+                client_name: r.get(3)?,
+                total: r.get(4)?,
+                paid: r.get(5)?,
+                due_date: r.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// An invoice's payment history, oldest first.
+pub fn payments(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoicePayment>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, invoice_id, amount, paid_date, method, stripe_checkout_session_id
+         FROM invoice_payments WHERE invoice_id = ?1 ORDER BY paid_date, id",
+    )?;
+    let rows = stmt
+        .query_map([invoice_id], |r| {
+            Ok(InvoicePayment {
+                id: r.get(0)?,
+                invoice_id: r.get(1)?,
+                amount: r.get(2)?,
+                paid_date: r.get(3)?,
+                method: r.get(4)?,
+                stripe_checkout_session_id: r.get(5)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1740,5 +1800,92 @@ mod tests {
 
         let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
         assert_eq!(report.invoices[0].client, "Initech");
+    }
+
+    /// One client, three invoices of 100/200/300, newest number last returned.
+    fn seed_three(conn: &Connection) -> (i64, Vec<i64>) {
+        let cid = add_client(conn, "Cedar Systems", Some("ops@cedar.test"), None, None).unwrap();
+        let ids = [100.0, 200.0, 300.0]
+            .into_iter()
+            .map(|amount| {
+                let items = vec![NewLineItem {
+                    description: "Work".into(),
+                    quantity: 1.0,
+                    unit_amount: amount,
+                }];
+                create_invoice(conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap()
+            })
+            .collect();
+        (cid, ids)
+    }
+
+    #[test]
+    fn list_invoices_is_newest_first_and_carries_client_and_paid() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        record_payment(&conn, ids[1], 50.0, "2026-08-05", "ach", None).unwrap();
+
+        let rows = list_invoices(&conn).unwrap();
+        assert_eq!(rows.len(), 3);
+
+        let numbers: Vec<i64> = rows.iter().map(|r| r.number).collect();
+        let mut descending = numbers.clone();
+        descending.sort_by(|a, b| b.cmp(a));
+        assert_eq!(numbers, descending, "newest first");
+
+        for row in &rows {
+            assert_eq!(row.client_name, "Cedar Systems");
+        }
+        let middle = rows.iter().find(|r| r.id == ids[1]).unwrap();
+        assert_eq!(middle.paid, 50.0);
+        assert_eq!(middle.total, 200.0);
+        // The stored status, whatever it is — an unpublished draft stays draft.
+        assert_eq!(middle.status, get_invoice(&conn, ids[1]).unwrap().status);
+        for row in rows.iter().filter(|r| r.id != ids[1]) {
+            assert_eq!(row.paid, 0.0, "invoice #{} has no payments", row.number);
+        }
+    }
+
+    #[test]
+    fn list_invoices_carries_the_due_date_when_there_is_one() {
+        let (_d, conn) = test_conn();
+        open_invoice(&conn, "Acme", "2026-01-05", Some("2026-02-05"), 100.0);
+        open_invoice(&conn, "Globex", "2026-01-05", None, 100.0);
+
+        let rows = list_invoices(&conn).unwrap();
+        let dues: Vec<Option<String>> = rows.iter().map(|r| r.due_date.clone()).collect();
+        assert!(dues.contains(&Some("2026-02-05".to_string())), "{dues:?}");
+        assert!(dues.contains(&None), "{dues:?}");
+    }
+
+    #[test]
+    fn list_invoices_on_an_empty_book_is_empty() {
+        let (_d, conn) = test_conn();
+        assert!(list_invoices(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn payments_come_back_oldest_first() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        record_payment(&conn, ids[0], 10.0, "2026-08-09", "ach", None).unwrap();
+        record_payment(&conn, ids[0], 20.0, "2026-08-05", "stripe", None).unwrap();
+        record_payment(&conn, ids[0], 30.0, "2026-08-05", "other", None).unwrap();
+
+        let rows = payments(&conn, ids[0]).unwrap();
+        let dates: Vec<&str> = rows.iter().map(|p| p.paid_date.as_str()).collect();
+        assert_eq!(dates, ["2026-08-05", "2026-08-05", "2026-08-09"]);
+        // Same date: insertion order breaks the tie.
+        assert_eq!(rows[0].amount, 20.0);
+        assert_eq!(rows[1].amount, 30.0);
+        assert_eq!(rows[0].method, "stripe");
+        assert_eq!(rows[0].invoice_id, ids[0]);
+    }
+
+    #[test]
+    fn payments_for_an_invoice_with_none_is_empty() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        assert!(payments(&conn, ids[0]).unwrap().is_empty());
     }
 }
