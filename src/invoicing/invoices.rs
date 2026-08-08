@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::db::{get_metadata, set_metadata};
 use crate::error::{NigelError, Result};
@@ -507,59 +508,82 @@ pub fn line_items(conn: &Connection, invoice_id: i64) -> Result<Vec<InvoiceLineI
     Ok(rows)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgingBucket {
     pub label: &'static str,
+    pub count: usize,
     pub total: f64,
 }
 
-pub fn ar_aging(conn: &Connection, today: &str) -> Result<Vec<AgingBucket>> {
+/// One open invoice, with the balance and the bucket it was counted in.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgingInvoice {
+    pub number: i64,
+    pub client: String,
+    /// The date the bucket aged from: the due date, or the issue date when there is none.
+    pub due_date: String,
+    pub days_past_due: i64,
+    pub bucket: &'static str,
+    pub total: f64,
+    pub paid: f64,
+    pub balance: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgingReport {
+    pub as_of: String,
+    pub buckets: Vec<AgingBucket>,
+    pub invoices: Vec<AgingInvoice>,
+    pub outstanding: f64,
+}
+
+const AGING_LABELS: [&str; 5] = ["current", "1-30", "31-60", "61-90", "90+"];
+
+pub fn ar_aging_detail(conn: &Connection, today: &str) -> Result<AgingReport> {
+    let as_of = today.to_string();
     let today = NaiveDate::parse_from_str(today, "%Y-%m-%d")
         .map_err(|e| crate::error::NigelError::Other(format!("bad date {today}: {e}")))?;
 
-    let mut buckets = [
-        AgingBucket {
-            label: "current",
+    let mut buckets: Vec<AgingBucket> = AGING_LABELS
+        .iter()
+        .map(|label| AgingBucket {
+            label,
+            count: 0,
             total: 0.0,
-        },
-        AgingBucket {
-            label: "1-30",
-            total: 0.0,
-        },
-        AgingBucket {
-            label: "31-60",
-            total: 0.0,
-        },
-        AgingBucket {
-            label: "61-90",
-            total: 0.0,
-        },
-        AgingBucket {
-            label: "90+",
-            total: 0.0,
-        },
-    ];
+        })
+        .collect();
 
     let mut stmt = conn.prepare(
-        "SELECT id, total, COALESCE(due_date, issue_date) FROM invoices
-         WHERE status IN ('sent','partial','overdue')",
+        "SELECT i.id, i.number, c.name, i.total, COALESCE(i.due_date, i.issue_date)
+         FROM invoices i JOIN clients c ON c.id = i.client_id
+         WHERE i.status IN ('sent','partial','overdue')",
     )?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
-                r.get::<_, f64>(1)?,
+                r.get::<_, i64>(1)?,
                 r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, String>(4)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    for (id, total, due) in rows {
-        let owing = total - paid_amount(conn, id)?;
+    let mut invoices = Vec::new();
+    let mut outstanding = 0.0;
+
+    for (id, number, client, total, due) in rows {
+        let paid = paid_amount(conn, id)?;
+        let owing = total - paid;
         if owing <= 0.0 {
             continue;
         }
-        let due = NaiveDate::parse_from_str(&due, "%Y-%m-%d").unwrap_or(today);
-        let days = (today - due).num_days();
+        let due_date = NaiveDate::parse_from_str(&due, "%Y-%m-%d").unwrap_or(today);
+        let days = (today - due_date).num_days();
         let idx = if days <= 0 {
             0
         } else if days <= 30 {
@@ -571,9 +595,33 @@ pub fn ar_aging(conn: &Connection, today: &str) -> Result<Vec<AgingBucket>> {
         } else {
             4
         };
+        buckets[idx].count += 1;
         buckets[idx].total += owing;
+        outstanding += owing;
+        invoices.push(AgingInvoice {
+            number,
+            client,
+            due_date: due,
+            days_past_due: days,
+            bucket: AGING_LABELS[idx],
+            total,
+            paid,
+            balance: owing,
+        });
     }
-    Ok(buckets.into_iter().collect())
+
+    invoices.sort_by_key(|i| std::cmp::Reverse(i.days_past_due));
+
+    Ok(AgingReport {
+        as_of,
+        buckets,
+        invoices,
+        outstanding,
+    })
+}
+
+pub fn ar_aging(conn: &Connection, today: &str) -> Result<Vec<AgingBucket>> {
+    Ok(ar_aging_detail(conn, today)?.buckets)
 }
 
 #[cfg(test)]
@@ -1511,5 +1559,186 @@ mod tests {
         assert_eq!(get("1-30"), 100.0);
         assert_eq!(get("31-60"), 100.0);
         assert_eq!(get("90+"), 0.0);
+    }
+
+    /// A published, unpaid invoice for `client`, owing `amount`, due on `due`.
+    fn open_invoice(
+        conn: &Connection,
+        client: &str,
+        issue: &str,
+        due: Option<&str>,
+        amount: f64,
+    ) -> i64 {
+        let cid = add_client(conn, client, None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: amount,
+        }];
+        let id = create_invoice(conn, cid, issue, due, "USD", &items, None, None).unwrap();
+        mark_published(conn, id, issue).unwrap();
+        id
+    }
+
+    const AGING_TODAY: &str = "2026-08-04";
+
+    fn number_of(conn: &Connection, id: i64) -> i64 {
+        get_invoice(conn, id).unwrap().number
+    }
+
+    fn bucket_of(report: &AgingReport, number: i64) -> &'static str {
+        report
+            .invoices
+            .iter()
+            .find(|i| i.number == number)
+            .unwrap_or_else(|| panic!("invoice #{number} missing from the aging report"))
+            .bucket
+    }
+
+    #[test]
+    fn aging_detail_buckets_by_days_past_due() {
+        let (_d, conn) = test_conn();
+        // Due dates at 0, 1, 30, 31, 60, 61, 90 and 91 days before AGING_TODAY.
+        let cases = [
+            ("2026-08-04", "current"),
+            ("2026-08-03", "1-30"),
+            ("2026-07-05", "1-30"),
+            ("2026-07-04", "31-60"),
+            ("2026-06-05", "31-60"),
+            ("2026-06-04", "61-90"),
+            ("2026-05-06", "61-90"),
+            ("2026-05-05", "90+"),
+        ];
+        let numbers: Vec<i64> = cases
+            .iter()
+            .map(|(due, _)| {
+                let id = open_invoice(&conn, "Acme", "2026-01-05", Some(due), 100.0);
+                number_of(&conn, id)
+            })
+            .collect();
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        for (number, (due, expected)) in numbers.iter().zip(cases) {
+            assert_eq!(bucket_of(&report, *number), expected, "due {due}");
+        }
+    }
+
+    #[test]
+    fn aging_detail_falls_back_to_issue_date() {
+        let (_d, conn) = test_conn();
+        let id = open_invoice(&conn, "Acme", "2026-06-04", None, 100.0);
+        let number = number_of(&conn, id);
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        let row = report.invoices.iter().find(|i| i.number == number).unwrap();
+        assert_eq!(row.due_date, "2026-06-04");
+        assert_eq!(row.days_past_due, 61);
+        assert_eq!(row.bucket, "61-90");
+    }
+
+    #[test]
+    fn aging_detail_subtracts_payments() {
+        let (_d, conn) = test_conn();
+        let partial = open_invoice(&conn, "Acme", "2026-07-01", Some("2026-07-20"), 100.0);
+        let settled = open_invoice(&conn, "Globex", "2026-07-01", Some("2026-07-20"), 250.0);
+        record_payment(&conn, partial, 40.0, "2026-07-25", "ach", None).unwrap();
+        record_payment(&conn, settled, 250.0, "2026-07-25", "ach", None).unwrap();
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        let partial_number = number_of(&conn, partial);
+        let settled_number = number_of(&conn, settled);
+
+        let row = report
+            .invoices
+            .iter()
+            .find(|i| i.number == partial_number)
+            .unwrap();
+        assert_eq!(row.total, 100.0);
+        assert_eq!(row.paid, 40.0);
+        assert_eq!(row.balance, 60.0);
+        assert!(
+            !report.invoices.iter().any(|i| i.number == settled_number),
+            "a paid invoice should not appear"
+        );
+
+        let bucket = report.buckets.iter().find(|b| b.label == "1-30").unwrap();
+        assert_eq!(bucket.total, 60.0);
+        assert_eq!(bucket.count, 1);
+    }
+
+    #[test]
+    fn aging_detail_excludes_draft_and_void() {
+        let (_d, conn) = test_conn();
+        let draft_client = add_client(&conn, "Draft Co", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 500.0,
+        }];
+        create_invoice(
+            &conn,
+            draft_client,
+            "2026-07-01",
+            Some("2026-07-10"),
+            "USD",
+            &items,
+            None,
+            None,
+        )
+        .unwrap();
+        let voided = open_invoice(&conn, "Void Co", "2026-07-01", Some("2026-07-10"), 700.0);
+        void_at(&conn, voided, "2026-08-01");
+        let open = open_invoice(&conn, "Acme", "2026-07-01", Some("2026-07-10"), 100.0);
+        let open_number = number_of(&conn, open);
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        assert_eq!(report.invoices.len(), 1);
+        assert_eq!(report.invoices[0].number, open_number);
+        assert_eq!(report.outstanding, 100.0);
+    }
+
+    #[test]
+    fn aging_detail_counts_and_total() {
+        let (_d, conn) = test_conn();
+        open_invoice(&conn, "Acme", "2026-01-05", Some("2026-08-31"), 100.0);
+        open_invoice(&conn, "Globex", "2026-01-05", Some("2026-07-20"), 200.0);
+        open_invoice(&conn, "Initech", "2026-01-05", Some("2026-07-10"), 400.0);
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        for bucket in &report.buckets {
+            let listed = report
+                .invoices
+                .iter()
+                .filter(|i| i.bucket == bucket.label)
+                .count();
+            assert_eq!(bucket.count, listed, "count for {}", bucket.label);
+        }
+        let summed: f64 = report.buckets.iter().map(|b| b.total).sum();
+        assert_eq!(report.outstanding, summed);
+        assert_eq!(report.outstanding, 700.0);
+        assert_eq!(report.as_of, AGING_TODAY);
+    }
+
+    #[test]
+    fn aging_detail_orders_oldest_first() {
+        let (_d, conn) = test_conn();
+        open_invoice(&conn, "Acme", "2026-01-05", Some("2026-08-31"), 100.0);
+        open_invoice(&conn, "Globex", "2026-01-05", Some("2026-04-01"), 200.0);
+        open_invoice(&conn, "Initech", "2026-01-05", Some("2026-07-20"), 300.0);
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        let days: Vec<i64> = report.invoices.iter().map(|i| i.days_past_due).collect();
+        let mut sorted = days.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(days, sorted);
+    }
+
+    #[test]
+    fn aging_detail_carries_client_name() {
+        let (_d, conn) = test_conn();
+        open_invoice(&conn, "Initech", "2026-01-05", Some("2026-07-01"), 100.0);
+
+        let report = ar_aging_detail(&conn, AGING_TODAY).unwrap();
+        assert_eq!(report.invoices[0].client, "Initech");
     }
 }
