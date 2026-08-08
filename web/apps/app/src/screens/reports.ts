@@ -14,6 +14,7 @@ import { ApiError, type ApiClient } from '../api/index.js';
 import { SignalWatcher } from '../mixins/signal-watcher.js';
 import { getAppStore, type AppStore } from '../state/app-store.js';
 import type {
+  AgingReport,
   BalanceReport,
   CashflowReport,
   ExpenseBreakdown,
@@ -22,17 +23,18 @@ import type {
   K1PrepReport,
   PnlReport,
   RegisterReport,
-  ReportSlug,
   TaxSummary,
 } from '../api/types.js';
 import { cashflowBuckets } from './dashboard-data.js';
 import {
-  REPORTS,
+  agingInvoicesTable,
+  agingTable,
   autoMappedNote,
   cashflowTable,
   expenseTable,
   flaggedTable,
   isReportSlug,
+  isReportViewSlug,
   k1DeductionTable,
   k1OtherDeductionsTable,
   k1ScheduleKTable,
@@ -41,11 +43,13 @@ import {
   k1Warnings,
   pnlTable,
   registerFooterNote,
+  reportDef,
   reportDefs,
   reportParamsFrom,
   taxTable,
   vendorTable,
   type ReportTable,
+  type ReportViewSlug,
 } from './reports-data.js';
 import type { ScreenContext } from './context.js';
 import type { ScreenId } from './registry.js';
@@ -59,10 +63,11 @@ type ReportData =
   | BalanceReport
   | FlaggedTransaction[]
   | RegisterReport
-  | K1PrepReport;
+  | K1PrepReport
+  | AgingReport;
 
 /** What a loaded report is, for deciding whether the route still wants it. */
-function loadKey(slug: ReportSlug, request: ExportParams): string {
+function loadKey(slug: ReportViewSlug, request: ExportParams): string {
   return `${slug}:${JSON.stringify(request)}`;
 }
 
@@ -225,9 +230,9 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
     void this.load(slug, request);
   }
 
-  private get slug(): ReportSlug | null {
+  private get slug(): ReportViewSlug | null {
     const raw = this.params.get('report');
-    return isReportSlug(raw) ? raw : null;
+    return isReportViewSlug(raw) ? raw : null;
   }
 
   /**
@@ -259,7 +264,7 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
    * heading, and the early return in `willUpdate` would then decline to ever
    * ask again.
    */
-  private async load(slug: ReportSlug, request: ExportParams): Promise<void> {
+  private async load(slug: ReportViewSlug, request: ExportParams): Promise<void> {
     const seq = (this.loadSeq += 1);
     this.loading = true;
     this.error = null;
@@ -292,10 +297,15 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
   }
 
   private async fetchReport(
-    slug: ReportSlug,
+    slug: ReportViewSlug,
     request: ExportParams,
   ): Promise<{ granularity: NcDateGranularity; report: ReportData }> {
     switch (slug) {
+      case 'aging':
+        // The one entry in the catalog that is not a /api/reports route: aging
+        // lives at /api/invoices/aging and is always as of today, so it takes
+        // no period and reports none.
+        return { granularity: 'none', report: await this.client.getAging() };
       case 'pnl':
         return this.client.getPnl(request);
       case 'expenses':
@@ -371,7 +381,7 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
     `;
   }
 
-  private renderBody(slug: ReportSlug) {
+  private renderBody(slug: ReportViewSlug) {
     const data = this.data;
     if (data === null) return nothing;
 
@@ -392,7 +402,30 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
         return this.renderRegister(data as RegisterReport);
       case 'k1':
         return this.renderK1(data as K1PrepReport);
+      case 'aging':
+        return this.renderAging(data as AgingReport);
     }
+  }
+
+  private renderAging(report: AgingReport) {
+    return html`
+      <div class="stack">
+        ${this.renderPanel(
+          `Summary — as of ${report.asOf}`,
+          this.renderTable(agingTable(report), 'A/R aging summary'),
+        )}
+        ${report.invoices.length === 0
+          ? nothing
+          : this.renderPanel(
+              'Open invoices',
+              this.renderTable(agingInvoicesTable(report), 'Open invoices'),
+            )}
+        <p class="note">
+          A/R aging is always as of today, so it takes no period.
+          <a href="#/invoices">Manage invoices</a> to send, void or record a payment.
+        </p>
+      </div>
+    `;
   }
 
   private renderExpenses(report: ExpenseBreakdown) {
@@ -565,9 +598,12 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
     `;
   }
 
-  private renderReport(slug: ReportSlug) {
-    const def = REPORTS[slug];
-    const request = reportParamsFrom(slug, this.effectiveParams);
+  private renderReport(slug: ReportViewSlug) {
+    const def = reportDef(slug);
+    // Aging is not an export route: /api/exports carries the same eight slugs
+    // /api/reports does, so there is no file to link to.
+    const exportable = isReportSlug(slug);
+    const request = exportable ? reportParamsFrom(slug, this.effectiveParams) : {};
 
     return html`
       <div class="heading">
@@ -584,12 +620,14 @@ export class NigelReportsScreen extends SignalWatcher(LitElement) {
             @nc-period-change=${this.handlePeriodChange}
           ></wc-period-nav>
         </div>
-        <wc-export-links
-          .pdfAvailable=${this.pdfExport}
-          .textHref=${this.client.exportUrl(slug, 'text', request)}
-          .pdfHref=${this.client.exportUrl(slug, 'pdf', request)}
-          ?busy=${this.loading}
-        ></wc-export-links>
+        ${exportable
+          ? html`<wc-export-links
+              .pdfAvailable=${this.pdfExport}
+              .textHref=${this.client.exportUrl(slug, 'text', request)}
+              .pdfHref=${this.client.exportUrl(slug, 'pdf', request)}
+              ?busy=${this.loading}
+            ></wc-export-links>`
+          : nothing}
       </div>
 
       ${this.loading

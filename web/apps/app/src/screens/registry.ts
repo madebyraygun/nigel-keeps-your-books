@@ -11,6 +11,8 @@ import { renderReports } from './reports.js';
 import { renderAccounts } from './accounts.js';
 import { renderCategories } from './categories.js';
 import { renderRules } from './rules.js';
+import { renderClients } from './clients.js';
+import { renderInvoices } from './invoices.js';
 import { renderReconcile } from './reconcile.js';
 import { renderUndo } from './undo.js';
 import { renderSettings } from './settings.js';
@@ -25,6 +27,8 @@ export type ScreenId =
   | 'accounts'
   | 'categories'
   | 'rules'
+  | 'clients'
+  | 'invoices'
   | 'reconcile'
   | 'undo'
   | 'settings'
@@ -121,6 +125,22 @@ const DEFS: Record<ScreenId, ScreenDef> = {
     icon: 'wc-icon-rule',
     inNav: true,
     render: renderRules,
+  },
+  clients: {
+    id: 'clients',
+    title: 'Clients',
+    navLabel: 'Clients',
+    icon: 'wc-icon-clients',
+    inNav: true,
+    render: renderClients,
+  },
+  invoices: {
+    id: 'invoices',
+    title: 'Invoices',
+    navLabel: 'Invoices',
+    icon: 'wc-icon-invoice',
+    inNav: true,
+    render: renderInvoices,
   },
   reconcile: {
     id: 'reconcile',
