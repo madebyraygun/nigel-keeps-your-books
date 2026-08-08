@@ -1,6 +1,23 @@
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+
+use crate::error::{NigelError, Result};
 use crate::models::{Client, Invoice, InvoiceLineItem};
 
-const TEMPLATE: &str = include_str!("templates/invoice.html");
+/// The page Nigel renders when the data directory holds no template of its own.
+pub const DEFAULT_TEMPLATE: &str = include_str!("templates/invoice.html");
+
+/// Every `{{KEY}}` a template may use. Anything else shaped like a placeholder
+/// is a typo and is refused at load time.
+pub const PLACEHOLDERS: &[&str] = &[
+    "NUMBER", "CLIENT", "ISSUE", "DUE", "ROWS", "CURRENCY", "TOTAL", "PAY", "CONTACT",
+];
+
+/// What an invoice is: which invoice, who owes, for what, how much. A template
+/// without these renders a document that is wrong about money.
+const REQUIRED: &[&str] = &["NUMBER", "CLIENT", "ROWS", "TOTAL"];
+
+const MAX_TEMPLATE_BYTES: usize = 1024 * 1024;
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -38,6 +55,130 @@ fn expand(template: &str, vars: &[(&str, &str)]) -> String {
 
     out.push_str(rest);
     out
+}
+
+/// The placeholder keys `source` uses, in order, once per occurrence. The scan
+/// is deliberately narrow — `{{` + SCREAMING_SNAKE + `}}` and nothing else — so
+/// a CSS brace or a `{{ not a key }}` aside is literal text rather than a
+/// validation failure.
+fn placeholder_tokens(source: &str) -> Vec<&str> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+
+    while let Some(open) = source[at..].find("{{") {
+        let start = at + open + 2;
+        let mut end = start;
+        while end < bytes.len()
+            && (bytes[end].is_ascii_uppercase()
+                || bytes[end] == b'_'
+                || (end > start && bytes[end].is_ascii_digit()))
+        {
+            end += 1;
+        }
+        if end > start && source[end..].starts_with("}}") {
+            out.push(&source[start..end]);
+            at = end + 2;
+        } else {
+            at = start;
+        }
+    }
+    out
+}
+
+fn braced(keys: &[&str]) -> String {
+    keys.iter()
+        .map(|k| format!("{{{{{k}}}}}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Checked when a template is loaded, never when one is rendered, so a typo
+/// surfaces on `invoice template path` or `invoice preview` rather than in a
+/// client's inbox. `path` is named in every failure.
+fn validate_template(source: &str, path: &Path) -> Result<()> {
+    if source.len() > MAX_TEMPLATE_BYTES {
+        return Err(NigelError::Invalid(format!(
+            "Invoice template {} is {} bytes; the limit is 1 MiB.",
+            path.display(),
+            source.len()
+        )));
+    }
+    if source.trim().is_empty() {
+        return Err(NigelError::Invalid(format!(
+            "Invoice template {} is empty.",
+            path.display()
+        )));
+    }
+
+    let found = placeholder_tokens(source);
+
+    let missing: Vec<&str> = REQUIRED
+        .iter()
+        .filter(|k| !found.contains(*k))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        return Err(NigelError::Invalid(format!(
+            "Invoice template {} is missing required placeholder(s): {}. Known placeholders: {}.",
+            path.display(),
+            braced(&missing),
+            braced(PLACEHOLDERS)
+        )));
+    }
+
+    let mut unknown: Vec<&str> = Vec::new();
+    for key in found {
+        if !PLACEHOLDERS.contains(&key) && !unknown.contains(&key) {
+            unknown.push(key);
+        }
+    }
+    if !unknown.is_empty() {
+        return Err(NigelError::Invalid(format!(
+            "Invoice template {} uses unknown placeholder(s): {}. Known placeholders: {}.",
+            path.display(),
+            braced(&unknown),
+            braced(PLACEHOLDERS)
+        )));
+    }
+
+    Ok(())
+}
+
+/// Where Nigel looks for an operator's own invoice page.
+pub fn template_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("templates").join("invoice.html")
+}
+
+/// The operator's template when the file is there and valid, the embedded
+/// default when it is not there at all. A file that exists but cannot be read
+/// or does not validate is an error naming the path — never a silent fallback,
+/// because the stock page would then reach a client nobody chose to send it to.
+pub fn load_template(data_dir: &Path) -> Result<Cow<'static, str>> {
+    let path = template_path(data_dir);
+    if !path.exists() {
+        return Ok(Cow::Borrowed(DEFAULT_TEMPLATE));
+    }
+
+    // Sized before it is read, so a wrong file copied over the template cannot
+    // be pulled into memory whole just to be rejected.
+    let read_error = |e: std::io::Error| {
+        NigelError::Invalid(format!(
+            "Cannot read invoice template {}: {e}",
+            path.display()
+        ))
+    };
+    let size = std::fs::metadata(&path).map_err(read_error)?.len();
+    if size > MAX_TEMPLATE_BYTES as u64 {
+        return Err(NigelError::Invalid(format!(
+            "Invoice template {} is {size} bytes; the limit is 1 MiB.",
+            path.display()
+        )));
+    }
+
+    let source = std::fs::read_to_string(&path).map_err(read_error)?;
+    validate_template(&source, &path)?;
+    Ok(Cow::Owned(source))
 }
 
 /// Which pay element the page carries.
@@ -87,7 +228,7 @@ pub fn render_invoice_html(
         .unwrap_or_default();
 
     expand(
-        TEMPLATE,
+        DEFAULT_TEMPLATE,
         &[
             ("NUMBER", &invoice.number.to_string()),
             ("CLIENT", &esc(&client.name)),
@@ -253,6 +394,127 @@ mod tests {
                 .join("\n")
         };
         assert_eq!(strip(&linked), strip(&pending));
+    }
+
+    const MINIMAL: &str = "<p>{{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}}</p>";
+
+    fn write_override(dir: &std::path::Path, source: &str) {
+        let path = template_path(dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, source).unwrap();
+    }
+
+    #[test]
+    fn template_path_is_templates_invoice_html() {
+        assert_eq!(
+            template_path(Path::new("/books")),
+            Path::new("/books/templates/invoice.html")
+        );
+    }
+
+    #[test]
+    fn no_override_falls_back_to_the_embedded_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let loaded = load_template(dir.path()).unwrap();
+        assert!(matches!(loaded, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(loaded, DEFAULT_TEMPLATE);
+    }
+
+    #[test]
+    fn an_override_file_wins_over_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        write_override(dir.path(), MINIMAL);
+        assert_eq!(load_template(dir.path()).unwrap(), MINIMAL);
+    }
+
+    #[test]
+    fn an_unreadable_override_errors_naming_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(template_path(dir.path())).unwrap();
+        let err = load_template(dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains(&template_path(dir.path()).display().to_string()),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_override_errors_rather_than_falling_back() {
+        let dir = tempfile::tempdir().unwrap();
+        write_override(dir.path(), "<p>hello</p>");
+        let loaded = load_template(dir.path());
+        assert!(loaded.is_err(), "a broken override must never render");
+        assert!(
+            loaded.unwrap_err().to_string().contains("{{NUMBER}}"),
+            "the failure must name what is missing"
+        );
+    }
+
+    #[test]
+    fn the_default_template_validates() {
+        assert!(validate_template(DEFAULT_TEMPLATE, Path::new("/tmp/t.html")).is_ok());
+    }
+
+    #[test]
+    fn an_empty_or_whitespace_template_is_rejected() {
+        for source in ["", "\n \t\n"] {
+            let err = validate_template(source, Path::new("/tmp/t.html"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("is empty"), "got: {err}");
+            assert!(err.contains("/tmp/t.html"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn an_oversized_template_is_rejected() {
+        let source = "x".repeat(MAX_TEMPLATE_BYTES + 1);
+        let err = validate_template(&source, Path::new("/tmp/t.html"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("1 MiB"), "got: {err}");
+        assert!(err.contains("/tmp/t.html"), "got: {err}");
+    }
+
+    #[test]
+    fn a_template_missing_a_required_placeholder_is_rejected() {
+        let err = validate_template(
+            "<p>{{NUMBER}} {{CLIENT}} {{ROWS}}</p>",
+            Path::new("/tmp/t.html"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("missing required"), "got: {err}");
+        assert!(err.contains("{{TOTAL}}"), "got: {err}");
+    }
+
+    #[test]
+    fn a_template_with_an_unknown_placeholder_is_rejected() {
+        let err = validate_template(
+            "<p>{{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}} {{TOTL}}</p>",
+            Path::new("/tmp/t.html"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("{{TOTL}}"), "got: {err}");
+        assert!(
+            err.contains("{{NUMBER}}"),
+            "the known list is missing: {err}"
+        );
+    }
+
+    #[test]
+    fn non_placeholder_braces_are_left_alone() {
+        let source = "{{ not a key }} {{lower}} {{ }} {{ {{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}";
+        assert!(validate_template(source, Path::new("/tmp/t.html")).is_ok());
+    }
+
+    #[test]
+    fn placeholder_tokens_finds_each_key_once_per_occurrence() {
+        assert_eq!(
+            placeholder_tokens("{{NUMBER}} x {{NUMBER}} {{ROWS}} {{lower}} {{"),
+            vec!["NUMBER", "NUMBER", "ROWS"]
+        );
     }
 
     #[test]
