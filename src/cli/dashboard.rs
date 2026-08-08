@@ -131,6 +131,28 @@ enum DashboardScreen {
     Snake(SnakeGame),
 }
 
+/// What the home screen says about money owed: the total and the oldest
+/// bucket still carrying a balance.
+struct ArSummary {
+    outstanding: f64,
+    oldest_bucket: &'static str,
+}
+
+/// `None` when nothing is outstanding — the home screen then renders exactly
+/// as it did before invoicing existed. Half a cent of slack, the same the rest
+/// of invoicing settles balances with.
+fn ar_summary(report: &crate::invoicing::invoices::AgingReport) -> Option<ArSummary> {
+    if report.outstanding < 0.005 {
+        return None;
+    }
+    // The buckets run current → 90+, so the oldest with money in it is the last.
+    let oldest = report.buckets.iter().rev().find(|b| b.total > 0.005)?;
+    Some(ArSummary {
+        outstanding: report.outstanding,
+        oldest_bucket: oldest.label,
+    })
+}
+
 struct HomeData {
     total_income: f64,
     total_expenses: f64,
@@ -143,6 +165,7 @@ struct HomeData {
     cashflow_expenses: Vec<u64>,
     cashflow_year_range: String,
     top_expenses: Vec<(String, f64)>,
+    ar: Option<ArSummary>,
 }
 
 struct Dashboard {
@@ -280,6 +303,12 @@ impl Dashboard {
             .map(|e| (e.name.clone(), e.total.abs()))
             .collect();
 
+        // `.ok()`, never `?`: an invoicing failure must not blank the dashboard,
+        // and the same expression is the "only when open invoices exist" gate.
+        let ar = crate::invoicing::invoices::ar_aging_detail(conn, &crate::cli::today())
+            .ok()
+            .and_then(|report| ar_summary(&report));
+
         self.home_data = Some(HomeData {
             total_income: pnl.total_income,
             total_expenses: pnl.total_expenses,
@@ -292,6 +321,7 @@ impl Dashboard {
             cashflow_expenses,
             cashflow_year_range,
             top_expenses,
+            ar,
         });
         Ok(())
     }
@@ -366,13 +396,14 @@ impl Dashboard {
 
         let menu_rows = MENU_LEFT_COUNT as u16 + 1;
         let has_update = self.update_notification.is_some();
+        let has_ar = self.home_data.as_ref().is_some_and(|d| d.ar.is_some());
 
         let [header_area, sep1, update_area, stats_area, sep2, charts_area, sep3, menu_area, hints_area] =
             Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(if has_update { 1 } else { 0 }),
-                Constraint::Length(5),
+                Constraint::Length(if has_ar { 6 } else { 5 }),
                 Constraint::Length(1),
                 Constraint::Fill(1),
                 Constraint::Length(1),
@@ -408,7 +439,7 @@ impl Dashboard {
                     .areas(stats_area);
 
             // YTD summary — 1-space indent to align with "N" in " Nigel:"
-            let stats_lines = vec![
+            let mut stats_lines = vec![
                 Line::from(vec![
                     Span::raw(" YTD Income     "),
                     money_span(data.total_income),
@@ -421,6 +452,19 @@ impl Dashboard {
                 Line::from(format!(" Transactions   {}", number(data.txn_count))),
                 Line::from(format!(" Flagged        {}", data.flagged_count)),
             ];
+
+            if let Some(ar) = &data.ar {
+                let oldest_style = if ar.oldest_bucket == "current" {
+                    FOOTER_STYLE
+                } else {
+                    Style::default().fg(Color::Yellow)
+                };
+                stats_lines.push(Line::from(vec![
+                    Span::raw(" A/R Outstanding"),
+                    money_span(ar.outstanding),
+                    Span::styled(format!("  oldest {}", ar.oldest_bucket), oldest_style),
+                ]));
+            }
             frame.render_widget(Paragraph::new(stats_lines), left_area);
 
             // Account balances
@@ -1373,6 +1417,100 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::invoicing::invoices::{AgingBucket, AgingInvoice, AgingReport};
+
+    fn aging(buckets: &[(&'static str, f64)]) -> AgingReport {
+        let buckets: Vec<AgingBucket> = buckets
+            .iter()
+            .map(|(label, total)| AgingBucket {
+                label,
+                count: if *total > 0.0 { 1 } else { 0 },
+                total: *total,
+            })
+            .collect();
+        let outstanding = buckets.iter().map(|b| b.total).sum();
+        AgingReport {
+            as_of: "2026-08-04".into(),
+            buckets,
+            invoices: Vec::<AgingInvoice>::new(),
+            outstanding,
+        }
+    }
+
+    #[test]
+    fn ar_summary_is_none_when_nothing_outstanding() {
+        assert!(ar_summary(&aging(&[("current", 0.0), ("90+", 0.0)])).is_none());
+        assert!(ar_summary(&aging(&[("current", 0.004)])).is_none());
+    }
+
+    #[test]
+    fn ar_summary_picks_oldest_non_empty_bucket() {
+        let summary = ar_summary(&aging(&[
+            ("current", 4200.0),
+            ("1-30", 0.0),
+            ("31-60", 0.0),
+            ("61-90", 3200.0),
+            ("90+", 0.0),
+        ]))
+        .unwrap();
+        assert_eq!(summary.oldest_bucket, "61-90");
+
+        let summary = ar_summary(&aging(&[("current", 4200.0), ("90+", 0.0)])).unwrap();
+        assert_eq!(summary.oldest_bucket, "current");
+    }
+
+    #[test]
+    fn ar_summary_reports_total() {
+        let summary = ar_summary(&aging(&[("current", 4200.0), ("61-90", 3200.0)])).unwrap();
+        assert_eq!(summary.outstanding, 7400.0);
+    }
+
+    fn home_with(ar: Option<ArSummary>) -> Dashboard {
+        let mut dash = Dashboard::new(Some("Dalton".into()), None);
+        dash.home_data = Some(HomeData {
+            total_income: 184_200.0,
+            total_expenses: -121_455.0,
+            net: 62_745.0,
+            txn_count: 1_284,
+            flagged_count: 3,
+            balances: vec![("BofA Checking".into(), 42_118.02)],
+            cashflow_labels: Vec::new(),
+            cashflow_income: Vec::new(),
+            cashflow_expenses: Vec::new(),
+            cashflow_year_range: String::new(),
+            top_expenses: Vec::new(),
+            ar,
+        });
+        dash
+    }
+
+    fn rendered(dash: &Dashboard) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| dash.draw_home(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn home_shows_the_ar_line_only_when_money_is_owed() {
+        let owed = rendered(&home_with(Some(ArSummary {
+            outstanding: 8_900.0,
+            oldest_bucket: "61-90",
+        })));
+        assert!(owed.contains("A/R Outstanding"), "{owed}");
+        assert!(owed.contains("$8,900.00"), "{owed}");
+        assert!(owed.contains("oldest 61-90"), "{owed}");
+
+        let clear = rendered(&home_with(None));
+        assert!(!clear.contains("A/R"), "{clear}");
+    }
 
     #[test]
     fn report_picker_indices_match_report_slugs() {
