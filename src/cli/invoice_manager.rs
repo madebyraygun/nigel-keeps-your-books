@@ -8,7 +8,7 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
-use crate::cli::invoice::{ensure_not_void, payment_amount};
+use crate::cli::invoice::{build_clients, ensure_not_void, payment_amount};
 use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
@@ -16,7 +16,9 @@ use crate::invoicing::invoices::{
     ensure_voidable, get_invoice, line_items, list_invoices, paid_amount, payments, record_payment,
     validate_date, void_invoice, InvoiceListRow,
 };
+use crate::invoicing::render_html::load_template;
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
+use crate::settings::{get_data_dir, invoicing_config, InvoicingConfig};
 use crate::tui::{FOOTER_STYLE, GREEN, HEADER_STYLE};
 
 pub enum InvoiceAction {
@@ -32,6 +34,8 @@ enum Screen {
     Detail,
     PayForm(PayForm),
     ConfirmVoid,
+    ConfirmSend,
+    Sending,
 }
 
 /// The four methods `invoice_payments.method` allows. A fifth option would be
@@ -184,9 +188,39 @@ impl InvoiceManager {
     pub fn draw(&mut self, frame: &mut Frame) {
         match &self.screen {
             Screen::List => self.draw_list(frame),
-            Screen::Detail | Screen::ConfirmVoid => self.draw_detail(frame),
+            Screen::Detail | Screen::ConfirmVoid | Screen::ConfirmSend => self.draw_detail(frame),
             Screen::PayForm(form) => self.draw_pay_form(frame, form),
+            Screen::Sending => self.draw_sending(frame),
         }
+    }
+
+    /// S7. The terminal really is unresponsive for the duration of the send,
+    /// so the frame says so rather than animating a spinner it cannot advance.
+    fn draw_sending(&self, frame: &mut Frame) {
+        let (content_area, hints_area) = self.draw_chrome(frame);
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let email = optional_display(detail.client.email.as_deref());
+
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" Sending invoice #{}", detail.invoice.number),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("   Creating the Stripe payment link, publishing the page and PDF, and"),
+            Line::from(format!("   emailing {email}.")),
+            Line::from(""),
+            Line::from("   This can take a few seconds. Nigel is not reading keys until it"),
+            Line::from("   finishes."),
+        ];
+        frame.render_widget(Paragraph::new(lines), content_area);
+        frame.render_widget(
+            Paragraph::new(" Working\u{2026}").style(FOOTER_STYLE),
+            hints_area,
+        );
     }
 
     fn draw_pay_form(&self, frame: &mut Frame, form: &PayForm) {
@@ -340,6 +374,16 @@ impl InvoiceManager {
             lines.push(Line::from(format!("   Pay link  {url}")));
         }
 
+        if let Screen::ConfirmSend = &self.screen {
+            lines.push(Line::from(""));
+            for line in send_confirmation(detail) {
+                lines.push(Line::from(Span::styled(
+                    format!("   {line}"),
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        }
+
         // The invoice stays on screen while the confirmation is answered.
         if let Screen::ConfirmVoid = &self.screen {
             lines.push(Line::from(""));
@@ -371,6 +415,11 @@ impl InvoiceManager {
         } else if let Screen::ConfirmVoid = &self.screen {
             frame.render_widget(
                 Paragraph::new(" y=void  n=cancel").style(FOOTER_STYLE),
+                hints_area,
+            );
+        } else if let Screen::ConfirmSend = &self.screen {
+            frame.render_widget(
+                Paragraph::new(" y=send  n=cancel").style(FOOTER_STYLE),
                 hints_area,
             );
         } else {
@@ -498,6 +547,61 @@ impl InvoiceManager {
             Screen::Detail => self.handle_detail_key(code, conn),
             Screen::PayForm(_) => self.handle_pay_key(code, conn),
             Screen::ConfirmVoid => self.handle_void_key(code, conn),
+            Screen::ConfirmSend => self.handle_confirm_send_key(code),
+            // The screen is painted and then blocks; no key is read until the
+            // send returns.
+            Screen::Sending => InvoiceAction::Continue,
+        }
+    }
+
+    /// `s` on the detail view. Every guard runs before the dialog opens, so it
+    /// never offers something that is going to fail: the void check, the
+    /// client's email, the invoice template, and the invoicing config — in the
+    /// order `nigel invoice send` runs them, and none of them touches the
+    /// network.
+    pub(crate) fn begin_send(
+        &mut self,
+        cfg: InvoicingConfig,
+        data_dir: &std::path::Path,
+    ) -> InvoiceAction {
+        let Some(detail) = &self.detail else {
+            return InvoiceAction::Continue;
+        };
+        if let Err(e) = ensure_not_void(&detail.invoice, "sent") {
+            self.set_status(e.to_string());
+            return InvoiceAction::Continue;
+        }
+        if detail.client.email.is_none() {
+            // send.rs's own wording, so the two front ends cannot disagree.
+            let name = detail.client.name.clone();
+            self.set_status(format!("client '{name}' has no email"));
+            return InvoiceAction::Continue;
+        }
+        if let Err(e) = load_template(data_dir) {
+            self.set_status(e.to_string());
+            return InvoiceAction::Continue;
+        }
+        if let Err(e) = build_clients(cfg) {
+            self.set_status(e.to_string());
+            return InvoiceAction::Continue;
+        }
+        self.screen = Screen::ConfirmSend;
+        InvoiceAction::Continue
+    }
+
+    fn handle_confirm_send_key(&mut self, code: KeyCode) -> InvoiceAction {
+        match code {
+            KeyCode::Char('y') => {
+                self.screen = Screen::Sending;
+                // The controller paints S7 before running the send, so the
+                // frozen frame is the one that says it is frozen.
+                InvoiceAction::Perform
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.screen = Screen::Detail;
+                InvoiceAction::Continue
+            }
+            _ => InvoiceAction::Continue,
         }
     }
 
@@ -665,6 +769,7 @@ impl InvoiceManager {
             KeyCode::PageDown => self.detail_scroll += 10,
             KeyCode::Char('p') => self.open_pay_form(&crate::cli::today()),
             KeyCode::Char('v') => self.open_void_confirmation(conn),
+            KeyCode::Char('s') => return self.begin_send(invoicing_config(), &get_data_dir()),
             KeyCode::Esc => self.close_detail(),
             KeyCode::Char('q') => return InvoiceAction::Close,
             _ => {}
@@ -715,6 +820,29 @@ impl InvoiceManager {
         }
         self.ensure_visible(self.last_visible_rows);
         InvoiceAction::Continue
+    }
+}
+
+/// The two lines S6 puts under the invoice, worded for a first send or a
+/// re-send.
+fn send_confirmation(detail: &Detail) -> Vec<String> {
+    let invoice = &detail.invoice;
+    let email = optional_display(detail.client.email.as_deref());
+    match &invoice.published_at {
+        Some(published) => vec![
+            format!("Re-send invoice #{} to {email}?", invoice.number),
+            format!("Published {published}. The existing payment link is reused; the page and"),
+            "PDF are republished and the client is emailed again.".to_string(),
+        ],
+        None => vec![
+            format!("Send invoice #{} to {email}?", invoice.number),
+            format!(
+                "{} \u{b7} {}. Creates a Stripe payment link, publishes the",
+                detail.client.name,
+                money(invoice.total)
+            ),
+            "page and PDF, then emails the client.".to_string(),
+        ],
     }
 }
 
@@ -779,7 +907,7 @@ mod tests {
     use crate::db::{get_connection, init_db};
     use crate::invoicing::clients::add_client;
     use crate::invoicing::invoices::{
-        create_invoice, record_payment, set_payment_link, void_invoice, NewLineItem,
+        create_invoice, mark_published, record_payment, set_payment_link, void_invoice, NewLineItem,
     };
     use crate::migrations::run_migrations;
 
@@ -1503,6 +1631,180 @@ mod tests {
             Some("Invoice #1248 is void and cannot be paid.")
         );
         assert_eq!(payment_rows(&conn), 0);
+    }
+
+    fn no_config() -> InvoicingConfig {
+        InvoicingConfig {
+            stripe_secret_key: None,
+            mailgun_api_key: None,
+            mailgun_domain: None,
+            from_email: None,
+            r2_account_id: None,
+            r2_access_key: None,
+            r2_secret_key: None,
+            r2_bucket: None,
+            public_base_url: None,
+        }
+    }
+
+    fn full_config() -> InvoicingConfig {
+        InvoicingConfig {
+            stripe_secret_key: Some("sk_test".into()),
+            mailgun_api_key: Some("key".into()),
+            mailgun_domain: Some("mail.example.test".into()),
+            from_email: Some("billing@example.test".into()),
+            r2_account_id: Some("acct".into()),
+            r2_access_key: Some("ak".into()),
+            r2_secret_key: Some("sk".into()),
+            r2_bucket: Some("billing".into()),
+            public_base_url: Some("https://billing.example.test/i".into()),
+        }
+    }
+
+    /// Open the detail for the only invoice and press `s`, with an injected
+    /// config and data directory so no test reads the developer's settings.
+    fn begin_send(
+        mgr: &mut InvoiceManager,
+        conn: &Connection,
+        cfg: InvoicingConfig,
+        data_dir: &std::path::Path,
+    ) -> InvoiceAction {
+        mgr.handle_key(KeyCode::Enter, conn);
+        mgr.begin_send(cfg, data_dir)
+    }
+
+    #[test]
+    fn s_on_a_void_invoice_is_refused_before_the_dialog() {
+        let (dir, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 100.0);
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Invoice #1248 is void and cannot be sent.")
+        );
+    }
+
+    #[test]
+    fn s_on_a_client_with_no_email_is_refused_before_the_dialog() {
+        let (dir, conn) = test_conn();
+        let cid = add_client(&conn, "Acme Co", None, None, None).unwrap();
+        seed_invoice_for(&conn, cid, 100.0);
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("client 'Acme Co' has no email")
+        );
+    }
+
+    #[test]
+    fn s_with_missing_invoicing_config_names_the_first_absent_key() {
+        let (dir, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, no_config(), dir.path());
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        let message = mgr.status_message.clone().unwrap();
+        assert!(message.contains("stripe_secret_key"), "got: {message}");
+    }
+
+    #[test]
+    fn s_with_a_broken_template_reports_it_and_stays_on_the_detail() {
+        let (dir, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let template = dir.path().join("templates");
+        std::fs::create_dir_all(&template).unwrap();
+        std::fs::write(template.join("invoice.html"), "<p>no placeholders</p>").unwrap();
+
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+
+        assert!(matches!(mgr.screen, Screen::Detail), "no dialog opened");
+        let message = mgr.status_message.clone().unwrap();
+        assert!(message.contains("invoice.html"), "got: {message}");
+    }
+
+    #[test]
+    fn the_confirmation_names_the_recipient_and_total() {
+        let (dir, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+
+        assert!(matches!(mgr.screen, Screen::ConfirmSend));
+        let screen = rendered(&mut mgr);
+        assert!(
+            screen.contains("Send invoice #1248 to ops@cedar.test?"),
+            "{screen}"
+        );
+        assert!(screen.contains("Cedar Systems"), "{screen}");
+        assert!(screen.contains("$2,000.00"), "{screen}");
+        assert!(screen.contains("y=send  n=cancel"), "{screen}");
+    }
+
+    #[test]
+    fn a_published_invoice_gets_the_resend_wording() {
+        let (dir, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        mark_published(&conn, id, "2026-07-16").unwrap();
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Re-send invoice #1248"), "{screen}");
+        assert!(screen.contains("Published 2026-07-16"), "{screen}");
+        assert!(screen.contains("payment link is reused"), "{screen}");
+    }
+
+    #[test]
+    fn n_and_esc_cancel_the_send() {
+        for key in [KeyCode::Char('n'), KeyCode::Esc] {
+            let (dir, conn) = test_conn();
+            seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            begin_send(&mut mgr, &conn, full_config(), dir.path());
+            mgr.handle_key(key, &conn);
+
+            assert!(matches!(mgr.screen, Screen::Detail), "{key:?}");
+            assert!(
+                get_invoice(&conn, 1).unwrap().published_at.is_none(),
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn y_moves_to_sending_and_returns_perform() {
+        let (dir, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+
+        let action = mgr.handle_key(KeyCode::Char('y'), &conn);
+        assert!(matches!(action, InvoiceAction::Perform));
+        assert!(matches!(mgr.screen, Screen::Sending));
+    }
+
+    #[test]
+    fn the_sending_frame_says_the_terminal_is_frozen() {
+        let (dir, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        begin_send(&mut mgr, &conn, full_config(), dir.path());
+        mgr.handle_key(KeyCode::Char('y'), &conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Sending invoice #1248"), "{screen}");
+        assert!(screen.contains("ops@cedar.test"), "{screen}");
+        assert!(screen.contains("not reading keys"), "{screen}");
+        assert!(screen.contains("Working"), "{screen}");
     }
 
     /// The screen as an 80x24 terminal renders it, one string per row.
