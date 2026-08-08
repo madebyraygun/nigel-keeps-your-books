@@ -269,7 +269,7 @@ pub async fn ok_json(app: &Router, uri: &str, token: &str) -> serde_json::Value 
 /// Every route that reads the database, for tests that must hold across all of
 /// them — the locked guard especially, where a route mounted in the wrong place
 /// would silently answer while the database is still encrypted.
-pub const DATA_ROUTES: [&str; 18] = [
+pub const DATA_ROUTES: [&str; 20] = [
     "/api/settings/app",
     "/api/reports/pnl",
     "/api/reports/expenses",
@@ -288,6 +288,8 @@ pub const DATA_ROUTES: [&str; 18] = [
     "/api/review/queue",
     "/api/review/1",
     "/api/reconciliations",
+    "/api/clients",
+    "/api/clients/1",
 ];
 
 /// Every export route, named without the `format` each of them requires. They
@@ -536,4 +538,175 @@ fn seed(conn: &Connection) {
         date_format: "%m/%d/%Y".to_string(),
     };
     crate::importer::save_csv_profile(conn, "chase", &profile).expect("profile");
+
+    seed_invoicing(conn);
+}
+
+/// The day the invoicing fixtures are read as of.
+///
+/// Every derived status and every aging bucket below is settled against this
+/// date rather than the wall clock, for the same reason the transaction dates
+/// are literals: a bucket boundary crossed overnight would otherwise change what
+/// a committed fixture means.
+pub const AS_OF: &str = "2026-03-15";
+
+fn item(
+    description: &str,
+    quantity: f64,
+    unit_amount: f64,
+) -> crate::invoicing::invoices::NewLineItem {
+    crate::invoicing::invoices::NewLineItem {
+        description: description.to_string(),
+        quantity,
+        unit_amount,
+    }
+}
+
+/// Three clients and one invoice per status, with literal dates.
+///
+/// It lives in the shared seed rather than beside the invoicing tests because
+/// [`DATA_ROUTES`] names `/api/clients/1` and `/api/invoices/1248` by hand: a
+/// detail route with nothing behind it would answer 404 in the very test that
+/// proves the locked guard lets it through.
+fn seed_invoicing(conn: &Connection) {
+    use crate::invoicing::clients::add_client;
+    use crate::invoicing::invoices as inv;
+
+    // Numbering starts at 1248, and the void invoice is the oldest of the six.
+    crate::db::set_metadata(conn, "next_invoice_number", "1247").expect("next invoice number");
+
+    let acme = add_client(
+        conn,
+        "Acme Co",
+        Some("ap@acme.test"),
+        Some("1 Main St, Portland OR"),
+        None,
+    )
+    .expect("acme");
+    // No email: the client a send refuses, and the em dash every list prints.
+    let globex = add_client(conn, "Globex", None, None, None).expect("globex");
+    let northwind = add_client(conn, "Northwind Traders", Some("billing@nw.test"), None, None)
+        .expect("northwind");
+
+    // 1247 — void.
+    let id = inv::create_invoice(
+        conn,
+        globex,
+        "2026-01-05",
+        Some("2026-02-04"),
+        "USD",
+        &[item("Discovery workshop", 1.0, 500.00)],
+        None,
+        None,
+    )
+    .expect("1247");
+    inv::void_invoice(conn, id, "2026-01-10").expect("void 1247");
+
+    // 1248 — paid in full.
+    let id = inv::create_invoice(
+        conn,
+        northwind,
+        "2026-01-15",
+        Some("2026-02-14"),
+        "USD",
+        &[item("Retainer - January", 1.0, 4_000.00)],
+        Some("Thanks for your business."),
+        Some("Net 30"),
+    )
+    .expect("1248");
+    inv::mark_published(conn, id, "2026-01-15").expect("publish 1248");
+    inv::record_payment(conn, id, 4_000.00, "2026-02-10", "direct_deposit", None)
+        .expect("pay 1248");
+
+    // 1249 — overdue.
+    let id = inv::create_invoice(
+        conn,
+        globex,
+        "2025-12-31",
+        Some("2026-01-30"),
+        "USD",
+        &[item("Site build - phase 2", 8.0, 120.00)],
+        None,
+        None,
+    )
+    .expect("1249");
+    inv::mark_published(conn, id, "2025-12-31").expect("publish 1249");
+
+    // 1250 — partly paid, through Stripe.
+    let id = inv::create_invoice(
+        conn,
+        acme,
+        "2026-02-20",
+        Some("2026-03-20"),
+        "USD",
+        &[
+            item("Consulting - February", 16.0, 175.00),
+            item("Hosting", 1.0, 400.00),
+        ],
+        None,
+        Some("Net 30"),
+    )
+    .expect("1250");
+    inv::mark_published(conn, id, "2026-02-20").expect("publish 1250");
+    inv::record_payment(
+        conn,
+        id,
+        2_000.00,
+        "2026-03-01",
+        "stripe",
+        Some("cs_test_seed_1250"),
+    )
+    .expect("pay 1250");
+
+    // 1251 — sent, carrying a live payment link.
+    let id = inv::create_invoice(
+        conn,
+        acme,
+        "2026-03-06",
+        Some("2026-04-06"),
+        "USD",
+        &[
+            item("Consulting - March", 10.0, 150.00),
+            item("Hosting", 1.0, 350.00),
+        ],
+        None,
+        None,
+    )
+    .expect("1251");
+    inv::set_payment_link(
+        conn,
+        id,
+        "plink_seed_1251",
+        "https://buy.stripe.com/test_seed_1251",
+    )
+    .expect("link 1251");
+    inv::mark_published(conn, id, "2026-03-06").expect("publish 1251");
+
+    // 1252 — draft, with no due date, so it can never go overdue.
+    inv::create_invoice(
+        conn,
+        northwind,
+        "2026-03-12",
+        None,
+        "USD",
+        &[item("Brand refresh - deposit", 1.0, 2_400.00)],
+        None,
+        None,
+    )
+    .expect("1252");
+
+    // Each write above derived a status from its own date. Re-derive them all as
+    // of one day, so `overdue` and `partial` mean what the fixtures claim.
+    let mut stmt = conn
+        .prepare("SELECT id FROM invoices ORDER BY number")
+        .expect("invoice ids");
+    let ids: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .expect("invoice ids")
+        .collect::<std::result::Result<Vec<i64>, _>>()
+        .expect("invoice ids");
+    drop(stmt);
+    for id in ids {
+        inv::refresh_status(conn, id, AS_OF).expect("refresh status");
+    }
 }
