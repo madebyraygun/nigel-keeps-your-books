@@ -1,10 +1,10 @@
 ---
 id: TASK-38
 title: 'Invoicing: missing CLI flags for notes/terms and a client show command'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-06 19:14'
-updated_date: '2026-08-08 00:28'
+updated_date: '2026-08-08 01:58'
 labels:
   - enhancement
   - invoicing
@@ -35,3 +35,9 @@ Carried over from the review ledger of PR #172.
 <!-- SECTION:NOTES:BEGIN -->
 Absorbed by TASK-68.1 (notes/terms flags, client show) under the invoicing epic (TASK-68).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Delivered by TASK-68.1 / PR #183: invoice new/edit gained --notes/--terms (PDF renders them; HTML page follows in 68.3), and client show exists.
+<!-- SECTION:FINAL_SUMMARY:END -->

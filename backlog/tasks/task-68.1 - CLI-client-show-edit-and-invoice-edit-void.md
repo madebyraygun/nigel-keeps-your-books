@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:27'
-updated_date: '2026-08-08 00:50'
+updated_date: '2026-08-08 01:58'
 labels:
   - invoicing
   - cli
@@ -22,9 +22,9 @@ The data-layer operations everything else builds on. client show <id> and client
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 client show and client edit exist; email/address changes take effect on the next send
-- [ ] #2 invoice edit updates draft invoices only and refuses published/void ones by status
-- [ ] #3 invoice void cancels an invoice with confirmation; voided invoices refuse send and pay
+- [x] #1 client show and client edit exist; email/address changes take effect on the next send
+- [x] #2 invoice edit updates draft invoices only and refuses published/void ones by status
+- [x] #3 invoice void cancels an invoice with confirmation; voided invoices refuse send and pay
 - [ ] #4 notes and terms can be set at new and edit, and render on the invoice (absorbs TASK-38)
 <!-- AC:END -->
 
@@ -46,4 +46,6 @@ Plan approved by orchestrator. Rulings on open questions:
 6. Re-typing ensure_not_void/find_invoice (500 → 409/404) folded in here — 68.6 needs the statuses and this is the natural home.
 7. create_invoice date/currency validation kept — small non-additive fix closing a real hole.
 Scope boundary vs 68.3: 68.1 delivers notes/terms CLI flags + persistence ONLY. HTML rendering of {{NOTES}}/{{TERMS}} belongs to 68.3's vocabulary expansion (lands later; PDF already shows them in the interim).
+
+PR #183 merged (17b3b59) after review round: 4 findings fixed, 2 regression tests added. 635+52 / 462+53 green. AC #4 stays unchecked until 68.3 lands HTML {{NOTES}}/{{TERMS}} rendering (PDF renders them today); task closes then.
 <!-- SECTION:NOTES:END -->
