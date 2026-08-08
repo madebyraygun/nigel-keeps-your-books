@@ -161,8 +161,7 @@ impl ClientManager {
         // 3 lines of title area + 1 column header = 4 lines of overhead.
         let data_rows = (content_area.height as usize).saturating_sub(4);
         self.last_visible_rows = data_rows;
-        // Marker, Name and Email take a fixed 61; the address gets the rest.
-        let address_width = (content_area.width as usize).saturating_sub(61).max(10);
+        let width = content_area.width as usize;
 
         let mut lines = vec![
             Line::from(""),
@@ -193,15 +192,7 @@ impl ClientManager {
                     Style::default()
                 };
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "{marker}{:<28} {:<28} {}",
-                        truncate(&client.name, 26),
-                        truncate(&optional_display(client.email.as_deref()), 26),
-                        truncate(
-                            &optional_display(client.billing_address.as_deref()),
-                            address_width
-                        ),
-                    ),
+                    client_row(marker, client, width),
                     style,
                 )));
             }
@@ -407,6 +398,21 @@ impl ClientManager {
             Err(e) => self.set_status(e.to_string()),
         }
     }
+}
+
+/// One list row. The billing address takes whatever the fixed marker, name and
+/// email columns leave, so the row never outruns the terminal it is drawn into.
+fn client_row(marker: &str, client: &Client, width: usize) -> String {
+    let address_width = width.saturating_sub(61).max(10);
+    format!(
+        "{marker}{:<28} {:<28} {}",
+        truncate(&client.name, 26),
+        truncate(&optional_display(client.email.as_deref()), 26),
+        truncate(
+            &optional_display(client.billing_address.as_deref()),
+            address_width
+        ),
+    )
 }
 
 /// An absent value reads as an em dash, never as an invented blank.
@@ -902,11 +908,16 @@ mod tests {
             None,
         )
         .unwrap();
+        // A rendered frame is 80 cells wide by construction, so the budget is
+        // checked on the string the row is built from, not on the buffer.
+        let client = list_clients(&conn).unwrap().pop().unwrap();
+        assert!(
+            client_row(" > ", &client, 80).chars().count() <= 80,
+            "row overflows: {:?}",
+            client_row(" > ", &client, 80)
+        );
         let mut mgr = manager(&conn);
-
-        for row in rendered(&mut mgr).lines() {
-            assert!(row.chars().count() <= 80, "row overflows: {row:?}");
-        }
+        assert!(rendered(&mut mgr).contains("Wintermute"));
     }
 
     #[test]

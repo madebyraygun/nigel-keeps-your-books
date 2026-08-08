@@ -77,9 +77,15 @@ fn find_invoice(conn: &Connection, number: i64) -> Result<Invoice> {
     })
 }
 
+/// What voiding does *not* undo. Void leaves the published page and the Stripe
+/// payment link live, so every front end that voids says so.
+pub(crate) const PUBLISHED_VOID_WARNING: &str =
+    "Warning: this invoice was already published. Its page and Stripe payment link stay live — \
+     deactivate the link in Stripe if you do not want it paid.";
+
 /// `voided_at` is the fact; `status` is derived from it. Reading the timestamp
 /// first means a void whose status write did not land still reads as void.
-fn is_void(invoice: &Invoice) -> bool {
+pub(crate) fn is_void(invoice: &Invoice) -> bool {
     invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str()
 }
 
@@ -239,10 +245,7 @@ pub fn void(number: i64, yes: bool, today: &str) -> Result<()> {
     void_invoice(&conn, invoice.id, today)?;
     println!("Voided invoice #{number}.");
     if invoice.published_at.is_some() {
-        println!(
-            "Warning: this invoice was already published. Its page and Stripe payment link stay live — \
-             deactivate the link in Stripe if you do not want it paid."
-        );
+        println!("{PUBLISHED_VOID_WARNING}");
     }
     Ok(())
 }

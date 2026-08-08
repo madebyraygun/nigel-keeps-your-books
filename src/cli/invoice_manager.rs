@@ -8,7 +8,9 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
-use crate::cli::invoice::{build_clients, company_name, ensure_not_void, payment_amount};
+use crate::cli::invoice::{
+    build_clients, company_name, ensure_not_void, is_void, payment_amount, PUBLISHED_VOID_WARNING,
+};
 use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
@@ -357,6 +359,12 @@ impl InvoiceManager {
         ];
         if let Some(voided_at) = &invoice.voided_at {
             lines.push(Line::from(format!("   Voided    {voided_at}")));
+            for line in warning_lines(invoice, content_area.width) {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
         }
 
         lines.push(Line::from(""));
@@ -432,6 +440,12 @@ impl InvoiceManager {
                 "   Void is permanent. A void invoice can never be sent or paid.",
                 Style::default().fg(Color::Yellow),
             )));
+            for line in warning_lines(invoice, content_area.width) {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
         }
 
         // Clamped here rather than on the key, because how far this scrolls
@@ -515,7 +529,7 @@ impl InvoiceManager {
         } else {
             lines.push(Line::from(Span::styled(
                 format!(
-                    "   {:<6} {:<8} {:<24} {:>12} {:>12} {}",
+                    "   {:<6} {:<STATUS_WIDTH$} {:<24} {:>12} {:>12} {}",
                     "#", "Status", "Client", "Total", "Balance", "Due"
                 ),
                 Style::default()
@@ -534,22 +548,11 @@ impl InvoiceManager {
                 };
                 // Only the status cell carries colour; the figures are all
                 // positive receivables, so a sign-derived colour would be noise.
+                let (number, status, rest) = list_cells(marker, row);
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{marker}{:<6} ", row.number), base),
-                    Span::styled(
-                        format!("{:<8} ", truncate(&row.status, 8)),
-                        status_style(&row.status).patch(base),
-                    ),
-                    Span::styled(
-                        format!(
-                            "{:<24} {:>12} {:>12} {}",
-                            truncate(&row.client_name, 22),
-                            money(row.total),
-                            money(balance(row)),
-                            row.due_date.as_deref().unwrap_or("\u{2014}"),
-                        ),
-                        base,
-                    ),
+                    Span::styled(number, base),
+                    Span::styled(status, status_style(&row.status).patch(base)),
+                    Span::styled(rest, base),
                 ]));
             }
         }
@@ -625,8 +628,19 @@ impl InvoiceManager {
             self.set_status(e.to_string());
             return InvoiceAction::Continue;
         }
-        self.screen = Screen::ConfirmSend;
+        self.open_confirmation(Screen::ConfirmSend);
         InvoiceAction::Continue
+    }
+
+    /// A confirmation is rendered at the bottom of the detail view and answered
+    /// from the footer, so it needs both of those: the question scrolled into
+    /// view, and a footer showing y/n rather than a status line left over from
+    /// the last keypress.
+    fn open_confirmation(&mut self, screen: Screen) {
+        self.screen = screen;
+        self.status_message = None;
+        self.status_ttl = 0;
+        self.detail_scroll = usize::MAX;
     }
 
     /// Run the send the confirmation authorised. The controller calls this
@@ -765,7 +779,7 @@ impl InvoiceManager {
             return;
         };
         match ensure_voidable(conn, &detail.invoice) {
-            Ok(()) => self.screen = Screen::ConfirmVoid,
+            Ok(()) => self.open_confirmation(Screen::ConfirmVoid),
             Err(e) => self.set_status(e.to_string()),
         }
     }
@@ -984,6 +998,17 @@ fn drain_buffered_input() {
     }
 }
 
+/// What void does not undo, wrapped to the screen — the sentence
+/// `nigel invoice void` prints, for the same invoices. Empty for an invoice
+/// that was never published, which is the case that needs no warning.
+fn warning_lines(invoice: &Invoice, width: u16) -> Vec<String> {
+    if invoice.published_at.is_none() {
+        return Vec::new();
+    }
+    let (wrapped, _) = crate::tui::wrap_text(PUBLISHED_VOID_WARNING, (width as usize).max(20) - 6);
+    wrapped.lines().map(|line| format!("   {line}")).collect()
+}
+
 /// The two lines S6 puts under the invoice, worded for a first send or a
 /// re-send.
 fn send_confirmation(detail: &Detail) -> Vec<String> {
@@ -1020,12 +1045,6 @@ fn total_line(label: &str, amount: f64) -> Line<'static> {
     Line::from(format!("   {:>44} {:>15}", label, money(amount)))
 }
 
-/// `voided_at` is the fact and `status` is derived from it, the same reading
-/// `cli::invoice` takes.
-fn is_void(invoice: &Invoice) -> bool {
-    invoice.voided_at.is_some() || invoice.status == "void"
-}
-
 /// An absent value reads as an em dash, never as an invented blank.
 fn optional_display(value: Option<&str>) -> String {
     match value.map(str::trim) {
@@ -1037,6 +1056,47 @@ fn optional_display(value: Option<&str>) -> String {
 /// What is still owed on an invoice.
 fn balance(row: &InvoiceListRow) -> f64 {
     row.total - row.paid
+}
+
+/// The column budget S4 lays out. A `TestBackend` buffer is this wide by
+/// construction, so a row that overruns is invisible in a rendered frame —
+/// `list_row` is where the budget is actually checked.
+const ROW_WIDTH: usize = 80;
+
+/// A list row as three cells: everything before the status, the status itself
+/// (the only coloured one), and everything after it.
+///
+/// The **client name is the cell that yields**: a seven-figure total needs a
+/// wider money column, and taking that width from the client rather than
+/// letting the row grow is what keeps the due date on screen.
+fn list_cells(marker: &str, row: &InvoiceListRow) -> (String, String, String) {
+    let total = money(row.total);
+    let paid = money(balance(row));
+    let due = row.due_date.as_deref().unwrap_or("\u{2014}");
+
+    let money_width = total.chars().count().max(paid.chars().count()).max(12);
+    let due_width = due.chars().count().max(10);
+    // marker 3, number 6, status, the two money cells, the due date, and the
+    // five single-space gaps between them.
+    let fixed = 3 + 6 + STATUS_WIDTH + 5 + 2 * money_width + due_width;
+    let client_width = ROW_WIDTH.saturating_sub(fixed).max(8);
+
+    (
+        format!("{marker}{:<6} ", row.number),
+        format!("{:<STATUS_WIDTH$} ", truncate(&row.status, STATUS_WIDTH)),
+        format!(
+            "{:<client_width$} {total:>money_width$} {paid:>money_width$} {due}",
+            truncate(&row.client_name, client_width.saturating_sub(2)),
+        ),
+    )
+}
+
+const STATUS_WIDTH: usize = 8;
+
+#[cfg(test)]
+fn list_row(row: &InvoiceListRow) -> String {
+    let (number, status, rest) = list_cells("   ", row);
+    format!("{number}{status}{rest}")
 }
 
 /// Colour carries status, since every figure on this screen is a positive
@@ -1340,9 +1400,6 @@ mod tests {
             screen.contains("s=send  p=record payment  v=void"),
             "{screen}"
         );
-        for row in screen.lines() {
-            assert!(row.chars().count() <= 80, "row overflows: {row:?}");
-        }
     }
 
     #[test]
@@ -1684,9 +1741,6 @@ mod tests {
             screen.contains("Tab=next field  Left/Right=method  Enter=record  Esc=cancel"),
             "{screen}"
         );
-        for row in screen.lines() {
-            assert!(row.chars().count() <= 80, "row overflows: {row:?}");
-        }
     }
 
     fn open_void(mgr: &mut InvoiceManager, conn: &Connection) {
@@ -1748,6 +1802,77 @@ mod tests {
             !screen.contains("s=send"),
             "the actions are gone:\n{screen}"
         );
+    }
+
+    #[test]
+    fn voiding_a_published_invoice_says_what_void_does_not_undo() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 100.0);
+        mark_published(&conn, id, "2026-07-16").unwrap();
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+
+        // Before the decision: the confirmation carries the CLI's warning.
+        let dialog = rendered(&mut mgr);
+        // Fragments short enough to survive the wrap, whatever the width.
+        assert!(dialog.contains("already published"), "{dialog}");
+        assert!(dialog.contains("deactivate the link in Stripe"), "{dialog}");
+
+        // And after it, on the voided invoice itself.
+        mgr.handle_key(KeyCode::Char('y'), &conn);
+        let after = rendered(&mut mgr);
+        assert!(after.contains("already published"), "{after}");
+        assert!(after.contains("deactivate the link in Stripe"), "{after}");
+    }
+
+    #[test]
+    fn an_unpublished_invoice_gets_no_published_warning() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        open_void(&mut mgr, &conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(!screen.contains("already published"), "{screen}");
+    }
+
+    #[test]
+    fn opening_a_confirmation_clears_the_status_line_and_scrolls_to_the_question() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+        mgr.set_status("something from a moment ago".into());
+        mgr.handle_key(KeyCode::Char('v'), &conn);
+
+        assert!(matches!(mgr.screen, Screen::ConfirmVoid));
+        assert_eq!(mgr.status_message, None, "the y/n footer must be visible");
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("y=void  n=cancel"), "{screen}");
+        assert!(screen.contains("Void invoice #1248"), "{screen}");
+    }
+
+    #[test]
+    fn a_confirmation_on_a_long_invoice_is_scrolled_into_view() {
+        let (dir, conn) = test_conn();
+        // More line items than fit, so the question is off-screen unscrolled.
+        let cid = add_client(&conn, "Cedar Systems", Some("ops@cedar.test"), None, None).unwrap();
+        let items: Vec<NewLineItem> = (0..40)
+            .map(|i| NewLineItem {
+                description: format!("Line item {i}"),
+                quantity: 1.0,
+                unit_amount: 10.0,
+            })
+            .collect();
+        create_invoice(&conn, cid, "2026-07-16", None, "USD", &items, None, None).unwrap();
+
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+        mgr.begin_send(full_config(), dir.path());
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Send invoice #1248"), "{screen}");
+        assert!(screen.contains("y=send  n=cancel"), "{screen}");
     }
 
     #[test]
@@ -2271,9 +2396,52 @@ mod tests {
         assert!(screen.contains("$750.00"), "{screen}");
         assert!(screen.contains("2026-08-15"), "{screen}");
         assert!(screen.contains("Enter=open  Esc=back  q=quit"), "{screen}");
-        for row in screen.lines() {
-            assert!(row.chars().count() <= 80, "row overflows: {row:?}");
-        }
+    }
+
+    fn row_of(conn: &Connection) -> InvoiceListRow {
+        list_invoices(conn).unwrap().pop().unwrap()
+    }
+
+    #[test]
+    fn a_row_fits_eighty_columns_even_at_seven_figures() {
+        // A rendered frame is 80 cells wide by construction, so a row that
+        // overruns is invisible in a TestBackend buffer: the budget is checked
+        // on the string, not on what survived being drawn.
+        let (_d, conn) = test_conn();
+        let cid = add_client(
+            &conn,
+            &"Wintermute Consolidated Ltd".repeat(2),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        seed_invoice_for(&conn, cid, 9_999_999.99);
+        let row = row_of(&conn);
+
+        let rendered = list_row(&row);
+        assert!(
+            rendered.chars().count() <= ROW_WIDTH,
+            "row is {} cols: {rendered:?}",
+            rendered.chars().count()
+        );
+        // The client name yields; the due date is not pushed off the end.
+        assert!(rendered.ends_with("2026-08-15"), "{rendered:?}");
+        assert!(rendered.contains("$9,999,999.99"), "{rendered:?}");
+    }
+
+    #[test]
+    fn an_ordinary_row_keeps_the_specced_columns() {
+        let (_d, conn) = test_conn();
+        let id = seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        record_payment(&conn, id, 1_250.0, "2026-08-01", "ach", None).unwrap();
+
+        let rendered = list_row(&row_of(&conn));
+        assert_eq!(rendered.chars().count(), ROW_WIDTH);
+        assert!(rendered.starts_with("   1248   "), "{rendered:?}");
+        assert!(rendered.contains("Cedar Systems"), "{rendered:?}");
+        assert!(rendered.contains("$2,000.00"), "{rendered:?}");
+        assert!(rendered.contains("$750.00"), "{rendered:?}");
     }
 
     #[test]
