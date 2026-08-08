@@ -965,3 +965,75 @@ export interface InvoiceListParams {
 export interface NextInvoiceNumber {
   number: number;
 }
+
+// ---------------------------------------------------------------------------
+// Invoicing — write side
+// ---------------------------------------------------------------------------
+
+/** `POST /api/clients` */
+export interface NewClientRequest {
+  name: string;
+  email?: string | null;
+  billingAddress?: string | null;
+  notes?: string | null;
+}
+
+/**
+ * `PATCH /api/clients/{id}` — an omitted field is left alone and an explicit
+ * `null` clears it, so the two must stay distinguishable all the way to the
+ * request body. An all-absent patch is a 400.
+ */
+export interface ClientPatch {
+  name?: string;
+  email?: string | null;
+  billingAddress?: string | null;
+  notes?: string | null;
+}
+
+/**
+ * One line of an invoice as it is sent. No `id` and no `position`: the server
+ * derives positions from the array order, and the whole list is replaced.
+ */
+export interface NewLineItem {
+  description: string;
+  quantity: number;
+  unitAmount: number;
+}
+
+/**
+ * `POST /api/invoices` — answers 201 with the created draft's whole
+ * `InvoiceDetail`. `currency` defaults to `USD` server-side.
+ */
+export interface NewInvoiceRequest {
+  clientId: number;
+  issueDate: string;
+  dueDate?: string | null;
+  currency?: string;
+  items: NewLineItem[];
+  notes?: string | null;
+  terms?: string | null;
+}
+
+/**
+ * `PATCH /api/invoices/{number}` — draft-only, and `items` is a **whole-list
+ * replacement**: sending it at all means "these are the line items now".
+ */
+export interface InvoicePatch {
+  issueDate?: string;
+  dueDate?: string | null;
+  currency?: string;
+  notes?: string | null;
+  terms?: string | null;
+  items?: NewLineItem[];
+}
+
+/**
+ * `POST /api/invoices/{number}/pay`. An omitted `amount` records the whole
+ * outstanding balance, exactly as omitting `--amount` does; `method` defaults
+ * to `direct_deposit`.
+ */
+export interface PayInvoiceRequest {
+  date: string;
+  amount?: number;
+  method?: PaymentMethod;
+}

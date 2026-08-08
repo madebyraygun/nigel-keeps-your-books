@@ -9,7 +9,7 @@ use ratatui::{
 use rusqlite::Connection;
 
 use crate::cli::invoice::{build_clients, company_name, PUBLISHED_VOID_WARNING};
-use crate::error::Result;
+use crate::error::{NigelError, Result};
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
@@ -106,7 +106,11 @@ const PAY_FIELDS: usize = 3;
 /// mutation.
 struct Detail {
     invoice: Invoice,
-    client: Client,
+    /// `None` when the invoice's client row is gone. Nothing in Nigel creates
+    /// that state — `clients::delete_client` refuses a client with invoices of
+    /// any status — but the schema represents it, and the screen that would
+    /// have refused to open is the one place it would be noticed.
+    client: Option<Client>,
     items: Vec<InvoiceLineItem>,
     payments: Vec<InvoicePayment>,
     paid: f64,
@@ -115,7 +119,12 @@ struct Detail {
 impl Detail {
     fn load(conn: &Connection, invoice_id: i64) -> Result<Self> {
         let invoice = get_invoice(conn, invoice_id)?;
-        let client = get_client(conn, invoice.client_id)?;
+        let client = match get_client(conn, invoice.client_id) {
+            Ok(client) => Some(client),
+            // Only a missing row is survivable; a database failure still is not.
+            Err(NigelError::NotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
         Ok(Self {
             items: line_items(conn, invoice.id)?,
             payments: payments(conn, invoice.id)?,
@@ -127,6 +136,16 @@ impl Detail {
 
     fn balance(&self) -> f64 {
         self.invoice.total - self.paid
+    }
+
+    /// The client's name, or an em dash — the same treatment every other
+    /// optional field on this screen gets.
+    fn client_name(&self) -> String {
+        optional_display(self.client.as_ref().map(|c| c.name.as_str()))
+    }
+
+    fn client_email(&self) -> Option<&str> {
+        self.client.as_ref()?.email.as_deref()
     }
 }
 
@@ -233,7 +252,7 @@ impl InvoiceManager {
         let Some(detail) = &self.detail else {
             return;
         };
-        let email = optional_display(detail.client.email.as_deref());
+        let email = optional_display(detail.client_email());
 
         let lines = vec![
             Line::from(""),
@@ -271,7 +290,7 @@ impl InvoiceManager {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
-            Line::from(format!("   Client     {}", detail.client.name)),
+            Line::from(format!("   Client     {}", detail.client_name())),
             Line::from(format!(
                 "   Total      {:<14} Paid  {:<14} Balance  {}",
                 money(detail.invoice.total),
@@ -343,10 +362,10 @@ impl InvoiceManager {
                 Span::styled(invoice.status.clone(), status_style(&invoice.status)),
             ]),
             Line::from(""),
-            Line::from(format!("   Client    {}", detail.client.name)),
+            Line::from(format!("   Client    {}", detail.client_name())),
             Line::from(format!(
                 "   Email     {}",
-                optional_display(detail.client.email.as_deref())
+                optional_display(detail.client_email())
             )),
             Line::from(format!(
                 "   Issued    {:<16} Due  {:<16} Currency  {}",
@@ -429,7 +448,7 @@ impl InvoiceManager {
                 format!(
                     "   Void invoice #{} for {} ({})?",
                     invoice.number,
-                    detail.client.name,
+                    detail.client_name(),
                     money(invoice.total)
                 ),
                 Style::default().fg(Color::Yellow),
@@ -612,9 +631,9 @@ impl InvoiceManager {
             self.set_status(e.to_string());
             return InvoiceAction::Continue;
         }
-        if detail.client.email.is_none() {
+        if detail.client_email().is_none() {
             // send.rs's own wording, so the two front ends cannot disagree.
-            let name = detail.client.name.clone();
+            let name = detail.client_name();
             self.set_status(format!("client '{name}' has no email"));
             return InvoiceAction::Continue;
         }
@@ -725,10 +744,7 @@ impl InvoiceManager {
                 format!("Invoice #{number} sent"),
                 vec![
                     url,
-                    format!(
-                        "Emailed to {}.",
-                        optional_display(reloaded.client.email.as_deref())
-                    ),
+                    format!("Emailed to {}.", optional_display(reloaded.client_email())),
                 ],
                 false,
             ),
@@ -1011,7 +1027,7 @@ fn warning_lines(invoice: &Invoice, width: u16) -> Vec<String> {
 /// re-send.
 fn send_confirmation(detail: &Detail) -> Vec<String> {
     let invoice = &detail.invoice;
-    let email = optional_display(detail.client.email.as_deref());
+    let email = optional_display(detail.client_email());
     match &invoice.published_at {
         Some(published) => vec![
             format!("Re-send invoice #{} to {email}?", invoice.number),
@@ -1022,7 +1038,7 @@ fn send_confirmation(detail: &Detail) -> Vec<String> {
             format!("Send invoice #{} to {email}?", invoice.number),
             format!(
                 "{} \u{b7} {}. Creates a Stripe payment link, publishes the",
-                detail.client.name,
+                detail.client_name(),
                 money(invoice.total)
             ),
             "page and PDF, then emails the client.".to_string(),
@@ -1292,11 +1308,35 @@ mod tests {
         assert!(matches!(mgr.screen, Screen::Detail));
         let detail = detail_of(&mgr);
         assert_eq!(detail.invoice.number, 1248);
-        assert_eq!(detail.client.name, "Cedar Systems");
+        assert_eq!(detail.client_name(), "Cedar Systems");
         assert_eq!(detail.items.len(), 1);
         assert_eq!(detail.payments.len(), 1);
         assert_eq!(detail.paid, 1_250.0);
         assert_eq!(detail.balance(), 750.0);
+    }
+
+    /// The state is unreachable through Nigel — `delete_client` refuses a
+    /// client that has invoices of any status, and the foreign key refuses it
+    /// again — but it is representable, and refusing to open the detail would
+    /// hide the very invoice that needs looking at.
+    #[test]
+    fn an_invoice_whose_client_row_is_gone_still_opens() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 2_000.0);
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("DELETE FROM clients", []).unwrap();
+
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        assert!(matches!(mgr.screen, Screen::Detail));
+        let detail = detail_of(&mgr);
+        assert!(detail.client.is_none());
+        assert_eq!(detail.client_name(), "\u{2014}");
+        assert_eq!(detail.client_email(), None);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Client    \u{2014}"), "{screen}");
     }
 
     #[test]
@@ -1327,21 +1367,6 @@ mod tests {
         mgr.handle_key(KeyCode::Enter, &conn);
         assert!(matches!(mgr.screen, Screen::List));
         assert!(mgr.detail.is_none());
-    }
-
-    #[test]
-    fn a_load_failure_reports_and_stays_on_the_list() {
-        let (_d, conn) = test_conn();
-        seed_invoice(&conn, "Cedar Systems", 100.0);
-        let mut mgr = manager(&conn);
-        // The client vanishes out from under the invoice.
-        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
-        conn.execute("DELETE FROM clients", []).unwrap();
-
-        mgr.handle_key(KeyCode::Enter, &conn);
-        assert!(matches!(mgr.screen, Screen::List));
-        let message = mgr.status_message.clone().unwrap();
-        assert!(message.contains("Client not found"), "got: {message}");
     }
 
     #[test]

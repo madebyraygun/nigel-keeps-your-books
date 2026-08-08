@@ -86,6 +86,10 @@ nigel client list
 `--email` is optional at creation, but an invoice cannot be sent to a client
 without one. `nigel client list` prints the client IDs that `invoice new` takes.
 
+A name is required and must be unique: an empty one and a name another client
+already has are both refused, on `client add` and on a `client edit` that
+renames. Renaming a client to the name it already has is not a collision.
+
 ### Inspecting and editing a client
 
 ```bash

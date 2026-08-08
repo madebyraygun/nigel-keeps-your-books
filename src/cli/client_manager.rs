@@ -359,8 +359,9 @@ impl ClientManager {
 
         let saved = match mode {
             FormMode::Add => {
-                // add_client validates nothing, so the blank-name refusal is
-                // this screen's. update_client makes the same refusal itself.
+                // Checked here as well as in `add_client` so the message lands
+                // beside the field rather than as a status line after a round
+                // trip; the data layer's refusal is the one that binds.
                 if name.is_empty() {
                     self.set_status("Name is required".into());
                     return;

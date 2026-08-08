@@ -450,6 +450,62 @@ fn client_add_and_list_roundtrip() {
         .stdout(predicate::str::contains("Acme Co").and(predicate::str::contains("a@b.test")));
 }
 
+/// `f64::from_str` accepts "NaN" and "inf", so `--item` could always spell a
+/// figure that poisons every later SUM over the column. The refusal lives in
+/// `invoices::validate_items`, which both front ends call.
+#[test]
+fn a_non_finite_item_is_refused_from_the_cli() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    for item in ["Work:NaN:5", "Work:inf:5", "Work:1:NaN"] {
+        env.cmd()
+            .args([
+                "invoice",
+                "new",
+                "--client",
+                "1",
+                "--issue",
+                "2026-08-04",
+                "--item",
+                item,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("finite"));
+    }
+
+    // The refused drafts never reserved a number: #1248 is still the only one.
+    env.cmd()
+        .args(["invoice", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1248").and(predicate::str::contains("1249").not()));
+}
+
+#[test]
+fn an_invoice_totalling_zero_is_refused_from_the_cli() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+
+    for item in ["Freebie:0:150", "Credit:-1:150"] {
+        env.cmd()
+            .args([
+                "invoice",
+                "new",
+                "--client",
+                "1",
+                "--issue",
+                "2026-08-04",
+                "--item",
+                item,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("more than zero"));
+    }
+}
+
 /// Init plus one client and one 1500.00 draft invoice (#1248).
 fn init_with_client_and_invoice(env: &TestEnv) {
     env.cmd()
