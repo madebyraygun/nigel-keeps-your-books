@@ -326,7 +326,7 @@ pub const EXPORT_ROUTES: [&str; 8] = [
 /// — `rules/test` and `imports/preview` are dry runs — and a rule stated as
 /// "the ones that write" invites the next dry run to be left out of a list the
 /// guard still has to cover.
-pub const WRITE_ROUTES: [(&str, &str, &str); 32] = [
+pub const WRITE_ROUTES: [(&str, &str, &str); 34] = [
     ("POST", "/api/clients", r#"{"name":"X"}"#),
     ("PATCH", "/api/clients/1", r#"{"name":"X"}"#),
     ("DELETE", "/api/clients/1", ""),
@@ -342,6 +342,12 @@ pub const WRITE_ROUTES: [(&str, &str, &str); 32] = [
         "/api/invoices/1252/pay",
         r#"{"amount":1,"date":"2026-04-01"}"#,
     ),
+    // Confirmed, so the guard is what refuses it rather than the missing flag.
+    // Neither reaches a gateway: send answers the confirmation and the
+    // configuration before it opens a connection, and this suite configures
+    // neither.
+    ("POST", "/api/invoices/1252/send", r#"{"confirm":true}"#),
+    ("POST", "/api/invoices/sync", "{}"),
     ("PATCH", "/api/rules/1", r#"{"priority":5}"#),
     ("DELETE", "/api/rules/1", ""),
     (
