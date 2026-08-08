@@ -22,7 +22,7 @@ use crate::invoicing::render_html::{
 };
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
-use crate::invoicing::sync::sync_all;
+use crate::invoicing::sync::sync_all_report;
 use crate::models::{Client, Invoice, InvoiceLineItem};
 use crate::settings::{get_data_dir, invoicing_config, InvoicingConfig};
 
@@ -428,8 +428,16 @@ pub fn send(number: i64, today: &str) -> Result<()> {
 pub fn sync(today: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let stripe = build_gateway(&invoicing_config())?;
-    let recorded = sync_all(&conn, today, &stripe)?;
-    println!("Recorded {recorded} new payment(s)");
+    let report = sync_all_report(&conn, today, &stripe)?;
+    // Printing is the front end's job: the data layer hands back the per-invoice
+    // failures so a browser can render the same ones a terminal prints.
+    for failure in &report.failures {
+        eprintln!(
+            "notice: invoice sync failed for #{}: {}",
+            failure.number, failure.message
+        );
+    }
+    println!("Recorded {} new payment(s)", report.recorded);
     Ok(())
 }
 

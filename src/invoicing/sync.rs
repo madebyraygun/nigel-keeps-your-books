@@ -1,8 +1,30 @@
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::error::{NigelError, Result};
 use crate::invoicing::gateway::PaymentGateway;
 use crate::invoicing::invoices::{get_invoice, record_payment};
+
+/// One invoice the gateway refused, named by the number a person reads off it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncFailure {
+    pub number: i64,
+    pub message: String,
+}
+
+/// What one reconciliation run did.
+///
+/// Per-invoice failures are data, not an error: a deleted Stripe payment link
+/// 404s forever, and one of those must not stop the rest of the run or hide the
+/// payments it did record.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncReport {
+    pub recorded: u32,
+    pub invoices_checked: u32,
+    pub failures: Vec<SyncFailure>,
+}
 
 pub fn sync_invoice<G: PaymentGateway>(
     conn: &Connection,
@@ -32,14 +54,20 @@ pub fn sync_invoice<G: PaymentGateway>(
     Ok(recorded)
 }
 
-/// Sync every open invoice that has a payment link, returning the number of
-/// newly recorded payments.
+/// Sync every open invoice that has a payment link.
 ///
 /// One invoice failing at the gateway (a deleted payment link 404s forever)
-/// must not stop the rest: per-invoice failures are printed as notices and the
-/// loop continues. An error is returned only when every invoice failed, so a
-/// caller seeing `Ok` knows at least one invoice was reconciled.
-pub fn sync_all<G: PaymentGateway>(conn: &Connection, today: &str, gateway: &G) -> Result<u32> {
+/// must not stop the rest: per-invoice failures are collected and the loop
+/// continues. An error is returned only when every invoice failed, so a caller
+/// seeing `Ok` knows at least one invoice was reconciled.
+///
+/// The failures are returned rather than printed, because a browser cannot read
+/// the server's stderr — the CLI prints the same notices from the report.
+pub fn sync_all_report<G: PaymentGateway>(
+    conn: &Connection,
+    today: &str,
+    gateway: &G,
+) -> Result<SyncReport> {
     let mut stmt = conn.prepare(
         "SELECT id, number FROM invoices
          WHERE stripe_payment_link_id IS NOT NULL AND status IN ('sent','partial','overdue')",
@@ -47,27 +75,34 @@ pub fn sync_all<G: PaymentGateway>(conn: &Connection, today: &str, gateway: &G) 
     let invoices = stmt
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut total = 0;
-    let mut failures = Vec::new();
+
+    let mut report = SyncReport {
+        invoices_checked: invoices.len() as u32,
+        ..SyncReport::default()
+    };
     for (id, number) in &invoices {
         match sync_invoice(conn, *id, today, gateway) {
-            Ok(recorded) => total += recorded,
-            Err(e) => failures.push(format!("#{number}: {e}")),
+            Ok(recorded) => report.recorded += recorded,
+            Err(e) => report.failures.push(SyncFailure {
+                number: *number,
+                message: e.to_string(),
+            }),
         }
     }
-    if !failures.is_empty() {
-        if failures.len() == invoices.len() {
-            return Err(NigelError::Other(format!(
-                "all {} invoice(s) failed to sync — {}",
-                failures.len(),
-                failures.join("; ")
-            )));
-        }
-        for failure in &failures {
-            eprintln!("notice: invoice sync failed for {failure}");
-        }
+
+    if !report.failures.is_empty() && report.failures.len() == invoices.len() {
+        let detail = report
+            .failures
+            .iter()
+            .map(|f| format!("#{}: {}", f.number, f.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(NigelError::Other(format!(
+            "all {} invoice(s) failed to sync — {detail}",
+            report.failures.len()
+        )));
     }
-    Ok(total)
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -211,7 +246,13 @@ mod tests {
         conn.execute("UPDATE invoices SET status='paid' WHERE id=?1", [settled])
             .unwrap();
 
-        assert_eq!(sync_all(&conn, "2026-08-10", &PerLinkGw).unwrap(), 1);
+        let report = sync_all_report(&conn, "2026-08-10", &PerLinkGw).unwrap();
+        assert_eq!(report.recorded, 1);
+        assert_eq!(
+            report.invoices_checked, 1,
+            "only the open one was looked at"
+        );
+        assert!(report.failures.is_empty());
         assert_eq!(paid_amount(&conn, owing).unwrap(), 100.0);
         assert_eq!(paid_amount(&conn, draft).unwrap(), 0.0);
         assert_eq!(paid_amount(&conn, settled).unwrap(), 0.0);
@@ -253,10 +294,39 @@ mod tests {
         let gw = FlakyGw {
             broken: vec!["pl_bad"],
         };
-        assert_eq!(sync_all(&conn, "2026-08-10", &gw).unwrap(), 1);
+        assert_eq!(
+            sync_all_report(&conn, "2026-08-10", &gw).unwrap().recorded,
+            1
+        );
         assert_eq!(paid_amount(&conn, healthy).unwrap(), 100.0);
         assert_eq!(paid_amount(&conn, broken).unwrap(), 0.0);
         assert_eq!(get_invoice(&conn, healthy).unwrap().status, "paid");
+    }
+
+    /// The failures are returned, not printed: a browser cannot read the
+    /// server's stderr, and the CLI prints them from here.
+    #[test]
+    fn the_report_names_the_invoices_that_failed() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let broken = open_invoice(&conn, cid, "pl_bad");
+        open_invoice(&conn, cid, "pl_good");
+        let broken_number = get_invoice(&conn, broken).unwrap().number;
+
+        let gw = FlakyGw {
+            broken: vec!["pl_bad"],
+        };
+        let report = sync_all_report(&conn, "2026-08-10", &gw).unwrap();
+
+        assert_eq!(report.recorded, 1);
+        assert_eq!(report.invoices_checked, 2);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].number, broken_number);
+        assert!(
+            report.failures[0].message.contains("no such payment link"),
+            "got: {}",
+            report.failures[0].message
+        );
     }
 
     #[test]
@@ -269,8 +339,19 @@ mod tests {
         let gw = FlakyGw {
             broken: vec!["pl_bad", "pl_worse"],
         };
-        let err = sync_all(&conn, "2026-08-10", &gw).unwrap_err().to_string();
+        let err = sync_all_report(&conn, "2026-08-10", &gw)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no such payment link pl_bad"), "got: {err}");
         assert!(err.contains("no such payment link pl_worse"), "got: {err}");
+    }
+
+    #[test]
+    fn a_run_with_nothing_open_is_an_empty_report_not_an_error() {
+        let (_d, conn) = test_conn();
+        let report = sync_all_report(&conn, "2026-08-10", &PerLinkGw).unwrap();
+        assert_eq!(report.recorded, 0);
+        assert_eq!(report.invoices_checked, 0);
+        assert!(report.failures.is_empty());
     }
 }
