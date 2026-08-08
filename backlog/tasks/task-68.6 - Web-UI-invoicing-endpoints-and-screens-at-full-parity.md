@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 06:11'
+updated_date: '2026-08-08 07:20'
 labels:
   - invoicing
   - web
@@ -22,7 +22,7 @@ Supersedes TASK-62 with the full scope: Serialize derives on the invoicing struc
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Invoicing data structs derive Serialize following the task-31.2 pattern
+- [x] #1 Invoicing data structs derive Serialize following the task-31.2 pattern
 - [ ] #2 JSON API covers clients, invoices, payments, preview, and aging behind the standard guards
 - [ ] #3 Send requires explicit confirmation in the UI and reports each step's failure by cause
 - [ ] #4 SPA screens cover client management, invoice management, and aging with CLI figure parity
@@ -49,4 +49,6 @@ Plan approved by orchestrator. Rulings on open questions:
 502/UpstreamFailed and token skip_serializing are accepted as specced.
 
 Stage 1 merged (PR #189): Serialize derives with token skip_serializing, payment_amount+void guards in the data layer, wire-shaped list_invoices, formatters extracted and routed through fmt::money (the one intentional CLI output change). Stage-2 notes: ClientSummary needs serde(flatten) at the route wrapper; publicUrl computed at the route; OPEN_STATUSES/PAYMENT_METHODS consts are the legal-set source; clientName is Option. Orphaned-invoice detail deferred to stage 3 with delete_client.
+
+Stage 2 merged (PR #190): read API complete (clients, invoices, aging, next-number, preview HTML/PDF, status invoicing block omitted while locked). Security headers now defer to handler-set values; preview frames SAMEORIGIN, everything else stays DENY. get_invoice_by_number retyped NotFound in the data layer. Stage-5 note: preview iframe sandbox must NOT include allow-same-origin. serve-without-pdf test run added to the standing gate.
 <!-- SECTION:NOTES:END -->
