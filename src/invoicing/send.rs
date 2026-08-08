@@ -4,7 +4,7 @@ use crate::error::{NigelError, Result};
 use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{get_invoice, line_items, mark_published, set_payment_link};
-use crate::invoicing::render_html::render_invoice_html;
+use crate::invoicing::render_html::{render_invoice_html, PayButton};
 
 pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     conn: &Connection,
@@ -30,8 +30,12 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     }
     let pay_url = invoice.stripe_payment_link_url.clone();
 
+    let pay = match pay_url.as_deref() {
+        Some(url) => PayButton::Link(url),
+        None => PayButton::Omitted,
+    };
     let items = line_items(conn, invoice_id)?;
-    let html = render_invoice_html(&invoice, &client, &items, pay_url.as_deref(), contact_email);
+    let html = render_invoice_html(&invoice, &client, &items, pay, contact_email);
     let pdf = render_pdf(&invoice, &client, &items)?;
 
     let public_url = publisher.publish(&invoice.token, html.as_bytes(), &pdf)?;

@@ -40,11 +40,22 @@ fn expand(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
+/// Which pay element the page carries.
+pub enum PayButton<'a> {
+    /// A live payment link, as a sent invoice renders it.
+    Link(&'a str),
+    /// A draft that gets its link when it is sent: an inert stand-in showing
+    /// where the button goes, with nothing to click.
+    Placeholder,
+    /// No link, and none coming — a void invoice, or a page that never had one.
+    Omitted,
+}
+
 pub fn render_invoice_html(
     invoice: &Invoice,
     client: &Client,
     items: &[InvoiceLineItem],
-    pay_url: Option<&str>,
+    pay: PayButton<'_>,
     contact_email: &str,
 ) -> String {
     let rows: String = items
@@ -60,9 +71,13 @@ pub fn render_invoice_html(
         })
         .collect();
 
-    let pay = match pay_url {
-        Some(url) => format!("<a class=\"pay\" href=\"{}\">Pay online</a>", esc(url)),
-        None => String::new(),
+    // The placeholder styles itself inline instead of adding a rule to
+    // `templates/invoice.html`, so it renders correctly against a custom
+    // template that knows nothing about a `.pay-placeholder` class.
+    let pay = match pay {
+        PayButton::Link(url) => format!("<a class=\"pay\" href=\"{}\">Pay online</a>", esc(url)),
+        PayButton::Placeholder => "<span class=\"pay pay-placeholder\" style=\"background:#777;cursor:default\">Pay online — link created when the invoice is sent</span>".to_string(),
+        PayButton::Omitted => String::new(),
     };
     let due = invoice
         .due_date
@@ -137,7 +152,7 @@ mod tests {
             &inv,
             &client,
             &items,
-            Some("https://pay.stripe.test/x"),
+            PayButton::Link("https://pay.stripe.test/x"),
             "billing@example.test",
         );
         assert!(html.contains("1248"));
@@ -151,7 +166,7 @@ mod tests {
     #[test]
     fn direct_deposit_line_uses_the_supplied_contact_email() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, None, "ap@acme.test");
+        let html = render_invoice_html(&inv, &client, &items, PayButton::Omitted, "ap@acme.test");
         assert!(html.contains("Contact ap@acme.test for account details"));
         assert!(!html.contains("rygn.io"));
     }
@@ -159,7 +174,13 @@ mod tests {
     #[test]
     fn contact_email_is_escaped() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, None, "<script>alert(1)</script>");
+        let html = render_invoice_html(
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+            "<script>alert(1)</script>",
+        );
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>"));
     }
@@ -172,7 +193,7 @@ mod tests {
             &inv,
             &client,
             &items,
-            Some("https://pay.stripe.test/x"),
+            PayButton::Link("https://pay.stripe.test/x"),
             "billing@example.test",
         );
         assert!(html.contains("Acme {{ROWS}} {{PAY}} Co"));
@@ -187,7 +208,7 @@ mod tests {
             &inv,
             &client,
             &items,
-            Some("https://pay.stripe.test/x\"onmouseover=\"alert(1)"),
+            PayButton::Link("https://pay.stripe.test/x\"onmouseover=\"alert(1)"),
             "billing@example.test",
         );
         assert!(html.contains("&quot;onmouseover"));
@@ -195,9 +216,54 @@ mod tests {
     }
 
     #[test]
+    fn placeholder_renders_an_inert_span_not_a_link() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(&inv, &client, &items, PayButton::Placeholder, "b@e.test");
+        assert!(html.contains("<span class=\"pay pay-placeholder\""));
+        assert!(
+            html.contains("link created when the invoice is sent"),
+            "got: {html}"
+        );
+        assert!(!html.contains("<a class=\"pay\""));
+        assert!(
+            !html.contains("href"),
+            "a placeholder must not be clickable"
+        );
+    }
+
+    #[test]
+    fn only_the_pay_element_differs_between_link_and_placeholder() {
+        let (inv, client, items) = sample();
+        let linked = render_invoice_html(
+            &inv,
+            &client,
+            &items,
+            PayButton::Link("https://pay.test/x"),
+            "b@e.test",
+        );
+        let pending =
+            render_invoice_html(&inv, &client, &items, PayButton::Placeholder, "b@e.test");
+        // `{{PAY}}` sits alone on its own line in the template, which is what
+        // lets a line filter isolate it. If that moves, this test is what notices.
+        let strip = |s: &str| {
+            s.lines()
+                .filter(|l| !l.contains("class=\"pay"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(strip(&linked), strip(&pending));
+    }
+
+    #[test]
     fn omits_pay_button_when_no_url() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, None, "billing@example.test");
+        let html = render_invoice_html(
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+            "billing@example.test",
+        );
         assert!(!html.contains("Pay online"));
         assert!(html.contains("Direct deposit"));
     }
