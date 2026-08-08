@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 01:00'
+updated_date: '2026-08-08 06:11'
 labels:
   - invoicing
   - web
@@ -47,4 +47,6 @@ Plan approved by orchestrator. Rulings on open questions:
 7. delete_client stays in 68.6 stage 3 as planned — it is the only consumer (68.4's TUI has no client delete).
 8. /api/status omits the `invoicing` block while LOCKED — do not advertise configured integrations pre-unlock.
 502/UpstreamFailed and token skip_serializing are accepted as specced.
+
+Stage 1 merged (PR #189): Serialize derives with token skip_serializing, payment_amount+void guards in the data layer, wire-shaped list_invoices, formatters extracted and routed through fmt::money (the one intentional CLI output change). Stage-2 notes: ClientSummary needs serde(flatten) at the route wrapper; publicUrl computed at the route; OPEN_STATUSES/PAYMENT_METHODS consts are the legal-set source; clientName is Option. Orphaned-invoice detail deferred to stage 3 with delete_client.
 <!-- SECTION:NOTES:END -->
