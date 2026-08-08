@@ -113,6 +113,22 @@ describe('wc-send-dialog', () => {
     );
   });
 
+  it('points at the fix when the failure has one', async () => {
+    const el = await mount({
+      phase: 'failed',
+      failure: {
+        headline: 'Sending is not configured yet.',
+        message: 'Sending needs r2_bucket, which is not set.',
+        retryable: false,
+        actionLabel: 'Open settings',
+        actionHref: '#/settings',
+      },
+    });
+    const link = el.shadowRoot?.querySelector('[data-failure-action]');
+    expect(link?.getAttribute('href')).toBe('#/settings');
+    expect(link?.textContent).toBe('Open settings');
+  });
+
   it('offers Try again for a retryable failure and none for a record failure', async () => {
     const retryable = await mount({
       phase: 'failed',

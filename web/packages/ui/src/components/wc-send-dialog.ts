@@ -38,6 +38,9 @@ export interface SendFailureView {
    * already has the invoice, so a retry is a fresh decision, not a repeat.
    */
   retryable: boolean;
+  /** Where the fix lives, when the failure has one — e.g. the settings screen. */
+  actionLabel?: string;
+  actionHref?: string;
 }
 
 const STATE_GLYPHS: Record<SendStepState, string> = {
@@ -321,6 +324,11 @@ export class WcSendDialog extends LitElement {
         <h3>${failure.headline}</h3>
         <p class="upstream" data-upstream>${failure.message}</p>
         ${failure.note ? html`<p class="note" data-note>${failure.note}</p>` : nothing}
+        ${failure.actionHref && failure.actionLabel
+          ? html`<p class="note">
+              <a href=${failure.actionHref} data-failure-action>${failure.actionLabel}</a>
+            </p>`
+          : nothing}
       </div>
     `;
   }

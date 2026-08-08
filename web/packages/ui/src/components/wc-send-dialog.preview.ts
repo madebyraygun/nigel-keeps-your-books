@@ -116,6 +116,27 @@ const preview: Preview = {
       `,
     },
     {
+      name: 'failed-not-configured',
+      render: () => html`
+        <wc-send-dialog
+          open
+          phase="failed"
+          .number=${1251}
+          .total=${1850}
+          .recipient=${'ap@acme.test'}
+          .steps=${trace([], undefined, 'config')}
+          .failure=${{
+            headline: 'Sending is not configured yet.',
+            message: 'Sending needs r2_bucket, public_base_url, which are not set.',
+            note: 'These are settings, not something this invoice can fix.',
+            retryable: false,
+            actionLabel: 'Open settings',
+            actionHref: '#/settings',
+          }}
+        ></wc-send-dialog>
+      `,
+    },
+    {
       name: 'failed-at-record',
       render: () => html`
         <wc-send-dialog
