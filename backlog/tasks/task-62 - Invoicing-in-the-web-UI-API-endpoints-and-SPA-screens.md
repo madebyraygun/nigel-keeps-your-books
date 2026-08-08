@@ -4,6 +4,7 @@ title: 'Invoicing in the web UI: API endpoints and SPA screens'
 status: To Do
 assignee: []
 created_date: '2026-08-07 21:53'
+updated_date: '2026-08-08 00:28'
 labels:
   - invoicing
   - web
@@ -28,3 +29,9 @@ Prerequisite: the invoicing data-layer structs in src/invoicing/ and models.rs n
 - [ ] #3 SPA screens render invoices, clients, and aging with figure parity against the CLI output
 - [ ] #4 Send/pay actions are either implemented with explicit confirmation UX or explicitly deferred to a follow-up task
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Superseded by TASK-68.6, which carries the full web-parity scope of the invoicing epic (TASK-68).
+<!-- SECTION:NOTES:END -->
