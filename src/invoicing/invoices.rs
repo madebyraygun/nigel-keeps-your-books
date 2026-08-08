@@ -117,11 +117,17 @@ const INVOICE_COLS: &str = "id, number, client_id, issue_date, due_date, status,
     stripe_payment_link_url, published_at, voided_at";
 
 pub fn get_invoice(conn: &Connection, id: i64) -> Result<Invoice> {
-    Ok(conn.query_row(
+    conn.query_row(
         &format!("SELECT {INVOICE_COLS} FROM invoices WHERE id = ?1"),
         [id],
         row_to_invoice,
-    )?)
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            NigelError::NotFound(format!("Invoice not found: id {id}"))
+        }
+        other => NigelError::Db(other),
+    })
 }
 
 pub fn get_invoice_by_number(conn: &Connection, number: i64) -> Result<Invoice> {
@@ -381,6 +387,19 @@ pub fn update_invoice(conn: &Connection, invoice_id: i64, update: &InvoiceUpdate
         .clone()
         .unwrap_or(invoice.issue_date.clone());
     refresh_status(conn, invoice_id, &issue_date)?;
+    Ok(())
+}
+
+/// Cancel an invoice, guarded by `ensure_voidable`. Writes `voided_at` and lets
+/// `refresh_status` derive the `void` status from it.
+pub fn void_invoice(conn: &Connection, invoice_id: i64, voided_on: &str) -> Result<()> {
+    let invoice = get_invoice(conn, invoice_id)?;
+    ensure_voidable(conn, &invoice)?;
+    conn.execute(
+        "UPDATE invoices SET voided_at = ?1 WHERE id = ?2",
+        rusqlite::params![voided_on, invoice_id],
+    )?;
+    refresh_status(conn, invoice_id, voided_on)?;
     Ok(())
 }
 
@@ -1300,6 +1319,82 @@ mod tests {
         .unwrap_err();
         assert_eq!(conflict_code(&err), "not_draft");
         assert_eq!(get_invoice(&conn, id).unwrap().notes, None);
+    }
+
+    #[test]
+    fn voiding_a_draft_sets_voided_at_and_the_void_status() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+
+        let inv = get_invoice(&conn, id).unwrap();
+        assert_eq!(inv.voided_at.as_deref(), Some("2026-08-06"));
+        assert_eq!(inv.status, "void");
+    }
+
+    #[test]
+    fn voiding_a_sent_invoice_is_allowed() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-08-05").unwrap();
+
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+        assert_eq!(get_invoice(&conn, id).unwrap().status, "void");
+    }
+
+    #[test]
+    fn voiding_an_invoice_with_payments_is_refused() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        record_payment(&conn, id, 50.0, "2026-08-10", "ach", None).unwrap();
+
+        let err = void_invoice(&conn, id, "2026-08-11").unwrap_err();
+        assert_eq!(conflict_code(&err), "has_payments");
+        assert_eq!(get_invoice(&conn, id).unwrap().voided_at, None);
+    }
+
+    #[test]
+    fn voiding_a_void_invoice_is_refused() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        void_invoice(&conn, id, "2026-08-06").unwrap();
+
+        let err = void_invoice(&conn, id, "2026-08-07").unwrap_err();
+        assert_eq!(conflict_code(&err), "already_void");
+        assert_eq!(
+            get_invoice(&conn, id).unwrap().voided_at.as_deref(),
+            Some("2026-08-06")
+        );
+    }
+
+    #[test]
+    fn a_voided_invoice_leaves_the_aging_buckets() {
+        let (_d, conn) = test_conn();
+        let id = seed_draft(&conn);
+        mark_published(&conn, id, "2026-06-01").unwrap();
+        assert!(ar_aging(&conn, "2026-08-04")
+            .unwrap()
+            .iter()
+            .any(|b| b.total > 0.0));
+
+        void_invoice(&conn, id, "2026-08-04").unwrap();
+
+        for bucket in ar_aging(&conn, "2026-08-04").unwrap() {
+            assert_eq!(
+                bucket.total, 0.0,
+                "bucket {} still carries money",
+                bucket.label
+            );
+        }
+    }
+
+    #[test]
+    fn voiding_a_missing_invoice_is_not_found() {
+        let (_d, conn) = test_conn();
+        let err = void_invoice(&conn, 99, "2026-08-06").unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Invoice not found: id 99");
     }
 
     /// Void by hand, the way migration v5 leaves a voided row.
