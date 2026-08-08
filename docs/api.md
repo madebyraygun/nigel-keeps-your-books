@@ -640,8 +640,10 @@ such a build — otherwise the saved `.pdf` file is that JSON.
 
 ### Not on the API
 
-- **Bulk export.** `nigel report all` writes eight files into a directory; a
+- **Bulk export.** `nigel report all` writes nine files into a directory; a
   browser downloads one file at a time. There is no `/api/exports/all`.
+- **A/R aging.** `nigel report aging` and `nigel invoice aging` have no route.
+  Aging is not in `/api/reports` or `/api/exports`.
 - **Writing files.** The CLI's `--output` and `--output-dir` choose a path on
   disk. The server only streams bytes back; where they land is the browser's
   business.

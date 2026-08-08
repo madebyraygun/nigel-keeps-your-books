@@ -328,12 +328,57 @@ whenever it is published or paid:
 ## A/R aging
 
 ```bash
-nigel invoice aging
+nigel invoice aging                    # print the table
+nigel report aging                     # the same report, browsable
+nigel report aging --mode export       # PDF into <data_dir>/exports/
 ```
 
 Buckets the outstanding balance of every open invoice by how long it has been due
 — `current`, `1-30`, `31-60`, `61-90`, `90+` days past due. Invoices with no due
-date age from their issue date.
+date age from their issue date. Drafts, void invoices and anything settled in
+full are left out. Aging is always as of today; there is no as-of date to pass.
+
+Both commands print the same numbers — `invoice aging` prints the report's own
+table:
+
+```
+Acme Consulting LLC
+
+A/R Aging — as of 2026-08-07
+
+Summary
++-------------------+----------+-----------+
+| Bucket            | Invoices | Amount    |
++==========================================+
+| current           | 1        | $1,500.00 |
+|-------------------+----------+-----------|
+| 1-30              | 1        | $1,500.00 |
+|-------------------+----------+-----------|
+| 31-60             | 0        | $0.00     |
+|-------------------+----------+-----------|
+| 61-90             | 0        | $0.00     |
+|-------------------+----------+-----------|
+| 90+               | 1        | $3,200.00 |
+|-------------------+----------+-----------|
+| Total Outstanding | 3        | $6,200.00 |
++-------------------+----------+-----------+
+
+Open Invoices
++---------+---------+------------+------+-----------+
+| Invoice | Client  | Due        | Days | Balance   |
++===================================================+
+| #1250   | Initech | 2026-05-04 | 95   | $3,200.00 |
+|---------+---------+------------+------+-----------|
+| #1249   | Acme Co | 2026-07-20 | 18   | $1,500.00 |
+|---------+---------+------------+------+-----------|
+| #1248   | Acme Co | 2026-08-27 | —    | $1,500.00 |
++---------+---------+------------+------+-----------+
+```
+
+`nigel report aging` opens the interactive view on a terminal (scroll with
+↑/↓, `q` closes) and falls back to this text when piped. The dashboard offers
+it under both `v` (view a report) and `e` (export a report), and the home
+screen shows the outstanding total whenever any invoice is open.
 
 ## Importing from InvoiceShelf
 
