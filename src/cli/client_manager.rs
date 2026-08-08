@@ -1,8 +1,14 @@
 use crossterm::event::KeyCode;
 use rusqlite::Connection;
 
-use crate::invoicing::clients::list_clients;
+use crate::invoicing::clients::{add_client, list_clients};
 use crate::models::Client;
+
+// Field indices for ClientForm — keep in sync with field order.
+const NAME_IDX: usize = 0;
+const EMAIL_IDX: usize = 1;
+const ADDRESS_IDX: usize = 2;
+const NOTES_IDX: usize = 3;
 
 pub enum ClientAction {
     Continue,
@@ -11,6 +17,51 @@ pub enum ClientAction {
 
 enum Screen {
     List,
+    Add(ClientForm),
+    Edit(ClientForm),
+}
+
+enum FormMode {
+    Add,
+    Edit,
+}
+
+struct ClientForm {
+    fields: Vec<FormField>,
+    focused: usize,
+}
+
+struct FormField {
+    label: &'static str,
+    value: String,
+}
+
+impl ClientForm {
+    fn new_add() -> Self {
+        Self::with_values(["", "", "", ""].map(str::to_string))
+    }
+
+    fn with_values(values: [String; 4]) -> Self {
+        let labels = ["Name", "Email", "Address", "Notes"];
+        Self {
+            fields: labels
+                .into_iter()
+                .zip(values)
+                .map(|(label, value)| FormField { label, value })
+                .collect(),
+            focused: 0,
+        }
+    }
+
+    /// The trimmed field, or `None` when it is blank.
+    fn optional(&self, idx: usize) -> Option<String> {
+        let value = self.fields[idx].value.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    }
 }
 
 pub struct ClientManager {
@@ -69,8 +120,12 @@ impl ClientManager {
             }
         }
 
+        // The screen is matched before the key, so a printable character on a
+        // form types into the field instead of firing the list's binding.
         match &self.screen {
             Screen::List => self.handle_list_key(code, conn),
+            Screen::Add(_) => self.handle_form_key(code, conn, FormMode::Add),
+            Screen::Edit(_) => self.handle_form_key(code, conn, FormMode::Edit),
         }
     }
 
@@ -86,10 +141,79 @@ impl ClientManager {
                     self.ensure_visible(self.last_visible_rows);
                 }
             }
+            KeyCode::Char('a') => self.screen = Screen::Add(ClientForm::new_add()),
             KeyCode::Char('q') | KeyCode::Esc => return ClientAction::Close,
             _ => {}
         }
         ClientAction::Continue
+    }
+
+    fn handle_form_key(
+        &mut self,
+        code: KeyCode,
+        conn: &Connection,
+        mode: FormMode,
+    ) -> ClientAction {
+        let form = match &mut self.screen {
+            Screen::Add(f) | Screen::Edit(f) => f,
+            Screen::List => return ClientAction::Continue,
+        };
+
+        match code {
+            KeyCode::Esc => self.screen = Screen::List,
+            KeyCode::Tab | KeyCode::Down => {
+                form.focused = (form.focused + 1) % form.fields.len();
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                form.focused = if form.focused == 0 {
+                    form.fields.len() - 1
+                } else {
+                    form.focused - 1
+                };
+            }
+            KeyCode::Char(c) => form.fields[form.focused].value.push(c),
+            KeyCode::Backspace => {
+                form.fields[form.focused].value.pop();
+            }
+            KeyCode::Enter => self.save_form(conn, mode),
+            _ => {}
+        }
+        ClientAction::Continue
+    }
+
+    fn save_form(&mut self, conn: &Connection, mode: FormMode) {
+        let form = match &self.screen {
+            Screen::Add(f) | Screen::Edit(f) => f,
+            Screen::List => return,
+        };
+        let name = form.fields[NAME_IDX].value.trim().to_string();
+        if name.is_empty() {
+            self.set_status("Name is required".into());
+            return;
+        }
+        let email = form.optional(EMAIL_IDX);
+        let address = form.optional(ADDRESS_IDX);
+        let notes = form.optional(NOTES_IDX);
+
+        let saved = match mode {
+            FormMode::Add => add_client(
+                conn,
+                &name,
+                email.as_deref(),
+                address.as_deref(),
+                notes.as_deref(),
+            )
+            .map(|_| format!("Added client: {name}")),
+            FormMode::Edit => return,
+        };
+        match saved {
+            Ok(message) => {
+                self.reload(conn);
+                self.screen = Screen::List;
+                self.set_status(message);
+            }
+            Err(e) => self.set_status(e.to_string()),
+        }
     }
 }
 
@@ -195,6 +319,162 @@ mod tests {
         conn.execute("DELETE FROM clients", []).unwrap();
         mgr.reload(&conn);
         assert_eq!(mgr.selection, 0);
+    }
+
+    fn type_str(mgr: &mut ClientManager, conn: &Connection, text: &str) {
+        for ch in text.chars() {
+            mgr.handle_key(KeyCode::Char(ch), conn);
+        }
+    }
+
+    fn form_values(mgr: &ClientManager) -> Vec<String> {
+        match &mgr.screen {
+            Screen::Add(form) | Screen::Edit(form) => {
+                form.fields.iter().map(|f| f.value.clone()).collect()
+            }
+            Screen::List => panic!("not on a form"),
+        }
+    }
+
+    fn client_named(conn: &Connection, name: &str) -> Client {
+        list_clients(conn)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no client named {name}"))
+    }
+
+    /// Name, Email, Address, Notes typed into a fresh Add form.
+    fn fill_add_form(mgr: &mut ClientManager, conn: &Connection, values: [&str; 4]) {
+        mgr.handle_key(KeyCode::Char('a'), conn);
+        for (i, value) in values.iter().enumerate() {
+            if i > 0 {
+                mgr.handle_key(KeyCode::Tab, conn);
+            }
+            type_str(mgr, conn, value);
+        }
+    }
+
+    #[test]
+    fn a_opens_the_add_form_with_empty_fields() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('a'), &conn);
+
+        assert!(matches!(mgr.screen, Screen::Add(_)));
+        assert_eq!(form_values(&mgr), ["", "", "", ""]);
+    }
+
+    #[test]
+    fn enter_with_a_blank_name_reports_it_and_stays_on_the_form() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        fill_add_form(&mut mgr, &conn, ["  ", "ap@acme.test", "", ""]);
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        assert_eq!(mgr.status_message.as_deref(), Some("Name is required"));
+        assert!(matches!(mgr.screen, Screen::Add(_)));
+        assert!(list_clients(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn enter_saves_a_client_and_returns_to_the_list() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        fill_add_form(
+            &mut mgr,
+            &conn,
+            ["Acme Co", "ap@acme.test", "1 Main St", "Net 30"],
+        );
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        assert!(matches!(mgr.screen, Screen::List));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Added client: Acme Co"),
+            "the status line names the client"
+        );
+        let saved = client_named(&conn, "Acme Co");
+        assert_eq!(saved.email.as_deref(), Some("ap@acme.test"));
+        assert_eq!(saved.billing_address.as_deref(), Some("1 Main St"));
+        assert_eq!(saved.notes.as_deref(), Some("Net 30"));
+        assert_eq!(mgr.clients.len(), 1, "the list reloaded");
+    }
+
+    #[test]
+    fn blank_optional_fields_are_stored_as_null() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        fill_add_form(&mut mgr, &conn, ["Acme Co", "", "  ", ""]);
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        let saved = client_named(&conn, "Acme Co");
+        assert_eq!(saved.email, None);
+        assert_eq!(saved.billing_address, None);
+        assert_eq!(saved.notes, None);
+    }
+
+    #[test]
+    fn fields_are_trimmed() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        fill_add_form(
+            &mut mgr,
+            &conn,
+            ["  Acme Co  ", "  ap@acme.test ", " 1 Main St ", " Net 30 "],
+        );
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        let saved = client_named(&conn, "Acme Co");
+        assert_eq!(saved.email.as_deref(), Some("ap@acme.test"));
+        assert_eq!(saved.billing_address.as_deref(), Some("1 Main St"));
+        assert_eq!(saved.notes.as_deref(), Some("Net 30"));
+    }
+
+    #[test]
+    fn esc_cancels_without_writing() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        fill_add_form(&mut mgr, &conn, ["Acme Co", "", "", ""]);
+        mgr.handle_key(KeyCode::Esc, &conn);
+
+        assert!(matches!(mgr.screen, Screen::List));
+        assert!(list_clients(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tab_and_backtab_cycle_the_four_fields() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('a'), &conn);
+
+        for expected in [1, 2, 3, 0] {
+            mgr.handle_key(KeyCode::Tab, &conn);
+            assert_eq!(focused(&mgr), expected);
+        }
+        for expected in [3, 2, 1, 0] {
+            mgr.handle_key(KeyCode::BackTab, &conn);
+            assert_eq!(focused(&mgr), expected);
+        }
+    }
+
+    #[test]
+    fn a_printable_key_types_into_the_field_rather_than_triggering_the_list_binding() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('a'), &conn);
+        type_str(&mut mgr, &conn, "aeq");
+        mgr.handle_key(KeyCode::Backspace, &conn);
+
+        assert!(matches!(mgr.screen, Screen::Add(_)), "still on the form");
+        assert_eq!(form_values(&mgr)[0], "ae");
+    }
+
+    fn focused(mgr: &ClientManager) -> usize {
+        match &mgr.screen {
+            Screen::Add(form) | Screen::Edit(form) => form.focused,
+            Screen::List => panic!("not on a form"),
+        }
     }
 
     #[test]
