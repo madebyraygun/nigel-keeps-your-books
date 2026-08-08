@@ -909,6 +909,84 @@ fn invoice_preview_without_the_pdf_feature_still_writes_html_and_says_why() {
     assert!(!previews_dir(&env).join("invoice-1248.pdf").exists());
 }
 
+/// Where `nigel invoice template export` writes for a `TestEnv`.
+fn template_file(env: &TestEnv) -> PathBuf {
+    env.data_dir().join("templates").join("invoice.html")
+}
+
+fn write_template(env: &TestEnv, source: &str) {
+    let path = template_file(env);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, source).unwrap();
+}
+
+#[test]
+fn invoice_preview_renders_a_custom_template() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    write_template(
+        &env,
+        "<h1>MY OWN PAGE {{NUMBER}}</h1>{{CLIENT}}{{ROWS}}{{TOTAL}}",
+    );
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success();
+
+    let html = std::fs::read_to_string(previews_dir(&env).join("invoice-1248.html")).unwrap();
+    assert!(html.contains("MY OWN PAGE 1248"), "got: {html}");
+    assert!(!html.contains("Direct deposit"), "got: {html}");
+}
+
+#[test]
+fn invoice_preview_with_a_broken_template_fails_and_writes_nothing() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    write_template(
+        &env,
+        "<p>{{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}} {{TOTL}}</p>",
+    );
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(template_file(&env).display().to_string())
+                .and(predicate::str::contains("{{TOTL}}")),
+        );
+
+    assert!(!previews_dir(&env).join("invoice-1248.html").exists());
+}
+
+#[test]
+fn send_with_a_broken_template_fails_before_touching_stripe() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    write_template(&env, "<p>no placeholders here</p>");
+
+    env.cmd()
+        .args(["invoice", "send", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(template_file(&env).display().to_string())
+                .and(predicate::str::contains("{{NUMBER}}")),
+        );
+
+    let status: String = env
+        .db()
+        .query_row("SELECT status FROM invoices WHERE number = 1248", [], |r| {
+            r.get(0)
+        })
+        .expect("invoice row missing");
+    assert_eq!(status, "draft");
+}
+
 #[test]
 fn invoice_aging_prints_bucket_labels() {
     let env = TestEnv::new();

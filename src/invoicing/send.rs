@@ -5,13 +5,13 @@ use crate::invoicing::clients::get_client;
 use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{get_invoice, mark_published, set_payment_link};
 use crate::invoicing::render::render_invoice;
-use crate::invoicing::render_html::PayButton;
+use crate::invoicing::render_html::{Branding, PayButton};
 
 pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
     conn: &Connection,
     invoice_id: i64,
     today: &str,
-    contact_email: &str,
+    branding: &Branding<'_>,
     gateway: &G,
     publisher: &P,
     mailer: &M,
@@ -35,7 +35,7 @@ pub fn send_invoice<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
         Some(url) => PayButton::Link(url),
         None => PayButton::Omitted,
     };
-    let rendered = render_invoice(conn, &invoice, &client, pay, contact_email)?;
+    let rendered = render_invoice(conn, &invoice, &client, pay, branding)?;
     let pdf = rendered.pdf.ok_or_else(|| {
         NigelError::Other("PDF support not compiled in (build with --features pdf)".into())
     })?;
@@ -61,9 +61,18 @@ mod tests {
         AssetPublisher, Mailer, PaidSession, PaymentGateway, PaymentLink,
     };
     use crate::invoicing::invoices::{create_invoice, get_invoice, NewLineItem};
+    use crate::invoicing::render_html::DEFAULT_TEMPLATE;
     use crate::migrations::run_migrations;
     use crate::models::{Client, Invoice};
     use std::cell::RefCell;
+
+    fn brand(contact_email: &str) -> Branding<'_> {
+        Branding {
+            template: DEFAULT_TEMPLATE,
+            company: "",
+            contact_email,
+        }
+    }
 
     fn test_conn() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -143,7 +152,7 @@ mod tests {
             &conn,
             id,
             "2026-08-04",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FakePub,
             &mail,
@@ -170,7 +179,7 @@ mod tests {
             &conn,
             id,
             "2026-08-04",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FailPub,
             &mail,
@@ -197,13 +206,38 @@ mod tests {
             &conn,
             id,
             "2026-08-04",
-            "ap@acme.test",
+            &brand("ap@acme.test"),
             &gw,
             &publisher,
             &mail,
         )
         .unwrap();
         assert!(publisher.html.borrow().contains("Contact ap@acme.test"));
+    }
+
+    #[test]
+    fn send_renders_with_the_supplied_template() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn);
+        let gw = FakeGw {
+            create_calls: RefCell::new(0),
+        };
+        let mail = FakeMail {
+            sent: RefCell::new(0),
+        };
+        let publisher = CapturePub {
+            html: RefCell::new(String::new()),
+        };
+        let branding = Branding {
+            template: "<p>CUSTOM {{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}}</p>",
+            company: "",
+            contact_email: "billing@example.test",
+        };
+        send_invoice(&conn, id, "2026-08-04", &branding, &gw, &publisher, &mail).unwrap();
+
+        let html = publisher.html.borrow();
+        assert!(html.contains("CUSTOM"), "got: {html}");
+        assert!(!html.contains("Direct deposit"));
     }
 
     #[test]
@@ -220,7 +254,7 @@ mod tests {
             &conn,
             id,
             "2026-08-04",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FakePub,
             &mail,
@@ -230,7 +264,7 @@ mod tests {
             &conn,
             id,
             "2026-08-05",
-            "billing@example.test",
+            &brand("billing@example.test"),
             &gw,
             &FakePub,
             &mail,

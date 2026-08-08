@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 use crate::invoicing::invoices::line_items;
-use crate::invoicing::render_html::{render_invoice_html, PayButton};
+use crate::invoicing::render_html::{render_invoice_html, Branding, PayButton};
 use crate::models::{Client, Invoice, InvoiceLineItem};
 
 /// Everything `invoice send` publishes for one invoice.
@@ -21,12 +21,12 @@ pub fn render_invoice(
     invoice: &Invoice,
     client: &Client,
     pay: PayButton<'_>,
-    contact_email: &str,
+    branding: &Branding<'_>,
 ) -> Result<RenderedInvoice> {
     // Loaded here rather than passed in, so both callers get the same rows in
     // the same order.
     let items = line_items(conn, invoice.id)?;
-    let html = render_invoice_html(invoice, client, &items, pay, contact_email);
+    let html = render_invoice_html(branding, invoice, client, &items, pay);
     let pdf = render_pdf(invoice, client, &items)?;
     Ok(RenderedInvoice { html, pdf })
 }
@@ -55,8 +55,16 @@ mod tests {
     use crate::invoicing::clients::{add_client, get_client};
     use crate::invoicing::invoices::{create_invoice, get_invoice, NewLineItem};
     use crate::invoicing::render::render_invoice;
-    use crate::invoicing::render_html::PayButton;
+    use crate::invoicing::render_html::{Branding, PayButton, DEFAULT_TEMPLATE};
     use crate::migrations::run_migrations;
+
+    fn brand(contact_email: &str) -> Branding<'_> {
+        Branding {
+            template: DEFAULT_TEMPLATE,
+            company: "",
+            contact_email,
+        }
+    }
 
     fn test_conn() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -91,13 +99,31 @@ mod tests {
             &invoice,
             &client,
             PayButton::Placeholder,
-            "ap@acme.test",
+            &brand("ap@acme.test"),
         )
         .unwrap();
 
         assert!(out.html.contains("Invoice #1248"), "got: {}", out.html);
         assert!(out.html.contains("Contact ap@acme.test"));
         assert!(out.html.contains("100.00"));
+    }
+
+    #[test]
+    fn the_supplied_template_is_what_the_seam_renders() {
+        let (_d, conn) = test_conn();
+        let id = seed(&conn, &one_item());
+        let invoice = get_invoice(&conn, id).unwrap();
+        let client = get_client(&conn, invoice.client_id).unwrap();
+
+        let branding = Branding {
+            template: "<p>CUSTOM {{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}}</p>",
+            company: "",
+            contact_email: "b@e.test",
+        };
+        let out = render_invoice(&conn, &invoice, &client, PayButton::Omitted, &branding).unwrap();
+
+        assert!(out.html.starts_with("<p>CUSTOM 1248"), "got: {}", out.html);
+        assert!(!out.html.contains("Direct deposit"));
     }
 
     #[test]
@@ -124,7 +150,14 @@ mod tests {
         let invoice = get_invoice(&conn, id).unwrap();
         let client = get_client(&conn, invoice.client_id).unwrap();
 
-        let out = render_invoice(&conn, &invoice, &client, PayButton::Omitted, "b@e.test").unwrap();
+        let out = render_invoice(
+            &conn,
+            &invoice,
+            &client,
+            PayButton::Omitted,
+            &brand("b@e.test"),
+        )
+        .unwrap();
 
         let at = |needle: &str| out.html.find(needle).expect("line item missing from html");
         assert!(at("First") < at("Second"));
@@ -138,7 +171,14 @@ mod tests {
         let invoice = get_invoice(&conn, id).unwrap();
         let client = get_client(&conn, invoice.client_id).unwrap();
 
-        render_invoice(&conn, &invoice, &client, PayButton::Placeholder, "b@e.test").unwrap();
+        render_invoice(
+            &conn,
+            &invoice,
+            &client,
+            PayButton::Placeholder,
+            &brand("b@e.test"),
+        )
+        .unwrap();
 
         let after = get_invoice(&conn, id).unwrap();
         assert_eq!(after.status, "draft");
@@ -154,7 +194,14 @@ mod tests {
         let invoice = get_invoice(&conn, id).unwrap();
         let client = get_client(&conn, invoice.client_id).unwrap();
 
-        let out = render_invoice(&conn, &invoice, &client, PayButton::Omitted, "b@e.test").unwrap();
+        let out = render_invoice(
+            &conn,
+            &invoice,
+            &client,
+            PayButton::Omitted,
+            &brand("b@e.test"),
+        )
+        .unwrap();
         assert!(out.pdf.unwrap().starts_with(b"%PDF"));
     }
 
@@ -166,7 +213,14 @@ mod tests {
         let invoice = get_invoice(&conn, id).unwrap();
         let client = get_client(&conn, invoice.client_id).unwrap();
 
-        let out = render_invoice(&conn, &invoice, &client, PayButton::Omitted, "b@e.test").unwrap();
+        let out = render_invoice(
+            &conn,
+            &invoice,
+            &client,
+            PayButton::Omitted,
+            &brand("b@e.test"),
+        )
+        .unwrap();
         assert!(out.pdf.is_none());
         assert!(out.html.contains("Invoice #1248"));
     }

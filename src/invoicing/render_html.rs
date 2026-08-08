@@ -192,12 +192,21 @@ pub enum PayButton<'a> {
     Omitted,
 }
 
+/// What the page says about the sender, as opposed to what it says about the
+/// invoice. `src/invoicing/` reads no settings and no database, so the CLI layer
+/// resolves all three and passes them in.
+pub struct Branding<'a> {
+    pub template: &'a str,
+    pub company: &'a str,
+    pub contact_email: &'a str,
+}
+
 pub fn render_invoice_html(
+    branding: &Branding<'_>,
     invoice: &Invoice,
     client: &Client,
     items: &[InvoiceLineItem],
     pay: PayButton<'_>,
-    contact_email: &str,
 ) -> String {
     let rows: String = items
         .iter()
@@ -228,7 +237,7 @@ pub fn render_invoice_html(
         .unwrap_or_default();
 
     expand(
-        DEFAULT_TEMPLATE,
+        branding.template,
         &[
             ("NUMBER", &invoice.number.to_string()),
             ("CLIENT", &esc(&client.name)),
@@ -238,7 +247,7 @@ pub fn render_invoice_html(
             ("CURRENCY", &esc(&invoice.currency)),
             ("TOTAL", &format!("{:.2}", invoice.total)),
             ("PAY", &pay),
-            ("CONTACT", &esc(contact_email)),
+            ("CONTACT", &esc(branding.contact_email)),
         ],
     )
 }
@@ -291,11 +300,11 @@ mod tests {
     fn renders_number_total_items_and_pay_button() {
         let (inv, client, items) = sample();
         let html = render_invoice_html(
+            &brand("billing@example.test"),
             &inv,
             &client,
             &items,
             PayButton::Link("https://pay.stripe.test/x"),
-            "billing@example.test",
         );
         assert!(html.contains("1248"));
         assert!(html.contains("Design"));
@@ -308,7 +317,13 @@ mod tests {
     #[test]
     fn direct_deposit_line_uses_the_supplied_contact_email() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, PayButton::Omitted, "ap@acme.test");
+        let html = render_invoice_html(
+            &brand("ap@acme.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
         assert!(html.contains("Contact ap@acme.test for account details"));
         assert!(!html.contains("rygn.io"));
     }
@@ -317,11 +332,11 @@ mod tests {
     fn contact_email_is_escaped() {
         let (inv, client, items) = sample();
         let html = render_invoice_html(
+            &brand("<script>alert(1)</script>"),
             &inv,
             &client,
             &items,
             PayButton::Omitted,
-            "<script>alert(1)</script>",
         );
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>"));
@@ -332,11 +347,11 @@ mod tests {
         let (inv, mut client, items) = sample();
         client.name = "Acme {{ROWS}} {{PAY}} Co".into();
         let html = render_invoice_html(
+            &brand("billing@example.test"),
             &inv,
             &client,
             &items,
             PayButton::Link("https://pay.stripe.test/x"),
-            "billing@example.test",
         );
         assert!(html.contains("Acme {{ROWS}} {{PAY}} Co"));
         assert_eq!(html.matches("Design").count(), 1);
@@ -347,11 +362,11 @@ mod tests {
     fn pay_url_cannot_break_out_of_the_href_attribute() {
         let (inv, client, items) = sample();
         let html = render_invoice_html(
+            &brand("billing@example.test"),
             &inv,
             &client,
             &items,
             PayButton::Link("https://pay.stripe.test/x\"onmouseover=\"alert(1)"),
-            "billing@example.test",
         );
         assert!(html.contains("&quot;onmouseover"));
         assert!(!html.contains("\"onmouseover"));
@@ -360,7 +375,13 @@ mod tests {
     #[test]
     fn placeholder_renders_an_inert_span_not_a_link() {
         let (inv, client, items) = sample();
-        let html = render_invoice_html(&inv, &client, &items, PayButton::Placeholder, "b@e.test");
+        let html = render_invoice_html(
+            &brand("b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Placeholder,
+        );
         assert!(html.contains("<span class=\"pay pay-placeholder\""));
         assert!(
             html.contains("link created when the invoice is sent"),
@@ -377,14 +398,19 @@ mod tests {
     fn only_the_pay_element_differs_between_link_and_placeholder() {
         let (inv, client, items) = sample();
         let linked = render_invoice_html(
+            &brand("b@e.test"),
             &inv,
             &client,
             &items,
             PayButton::Link("https://pay.test/x"),
-            "b@e.test",
         );
-        let pending =
-            render_invoice_html(&inv, &client, &items, PayButton::Placeholder, "b@e.test");
+        let pending = render_invoice_html(
+            &brand("b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Placeholder,
+        );
         // `{{PAY}}` sits alone on its own line in the template, which is what
         // lets a line filter isolate it. If that moves, this test is what notices.
         let strip = |s: &str| {
@@ -397,6 +423,22 @@ mod tests {
     }
 
     const MINIMAL: &str = "<p>{{NUMBER}} {{CLIENT}} {{ROWS}} {{TOTAL}}</p>";
+
+    fn brand(contact_email: &str) -> Branding<'_> {
+        Branding {
+            template: DEFAULT_TEMPLATE,
+            company: "",
+            contact_email,
+        }
+    }
+
+    fn brand_with<'a>(template: &'a str, contact_email: &'a str) -> Branding<'a> {
+        Branding {
+            template,
+            company: "",
+            contact_email,
+        }
+    }
 
     fn write_override(dir: &std::path::Path, source: &str) {
         let path = template_path(dir);
@@ -521,13 +563,76 @@ mod tests {
     fn omits_pay_button_when_no_url() {
         let (inv, client, items) = sample();
         let html = render_invoice_html(
+            &brand("billing@example.test"),
             &inv,
             &client,
             &items,
             PayButton::Omitted,
-            "billing@example.test",
         );
         assert!(!html.contains("Pay online"));
         assert!(html.contains("Direct deposit"));
+    }
+
+    #[test]
+    fn a_custom_template_renders_instead_of_the_default() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(
+            &brand_with("<h1>{{NUMBER}}</h1>{{CLIENT}}{{ROWS}}{{TOTAL}}", "b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(html.starts_with("<h1>1248</h1>"), "got: {html}");
+        assert!(!html.contains("Direct deposit"));
+    }
+
+    #[test]
+    fn a_client_name_that_looks_like_a_placeholder_stays_literal_in_a_custom_template() {
+        let (inv, mut client, items) = sample();
+        client.name = "Acme {{ROWS}} {{PAY}} Co".into();
+        let html = render_invoice_html(
+            &brand_with(MINIMAL, "b@e.test"),
+            &inv,
+            &client,
+            &items,
+            PayButton::Link("https://pay.test/x"),
+        );
+        assert!(html.contains("Acme {{ROWS}} {{PAY}} Co"), "got: {html}");
+        assert_eq!(html.matches("<tr>").count(), items.len());
+    }
+
+    #[test]
+    fn a_custom_template_can_place_a_value_in_a_quoted_attribute() {
+        let (inv, mut client, items) = sample();
+        client.name = r#"a" onmouseover="x"#.into();
+        let html = render_invoice_html(
+            &brand_with(
+                r#"<span title="{{CLIENT}}">{{NUMBER}}{{ROWS}}{{TOTAL}}</span>"#,
+                "b@e.test",
+            ),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(html.contains("&quot;"), "got: {html}");
+        assert!(!html.contains(r#"" onmouseover=""#), "got: {html}");
+    }
+
+    #[test]
+    fn operator_markup_in_a_template_is_not_sanitized() {
+        let (inv, client, items) = sample();
+        let html = render_invoice_html(
+            &brand_with(
+                "<script>alert(1)</script>{{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}",
+                "b@e.test",
+            ),
+            &inv,
+            &client,
+            &items,
+            PayButton::Omitted,
+        );
+        assert!(html.contains("<script>alert(1)</script>"));
     }
 }

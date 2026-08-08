@@ -15,7 +15,7 @@ use crate::invoicing::invoices::{
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
 use crate::invoicing::render::render_invoice;
-use crate::invoicing::render_html::PayButton;
+use crate::invoicing::render_html::{load_template, Branding, PayButton};
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
 use crate::invoicing::sync::sync_all;
@@ -373,6 +373,13 @@ pub fn preview(number: i64, output_dir: Option<String>) -> Result<()> {
         );
     }
 
+    let template = load_template(&get_data_dir())?;
+    let branding = Branding {
+        template: &template,
+        company: "",
+        contact_email: &contact_email,
+    };
+
     // Both artifacts are rendered before either is written, so a PDF failure
     // cannot leave fresh HTML beside a stale PDF.
     let rendered = render_invoice(
@@ -380,7 +387,7 @@ pub fn preview(number: i64, output_dir: Option<String>) -> Result<()> {
         &invoice,
         &client,
         pay_button_for(&invoice),
-        &contact_email,
+        &branding,
     )?;
 
     let (dir, is_default) = preview_dir(output_dir);
@@ -411,17 +418,16 @@ pub fn send(number: i64, today: &str) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
     ensure_not_void(&invoice, "sent")?;
+    // The template is loaded before anything is built or created, so a broken
+    // one fails the send with no Stripe link made and nothing published.
+    let template = load_template(&get_data_dir())?;
     let (stripe, r2, mail) = build_clients(invoicing_config())?;
-    let contact_email = mail.from.clone();
-    let url = send_invoice(
-        &conn,
-        invoice.id,
-        today,
-        &contact_email,
-        &stripe,
-        &r2,
-        &mail,
-    )?;
+    let branding = Branding {
+        template: &template,
+        company: "",
+        contact_email: &mail.from,
+    };
+    let url = send_invoice(&conn, invoice.id, today, &branding, &stripe, &r2, &mail)?;
     println!("Sent invoice #{number}: {url}");
     Ok(())
 }
