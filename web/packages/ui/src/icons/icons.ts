@@ -172,6 +172,20 @@ export class WcIconTrash extends WcIconBase {
   }
 }
 
+@customElement('wc-icon-invoice')
+export class WcIconInvoice extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>`;
+  }
+}
+
+@customElement('wc-icon-clients')
+export class WcIconClients extends WcIconBase {
+  protected renderIcon() {
+    return svg`<path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5.5a3 3 0 0 1 0 6"/><path d="M17.5 14.2a5.5 5.5 0 0 1 4 5.3"/>`;
+  }
+}
+
 /** Every tag this module registers, for previews and the registry's icon check. */
 export const ICON_TAGS = [
   'wc-icon-dashboard',
@@ -197,6 +211,8 @@ export const ICON_TAGS = [
   'wc-icon-plus',
   'wc-icon-edit',
   'wc-icon-trash',
+  'wc-icon-invoice',
+  'wc-icon-clients',
 ] as const;
 
 export type IconTag = (typeof ICON_TAGS)[number];
@@ -226,5 +242,7 @@ declare global {
     'wc-icon-plus': WcIconPlus;
     'wc-icon-edit': WcIconEdit;
     'wc-icon-trash': WcIconTrash;
+    'wc-icon-invoice': WcIconInvoice;
+    'wc-icon-clients': WcIconClients;
   }
 }

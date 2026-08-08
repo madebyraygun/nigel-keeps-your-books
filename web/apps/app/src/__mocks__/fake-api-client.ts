@@ -1,4 +1,5 @@
 import type {
+  AgingParams,
   ApiClient,
   CashflowParams,
   ExpenseParams,
@@ -10,6 +11,7 @@ import type {
 import type {
   Account,
   AccountPatch,
+  AgingReport,
   AppSettings,
   BalanceReport,
   CashflowReport,
@@ -17,6 +19,9 @@ import type {
   CategoryPatch,
   CategoryRow,
   ChangePasswordRequest,
+  Client,
+  ClientDetail,
+  ClientPatch,
   CompanyNameResponse,
   ConfirmImportRequest,
   ConflictDetails,
@@ -32,11 +37,19 @@ import type {
   ImportListItem,
   ImportPreview,
   ImportRequest,
+  InvoiceDetail,
+  InvoiceListParams,
+  InvoiceListRow,
+  InvoicePatch,
   K1PrepReport,
   NewAccountRequest,
   NewCategoryRequest,
+  NewClientRequest,
+  NewInvoiceRequest,
   NewRuleRequest,
+  NextInvoiceNumber,
   PasswordStateResponse,
+  PayInvoiceRequest,
   PingResponse,
   PnlReport,
   ReconcileRequest,
@@ -54,8 +67,10 @@ import type {
   RuleRow,
   RuleTestRequest,
   RuleTestResult,
+  SendResult,
   SetPasswordRequest,
   StatusResponse,
+  SyncResult,
   TaxSummary,
   TransactionPatch,
   UndoneImport,
@@ -162,6 +177,20 @@ export const LOCKED_STATUS: StatusResponse = {
   encrypted: true,
   locked: true,
   companyName: null,
+};
+
+/** No open receivables — the five buckets exist even when they are all zero. */
+export const EMPTY_AGING: AgingReport = {
+  asOf: '2026-03-15',
+  buckets: [
+    { label: 'current', count: 0, total: 0 },
+    { label: '1-30', count: 0, total: 0 },
+    { label: '31-60', count: 0, total: 0 },
+    { label: '61-90', count: 0, total: 0 },
+    { label: '90+', count: 0, total: 0 },
+  ],
+  invoices: [],
+  outstanding: 0,
 };
 
 /** The order `GET /api/rules` answers in: priority descending, ties by id. */
@@ -873,5 +902,336 @@ export class FakeApiClient implements ApiClient {
     if (this.accounts.length === 0) return;
     if (this.accounts.some((account) => account.name === name)) return;
     throw notFoundError(`Unknown account: ${name}`);
+  }
+
+  // -- invoicing ------------------------------------------------------------
+  //
+  // The list and the details are separate fixtures because the screens fetch
+  // them separately, and a mutation has to be observable as *both* a write and
+  // the refetch that follows it. Only the guardrails the screens render are
+  // modelled here — a duplicate name, a blocked client delete, and whatever a
+  // test primes into the matching `*Error` — because reimplementing the data
+  // layer's rules in a double would mean two places for them to be wrong.
+
+  clients: Client[] = [];
+  clientDetails: Record<number, ClientDetail> = {};
+  invoices: InvoiceListRow[] = [];
+  invoiceDetails: Record<number, InvoiceDetail> = {};
+  aging: AgingReport = EMPTY_AGING;
+  nextInvoiceNumber = 1253;
+  sendResult: SendResult | null = null;
+  syncResult: SyncResult = { recorded: 0, invoicesChecked: 0, failures: [] };
+
+  /** Names a create or rename would collide with, as `add_client` sees them. */
+  readonly takenClientNames = new Set<string>();
+  /** How many invoices bill each client, for the `has_invoices` block. */
+  readonly clientInvoiceCounts: Record<number, number> = {};
+
+  clientsError: Error | null = null;
+  clientError: Error | null = null;
+  createClientError: Error | null = null;
+  updateClientError: Error | null = null;
+  deleteClientError: Error | null = null;
+
+  invoicesError: Error | null = null;
+  invoiceError: Error | null = null;
+  agingError: Error | null = null;
+  nextNumberError: Error | null = null;
+  createInvoiceError: Error | null = null;
+  updateInvoiceError: Error | null = null;
+  voidInvoiceError: Error | null = null;
+  payInvoiceError: Error | null = null;
+  sendInvoiceError: Error | null = null;
+  syncError: Error | null = null;
+
+  private nextClientId = 900;
+
+  async getClients(): Promise<Client[]> {
+    this.calls.push('getClients');
+    if (this.clientsError) throw this.clientsError;
+    return [...this.clients].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async getClient(id: number): Promise<ClientDetail> {
+    this.calls.push(`getClient:${id}`);
+    if (this.clientError) throw this.clientError;
+    const detail = this.clientDetails[id];
+    if (!detail) throw notFoundError(`No client with ID ${id}`);
+    return detail;
+  }
+
+  async createClient(input: NewClientRequest): Promise<Client> {
+    this.calls.push(`createClient:${input.name}`);
+    if (this.createClientError) throw this.createClientError;
+    this.assertNameFree(input.name);
+
+    const created: Client = {
+      id: this.nextClientId++,
+      name: input.name,
+      email: input.email ?? null,
+      billingAddress: input.billingAddress ?? null,
+      notes: input.notes ?? null,
+    };
+    this.clients = [...this.clients, created];
+    return created;
+  }
+
+  async updateClient(id: number, input: ClientPatch): Promise<Client> {
+    this.calls.push(`updateClient:${id}:${JSON.stringify(input)}`);
+    if (this.updateClientError) throw this.updateClientError;
+
+    const current = this.clients.find((candidate) => candidate.id === id);
+    if (!current) throw notFoundError(`No client with ID ${id}`);
+    if (input.name !== undefined && input.name !== current.name) {
+      this.assertNameFree(input.name);
+    }
+
+    const updated: Client = {
+      ...current,
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.email === undefined ? {} : { email: input.email }),
+      ...(input.billingAddress === undefined
+        ? {}
+        : { billingAddress: input.billingAddress }),
+      ...(input.notes === undefined ? {} : { notes: input.notes }),
+    };
+    this.clients = this.clients.map((c) => (c.id === id ? updated : c));
+    return updated;
+  }
+
+  async deleteClient(id: number): Promise<Deleted> {
+    this.calls.push(`deleteClient:${id}`);
+    if (this.deleteClientError) throw this.deleteClientError;
+
+    const count = this.clientInvoiceCounts[id] ?? 0;
+    if (count > 0) {
+      throw conflictError('has_invoices', {
+        message: `Cannot delete: client has ${count} invoices`,
+        count,
+      });
+    }
+    if (!this.clients.some((candidate) => candidate.id === id)) {
+      throw notFoundError(`No client with ID ${id}`);
+    }
+    this.clients = this.clients.filter((candidate) => candidate.id !== id);
+    return { id, deleted: true };
+  }
+
+  private assertNameFree(name: string): void {
+    if (!this.takenClientNames.has(name)) return;
+    throw conflictError('duplicate_name', {
+      message: `A client named "${name}" already exists`,
+      name,
+    });
+  }
+
+  async getInvoices(params: InvoiceListParams = {}): Promise<InvoiceListRow[]> {
+    const search = new URLSearchParams();
+    if (params.status !== undefined) search.set('status', params.status);
+    if (params.clientId !== undefined) search.set('clientId', String(params.clientId));
+    this.calls.push(`getInvoices:${search.toString()}`);
+    if (this.invoicesError) throw this.invoicesError;
+
+    const open = new Set(['sent', 'partial', 'overdue']);
+    return this.invoices.filter((row) => {
+      if (params.clientId !== undefined && row.clientId !== params.clientId) return false;
+      if (params.status === undefined) return true;
+      if (params.status === 'open') return open.has(row.status);
+      return row.status === params.status;
+    });
+  }
+
+  async getInvoice(number: number): Promise<InvoiceDetail> {
+    this.calls.push(`getInvoice:${number}`);
+    if (this.invoiceError) throw this.invoiceError;
+    return this.detail(number);
+  }
+
+  async getAging(params: AgingParams = {}): Promise<AgingReport> {
+    this.calls.push(`getAging:${params.asOf ?? ''}`);
+    if (this.agingError) throw this.agingError;
+    return this.aging;
+  }
+
+  async getNextInvoiceNumber(): Promise<NextInvoiceNumber> {
+    this.calls.push('getNextInvoiceNumber');
+    if (this.nextNumberError) throw this.nextNumberError;
+    return { number: this.nextInvoiceNumber };
+  }
+
+  async createInvoice(input: NewInvoiceRequest): Promise<InvoiceDetail> {
+    this.calls.push(`createInvoice:${JSON.stringify(input)}`);
+    if (this.createInvoiceError) throw this.createInvoiceError;
+
+    const number = this.nextInvoiceNumber++;
+    const total = input.items.reduce(
+      (sum, item) => sum + item.quantity * item.unitAmount,
+      0,
+    );
+    const client = this.clients.find((c) => c.id === input.clientId);
+    if (!client) throw notFoundError(`No client with ID ${input.clientId}`);
+
+    const created: InvoiceDetail = {
+      id: number,
+      number,
+      clientId: input.clientId,
+      status: 'draft',
+      currency: input.currency ?? 'USD',
+      issueDate: input.issueDate,
+      dueDate: input.dueDate ?? null,
+      subtotal: total,
+      tax: 0,
+      total,
+      notes: input.notes ?? null,
+      terms: input.terms ?? null,
+      stripePaymentLinkId: null,
+      stripePaymentLinkUrl: null,
+      publishedAt: null,
+      voidedAt: null,
+      client,
+      items: input.items.map((item, index) => ({
+        id: index + 1,
+        invoiceId: number,
+        description: item.description,
+        quantity: item.quantity,
+        unitAmount: item.unitAmount,
+        lineTotal: item.quantity * item.unitAmount,
+        position: index,
+      })),
+      payments: [],
+      paid: 0,
+      balance: total,
+      publicUrl: null,
+      canEdit: true,
+      canSend: client.email !== null,
+      canVoid: true,
+      canPay: true,
+    };
+    this.invoiceDetails[number] = created;
+    return created;
+  }
+
+  async updateInvoice(number: number, input: InvoicePatch): Promise<InvoiceDetail> {
+    this.calls.push(`updateInvoice:${number}:${JSON.stringify(input)}`);
+    if (this.updateInvoiceError) throw this.updateInvoiceError;
+
+    const current = this.detail(number);
+    const items = input.items ?? current.items;
+    const total = items.reduce((sum, item) => sum + item.quantity * item.unitAmount, 0);
+    const updated: InvoiceDetail = {
+      ...current,
+      ...(input.issueDate === undefined ? {} : { issueDate: input.issueDate }),
+      ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
+      ...(input.currency === undefined ? {} : { currency: input.currency }),
+      ...(input.notes === undefined ? {} : { notes: input.notes }),
+      ...(input.terms === undefined ? {} : { terms: input.terms }),
+      items: items.map((item, index) => ({
+        id: index + 1,
+        invoiceId: current.id,
+        description: item.description,
+        quantity: item.quantity,
+        unitAmount: item.unitAmount,
+        lineTotal: item.quantity * item.unitAmount,
+        position: index,
+      })),
+      subtotal: total,
+      total,
+      balance: total - current.paid,
+    };
+    this.invoiceDetails[number] = updated;
+    return updated;
+  }
+
+  async voidInvoice(number: number): Promise<InvoiceDetail> {
+    this.calls.push(`voidInvoice:${number}`);
+    if (this.voidInvoiceError) throw this.voidInvoiceError;
+
+    const updated: InvoiceDetail = {
+      ...this.detail(number),
+      status: 'void',
+      voidedAt: '2026-03-15',
+      canEdit: false,
+      canSend: false,
+      canVoid: false,
+      canPay: false,
+    };
+    this.invoiceDetails[number] = updated;
+    return updated;
+  }
+
+  async payInvoice(number: number, input: PayInvoiceRequest): Promise<InvoiceDetail> {
+    this.calls.push(`payInvoice:${number}:${JSON.stringify(input)}`);
+    if (this.payInvoiceError) throw this.payInvoiceError;
+
+    const current = this.detail(number);
+    const amount = input.amount ?? current.balance;
+    const paid = current.paid + amount;
+    const balance = current.total - paid;
+    const updated: InvoiceDetail = {
+      ...current,
+      paid,
+      balance,
+      status: balance <= 0.005 ? 'paid' : 'partial',
+      canPay: balance > 0.005,
+      payments: [
+        ...current.payments,
+        {
+          id: current.payments.length + 1,
+          invoiceId: current.id,
+          amount,
+          paidDate: input.date,
+          method: input.method ?? 'direct_deposit',
+          stripeCheckoutSessionId: null,
+        },
+      ],
+    };
+    this.invoiceDetails[number] = updated;
+    return updated;
+  }
+
+  async sendInvoice(number: number): Promise<SendResult> {
+    this.calls.push(`sendInvoice:${number}`);
+    if (this.sendInvoiceError) throw this.sendInvoiceError;
+    if (this.sendResult) return this.sendResult;
+
+    const sent: InvoiceDetail = {
+      ...this.detail(number),
+      status: 'sent',
+      publishedAt: '2026-03-15 09:00:00',
+      canEdit: false,
+      publicUrl: `https://billing.example.test/i/token${number}/`,
+    };
+    this.invoiceDetails[number] = sent;
+    return {
+      invoice: sent,
+      publicUrl: sent.publicUrl ?? '',
+      paymentLinkUrl: 'https://buy.stripe.test/link',
+      steps: [
+        { step: 'config', outcome: 'ok' },
+        { step: 'load', outcome: 'ok' },
+        { step: 'precheck', outcome: 'ok' },
+        { step: 'payment_link', outcome: 'ok' },
+        { step: 'render', outcome: 'ok' },
+        { step: 'publish', outcome: 'ok' },
+        { step: 'email', outcome: 'ok' },
+        { step: 'record', outcome: 'ok' },
+      ],
+    };
+  }
+
+  async syncInvoices(): Promise<SyncResult> {
+    this.calls.push('syncInvoices');
+    if (this.syncError) throw this.syncError;
+    return this.syncResult;
+  }
+
+  invoicePreviewUrl(number: number, format: 'html' | 'pdf'): string {
+    return `/preview/${number}.${format}`;
+  }
+
+  private detail(number: number): InvoiceDetail {
+    const detail = this.invoiceDetails[number];
+    if (!detail) throw notFoundError(`No invoice #${number}`);
+    return detail;
   }
 }

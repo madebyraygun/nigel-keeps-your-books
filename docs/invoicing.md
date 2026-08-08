@@ -315,6 +315,36 @@ accepted and never answered hung the terminal. A send makes five of them — two
 to Stripe, two to R2, one to Mailgun — so the slowest possible send is about
 150 seconds rather than forever.
 
+## In the browser
+
+`nigel serve` covers the whole of the above. **Clients** in the sidebar is the
+client manager: add, edit, delete (refused while any invoice bills them, of any
+status), and a jump to each client's invoices. **Invoices** is the list, with
+an A/R aging strip above it and status filters that are links, so a filtered
+list is an address you can keep or bookmark.
+
+Opening an invoice gives you its totals, its line items, its payment history,
+the addresses it was published to, and a collapsed preview of the page a client
+opens — rendered by the same code `invoice send` publishes, so it is the real
+document rather than an impression of it. The actions on that screen are the
+CLI's: **Send…**, **Record payment…**, **Edit** and **Void…**, each enabled by
+the server's own guards rather than by a status the browser reasoned about.
+
+Sending asks first, and the confirmation names every consequence — the payment
+link and its amount, the host the page will be published to, and the address
+the email is going to — before anything happens. If a step fails, the dialog
+stays open and shows where it stopped, in plain terms, with the gateway's own
+message underneath it. A failure after the email went out offers no retry, and
+says why: the client already has the invoice.
+
+Drafting a new invoice is a full screen rather than a dialog, with repeatable
+line items and a running subtotal. A/R aging lives under **Reports** as its
+ninth entry, since it is a report to read rather than a thing to act on; the
+strip on the invoice list links straight to it.
+
+Two things the browser does not do, both because the CLI does not either: it
+never guesses at an email address's shape, and it cannot un-void an invoice.
+
 ## Customizing the invoice page
 
 The page a client opens is yours to change without rebuilding Nigel. Put a file

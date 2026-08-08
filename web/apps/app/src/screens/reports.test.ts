@@ -123,17 +123,55 @@ describe('the reports screen', () => {
   });
 
   describe('the landing page', () => {
-    it('lists all eight reports', async () => {
+    it('lists the eight report routes plus aging', async () => {
       const { el } = await mount();
       const grid = query(el, 'wc-link-grid');
       const links = [...(grid?.shadowRoot?.querySelectorAll('a') ?? [])];
-      expect(links).toHaveLength(8);
+      expect(links).toHaveLength(9);
       expect(links.map((a) => a.getAttribute('href'))).toContain('#/reports?report=pnl');
     });
 
     it('fetches nothing until a report is chosen', async () => {
       const { client } = await mount();
       expect(client.calls).toEqual([]);
+    });
+
+    it('serves A/R aging from the invoices route, with no export links', async () => {
+      // Aging is the ninth entry in a catalog of eight routes: it reads like a
+      // report, but `/api/exports` carries no `aging` slug because
+      // `ReportKind` has none, so there is no file to offer.
+      const client = seeded();
+      client.aging = {
+        asOf: '2026-03-15',
+        buckets: [
+          { label: 'current', count: 2, total: 3050 },
+          { label: '1-30', count: 0, total: 0 },
+          { label: '31-60', count: 1, total: 960 },
+          { label: '61-90', count: 0, total: 0 },
+          { label: '90+', count: 0, total: 0 },
+        ],
+        invoices: [
+          {
+            number: 1249,
+            client: 'Globex',
+            dueDate: '2026-01-30',
+            daysPastDue: 44,
+            bucket: '31-60',
+            total: 960,
+            paid: 0,
+            balance: 960,
+          },
+        ],
+        outstanding: 4010,
+      };
+
+      const { el } = await mount('report=aging', client);
+      expect(client.calls).toContain('getAging:');
+      expect(query(el, 'wc-export-links')).toBeNull();
+      const panels = [...(el.shadowRoot?.querySelectorAll('wc-panel') ?? [])].map(
+        (panel) => panel.getAttribute('heading'),
+      );
+      expect(panels).toEqual(['Summary — as of 2026-03-15', 'Open invoices']);
     });
 
     it('falls back to the landing page for a slug that does not exist', async () => {

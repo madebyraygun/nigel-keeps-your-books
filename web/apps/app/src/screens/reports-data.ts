@@ -1,6 +1,7 @@
 import type { ReportColumn, ReportTableRow } from '@nigel/ui';
 
 import type {
+  AgingReport,
   CashflowReport,
   ExpenseBreakdown,
   ExportParams,
@@ -34,8 +35,18 @@ export interface ReportSupports {
   account: boolean;
 }
 
+/**
+ * A slug the reports screen serves, which is the eight routes plus aging.
+ *
+ * Aging is deliberately **not** in `REPORT_SLUGS`: that array mirrors
+ * `/api/reports/*`, and A/R aging is served at `/api/invoices/aging` because
+ * `ReportKind` has no aging variant. It appears here because it is a report to
+ * read even though it is not a report route.
+ */
+export type ReportViewSlug = ReportSlug | 'aging';
+
 export interface ReportDef {
-  slug: ReportSlug;
+  slug: ReportViewSlug;
   title: string;
   description: string;
   icon: string;
@@ -112,12 +123,38 @@ export const REPORTS: Record<ReportSlug, ReportDef> = {
   },
 };
 
+/**
+ * A/R aging, the ninth entry in a catalog of eight routes.
+ *
+ * It reads like a report and belongs with them, but it takes no period at all
+ * (`ReportKind::Aging` is `DateGranularity::None`) and has no export route —
+ * `/api/exports` still carries eight, because giving `ReportKind` an aging
+ * variant would mean touching the vocabulary eight endpoints and two front
+ * ends share.
+ */
+export const AGING_DEF: ReportDef = {
+  slug: 'aging',
+  title: 'A/R aging',
+  description: 'Open receivables by how late they are, and the invoices behind each bucket.',
+  icon: 'wc-icon-invoice',
+  supports: NONE,
+};
+
 export function isReportSlug(value: string | null): value is ReportSlug {
   return value !== null && (REPORT_SLUGS as readonly string[]).includes(value);
 }
 
+export function isReportViewSlug(value: string | null): value is ReportViewSlug {
+  return isReportSlug(value) || value === 'aging';
+}
+
 export function reportDefs(): ReportDef[] {
-  return REPORT_SLUGS.map((slug) => REPORTS[slug]);
+  return [...REPORT_SLUGS.map((slug) => REPORTS[slug]), AGING_DEF];
+}
+
+/** The def for any slug the screen serves, aging included. */
+export function reportDef(slug: ReportViewSlug): ReportDef {
+  return slug === 'aging' ? AGING_DEF : REPORTS[slug];
 }
 
 /**
@@ -127,8 +164,11 @@ export function reportDefs(): ReportDef[] {
  * refused, which is what lets one screen serve eight routes with different
  * vocabularies.
  */
-export function reportParamsFrom(slug: ReportSlug, params: URLSearchParams): ExportParams {
-  const { supports } = REPORTS[slug];
+export function reportParamsFrom(
+  slug: ReportViewSlug,
+  params: URLSearchParams,
+): ExportParams {
+  const { supports } = reportDef(slug);
   const request: ExportParams = {};
 
   const month = params.get('month');
@@ -453,4 +493,68 @@ export function k1Warnings(report: K1PrepReport, formatMoney: (n: number) => str
   }
 
   return warnings;
+}
+
+/**
+ * The aging summary: the five buckets and the outstanding total.
+ *
+ * Shaped like `cli::report::text::format_aging`'s own table — same columns,
+ * same order, and "Total Outstanding" as the ruled last row — so the parity
+ * test compares like with like.
+ */
+export function agingTable(report: AgingReport): ReportTable {
+  const rows: ReportTableRow[] = report.buckets.map((bucket) => ({
+    cells: { bucket: bucket.label, count: bucket.count, amount: bucket.total },
+  }));
+
+  rows.push({
+    cells: {
+      bucket: 'Total Outstanding',
+      count: report.invoices.length,
+      amount: report.outstanding,
+    },
+    emphasis: 'total',
+  });
+
+  return {
+    columns: [
+      { key: 'bucket', label: 'Bucket', kind: 'text' },
+      { key: 'count', label: 'Invoices', kind: 'count' },
+      { key: 'amount', label: 'Amount', kind: 'moneyAbs' },
+    ],
+    rows,
+  };
+}
+
+/**
+ * Days past due, or an em dash when the invoice is not late yet.
+ *
+ * `days_past_due` goes negative for an invoice due next month, and "-22 days
+ * late" is not a thing. The CLI prints the dash; so does this.
+ */
+export function daysPastDueLabel(days: number): string {
+  return days > 0 ? String(days) : '—';
+}
+
+/** The open invoices behind the buckets, in the order the report returns them. */
+export function agingInvoicesTable(report: AgingReport): ReportTable {
+  return {
+    columns: [
+      { key: 'number', label: 'Invoice', kind: 'text' },
+      { key: 'client', label: 'Client', kind: 'text' },
+      { key: 'due', label: 'Due', kind: 'text' },
+      { key: 'days', label: 'Days', kind: 'text' },
+      { key: 'balance', label: 'Balance', kind: 'moneyAbs' },
+    ],
+    rows: report.invoices.map((invoice) => ({
+      cells: {
+        number: `#${invoice.number}`,
+        client: invoice.client,
+        due: invoice.dueDate,
+        days: daysPastDueLabel(invoice.daysPastDue),
+        balance: invoice.balance,
+      },
+      href: `#/invoices?number=${invoice.number}`,
+    })),
+  };
 }

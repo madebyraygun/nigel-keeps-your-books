@@ -26,6 +26,8 @@ const ALL: ScreenId[] = [
   'accounts',
   'categories',
   'rules',
+  'clients',
+  'invoices',
   'reconcile',
   'undo',
   'settings',
@@ -81,7 +83,7 @@ describe('screen registry', () => {
       expect(navItems().map((i) => i.id)).not.toContain('unlock');
     });
 
-    it('lists the other eleven screens in registry order', () => {
+    it('lists every screen but the unlock gate, in registry order', () => {
       expect(navItems().map((i) => i.id)).toEqual(ALL.filter((id) => id !== 'unlock'));
     });
 

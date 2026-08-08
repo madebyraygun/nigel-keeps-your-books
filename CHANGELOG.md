@@ -3,6 +3,7 @@
 ## [1.1.0] (WIP)
 
 ### Added
+- **Invoicing in the web UI** — `nigel serve` now covers the whole invoicing surface: a clients manager, an invoice list with an A/R aging strip, a full-view invoice editor with repeatable line items, a sandboxed preview of the client-facing page, payments, void, Stripe sync, and a send that names every consequence before it happens and reports which step failed if one does. A/R aging joins the reports screen as a ninth report, and every figure the browser prints is tested against the figures `nigel invoice list/show/aging` and `nigel client list` print
 - **`NIGEL_DB_PASSWORD` for unattended use** — an encrypted database can be unlocked without a terminal, so `nigel backup` runs from launchd, cron, or CI. The variable is consulted whenever the database is encrypted and takes precedence over the prompt; an unusable value (wrong, empty, or not valid UTF-8) is a hard error rather than a fall back to a prompt no scheduled job could answer. Plaintext databases ignore it entirely. See "Automated backups" in the README for the recommended keychain-sourced invocation and its tradeoffs
 - **`nigel recategorize`** — non-interactive bulk category reassignment by transaction IDs or filters (`--from-category`, `--uncategorized`, `--year`/`--month`/`--from`/`--to`, `--pattern` with `--match-type`, `--account`, `--min-amount`/`--max-amount`) with `--dry-run` preview and `--yes` confirmation for filter-based moves; clears review flags like an in-app review
 
