@@ -123,9 +123,9 @@ export class NigelSettingsScreen extends SignalWatcher(LitElement) {
       await this.client.setCompanyName(this.companyDraft);
       // The sidebar and the document title read this from status.
       await this.store.refreshStatus();
-      this.toastOk('Business name saved.');
+      this.toastOk('Name saved.');
     } catch (error) {
-      this.toastError(error, 'Could not save the business name.');
+      this.toastError(error, 'Could not save the name.');
     } finally {
       this.busy = null;
     }
@@ -227,15 +227,17 @@ export class NigelSettingsScreen extends SignalWatcher(LitElement) {
   render() {
     const status = this.store.status.get();
     const encrypted = status?.encrypted ?? false;
+    // Same metadata field either way; only the label follows the books profile.
+    const nameLabel = status?.profile === 'personal' ? 'Household name' : 'Business name';
 
     return html`
       <wc-panel
-        heading="Business name"
+        heading=${nameLabel}
         description="Shown in the sidebar, on reports, and in the browser tab."
       >
         <div class="row">
           <wa-input
-            label="Business name"
+            label=${nameLabel}
             .value=${this.companyName}
             ?disabled=${this.busy === 'company'}
             @input=${this.handleCompanyInput}

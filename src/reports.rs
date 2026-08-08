@@ -76,6 +76,14 @@ pub fn date_range_label(month: Option<&str>, year: Option<i32>) -> String {
     format!("FY {year}")
 }
 
+/// SQL predicate keeping money-movement categories (`form_line = 'excluded'`,
+/// e.g. the stock `Transfer` category) out of income-statement math. A transfer
+/// between own accounts is not income or spending, so P&L, the expense
+/// breakdown, and cash flow skip those rows; the register and per-account
+/// balances keep them, because per account the cash really moved. Expects the
+/// categories table aliased as `c`; NULL-safe so uncategorized rows pass.
+const EXCLUDE_TRANSFERS: &str = "COALESCE(c.form_line, '') <> 'excluded'";
+
 fn to_sql_params(params: &[String]) -> Vec<&dyn rusqlite::types::ToSql> {
     params
         .iter()
@@ -175,7 +183,7 @@ fn query_category_totals(
     let sql = format!(
         "SELECT c.name, SUM(t.amount) as total \
          FROM transactions t JOIN categories c ON t.category_id = c.id \
-         WHERE {clause} AND c.category_type = '{category_type}' \
+         WHERE {clause} AND c.category_type = '{category_type}' AND {EXCLUDE_TRANSFERS} \
          GROUP BY c.name ORDER BY {order}"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -230,7 +238,7 @@ pub fn get_expense_breakdown(
     let sql = format!(
         "SELECT c.name, SUM(t.amount) as total, COUNT(*) as count \
          FROM transactions t JOIN categories c ON t.category_id = c.id \
-         WHERE {clause} AND c.category_type = 'expense' \
+         WHERE {clause} AND c.category_type = 'expense' AND {EXCLUDE_TRANSFERS} \
          GROUP BY c.name ORDER BY total ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -256,6 +264,7 @@ pub fn get_expense_breakdown(
         "SELECT t.vendor, SUM(t.amount) as total, COUNT(*) as count \
          FROM transactions t JOIN categories c ON t.category_id = c.id \
          WHERE {clause} AND c.category_type = 'expense' AND t.vendor IS NOT NULL \
+           AND {EXCLUDE_TRANSFERS} \
          GROUP BY t.vendor ORDER BY total ASC LIMIT 10"
     );
     let mut vstmt = conn.prepare(&vendor_sql)?;
@@ -348,11 +357,15 @@ pub fn get_cashflow(
 ) -> Result<CashflowReport> {
     let (clause, params) = date_filter(year, month, None, None)?;
 
+    // Transfers are excluded from both the flows and the running balance: when
+    // both legs are imported they cancel anyway, and when one is not, counting
+    // the lone leg would report a move between own accounts as spending.
     let sql = format!(
         "SELECT substr(t.date, 1, 7) as month, \
          SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) as inflows, \
          SUM(CASE WHEN t.amount < 0 THEN t.amount ELSE 0 END) as outflows \
-         FROM transactions t WHERE {clause} \
+         FROM transactions t LEFT JOIN categories c ON t.category_id = c.id \
+         WHERE {clause} AND {EXCLUDE_TRANSFERS} \
          GROUP BY substr(t.date, 1, 7) ORDER BY month"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -370,8 +383,11 @@ pub fn get_cashflow(
         if m > 1 {
             let end = format!("{y:04}-{m:02}");
             conn.query_row(
-                "SELECT COALESCE(SUM(amount), 0) FROM transactions \
-                 WHERE date >= ?1 AND date < ?2",
+                &format!(
+                    "SELECT COALESCE(SUM(t.amount), 0) \
+                     FROM transactions t LEFT JOIN categories c ON t.category_id = c.id \
+                     WHERE t.date >= ?1 AND t.date < ?2 AND {EXCLUDE_TRANSFERS}"
+                ),
                 rusqlite::params![format!("{y:04}-01"), end],
                 |row| row.get::<_, f64>(0),
             )?
@@ -576,7 +592,11 @@ pub fn get_balance(conn: &Connection) -> Result<BalanceReport> {
 
     let current_year = chrono::Local::now().year();
     let ytd_net_income: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(amount), 0) as net FROM transactions WHERE date LIKE ?1",
+        &format!(
+            "SELECT COALESCE(SUM(t.amount), 0) as net \
+             FROM transactions t LEFT JOIN categories c ON t.category_id = c.id \
+             WHERE t.date LIKE ?1 AND {EXCLUDE_TRANSFERS}"
+        ),
         [format!("{current_year}%")],
         |row| row.get(0),
     )?;
@@ -859,6 +879,155 @@ mod tests {
 
         let err = get_register_row(&conn, 4242).unwrap_err();
         assert!(matches!(err, NigelError::NotFound(_)), "got: {err}");
+    }
+
+    /// Seed one account with income, an expense, and both legs of a transfer
+    /// categorized under the stock `Transfer` category (`form_line = 'excluded'`).
+    fn db_with_transfer() -> (tempfile::TempDir, Connection, i64) {
+        let (dir, conn) = test_db();
+        conn.execute(
+            "INSERT INTO accounts (name, account_type) VALUES ('Checking', 'checking')",
+            [],
+        )
+        .unwrap();
+        let account = conn.last_insert_rowid();
+        let income: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Client Services'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let software: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Software & Subscriptions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let transfer: i64 = conn
+            .query_row("SELECT id FROM categories WHERE name = 'Transfer'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let rows: [(&str, &str, f64, i64); 4] = [
+            ("2025-01-10", "CLIENT PAYMENT", 5000.0, income),
+            ("2025-02-05", "ADOBE", -50.0, software),
+            ("2025-01-20", "TRANSFER TO SAVINGS", -2000.0, transfer),
+            ("2025-02-14", "TRANSFER FROM SAVINGS", 500.0, transfer),
+        ];
+        for (date, desc, amount, category) in rows {
+            conn.execute(
+                "INSERT INTO transactions (account_id, date, description, amount, category_id, vendor) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'Bank')",
+                rusqlite::params![account, date, desc, amount, category],
+            )
+            .unwrap();
+        }
+        (dir, conn, account)
+    }
+
+    #[test]
+    fn pnl_excludes_transfer_categories() {
+        let (_dir, conn, _) = db_with_transfer();
+        let report = get_pnl(&conn, Some(2025), None, None, None).unwrap();
+        assert_eq!(report.total_income, 5000.0);
+        assert_eq!(report.total_expenses, -50.0);
+        assert_eq!(report.net, 4950.0);
+        assert!(
+            !report.expenses.iter().any(|item| item.name == "Transfer"),
+            "Transfer must not appear as an expense line"
+        );
+        assert!(!report.income.iter().any(|item| item.name == "Transfer"));
+    }
+
+    #[test]
+    fn expense_breakdown_excludes_transfer_categories() {
+        let (_dir, conn, _) = db_with_transfer();
+        let report = get_expense_breakdown(&conn, Some(2025), None).unwrap();
+        assert_eq!(report.total, -50.0);
+        assert!(!report.categories.iter().any(|item| item.name == "Transfer"));
+        // The vendor rollup shares the exclusion: 'Bank' would otherwise carry
+        // the transfer leg's -2000 into the top-vendors table.
+        let bank: f64 = report
+            .top_vendors
+            .iter()
+            .filter(|v| v.vendor == "Bank")
+            .map(|v| v.total)
+            .sum();
+        assert_eq!(bank, -50.0);
+    }
+
+    #[test]
+    fn cashflow_excludes_transfer_categories() {
+        let (_dir, conn, _) = db_with_transfer();
+        let report = get_cashflow(&conn, Some(2025), None).unwrap();
+        let jan = report.months.iter().find(|m| m.month == "2025-01").unwrap();
+        assert_eq!(jan.inflows, 5000.0);
+        assert_eq!(jan.outflows, 0.0, "the transfer leg is not an outflow");
+        let feb = report.months.iter().find(|m| m.month == "2025-02").unwrap();
+        assert_eq!(feb.inflows, 0.0, "the returning leg is not an inflow");
+        assert_eq!(feb.outflows, -50.0);
+        assert_eq!(feb.running_balance, 4950.0);
+    }
+
+    #[test]
+    fn cashflow_prior_balance_excludes_transfer_categories() {
+        let (_dir, conn, _) = db_with_transfer();
+        // A single-month view seeds its running balance from the year's prior
+        // months, which must apply the same exclusion as the months themselves.
+        let report = get_cashflow(&conn, Some(2025), Some(2)).unwrap();
+        let feb = report.months.iter().find(|m| m.month == "2025-02").unwrap();
+        assert_eq!(feb.running_balance, 4950.0);
+    }
+
+    #[test]
+    fn balance_report_keeps_transfers_but_ytd_net_income_skips_them() {
+        let (_dir, conn, account) = db_with_transfer();
+        // Current-year rows so ytd_net_income (which is always year-to-date of
+        // the running year) has something to add up.
+        let year = chrono::Local::now().year();
+        let transfer: i64 = conn
+            .query_row("SELECT id FROM categories WHERE name = 'Transfer'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let income: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = 'Client Services'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, ?2, 'RETAINER', 1000.0, ?3)",
+            rusqlite::params![account, format!("{year}-01-05"), income],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transactions (account_id, date, description, amount, category_id) \
+             VALUES (?1, ?2, 'TRANSFER OUT', -300.0, ?3)",
+            rusqlite::params![account, format!("{year}-01-06"), transfer],
+        )
+        .unwrap();
+
+        let report = get_balance(&conn).unwrap();
+        // Per account the cash really moved, so the account balance includes
+        // every transfer leg even though the income statements skip them.
+        let checking = report
+            .accounts
+            .iter()
+            .find(|a| a.name == "Checking")
+            .unwrap();
+        assert_eq!(
+            checking.balance,
+            5000.0 - 50.0 - 2000.0 + 500.0 + 1000.0 - 300.0
+        );
+        // The fixture's dated rows only join the YTD figure when the suite
+        // happens to run in their calendar year.
+        let expected_ytd = if year == 2025 { 1000.0 + 4950.0 } else { 1000.0 };
+        assert_eq!(report.ytd_net_income, expected_ytd);
     }
 
     #[test]

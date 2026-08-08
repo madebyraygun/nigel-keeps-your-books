@@ -65,6 +65,13 @@ function labels(rows: { cells: Record<string, unknown> }[], key = 'name'): unkno
 describe('the report catalog', () => {
   it('describes every slug exactly once', () => {
     expect(reportDefs().map((def) => def.slug)).toEqual([...REPORT_SLUGS]);
+    expect(reportDefs('business').map((def) => def.slug)).toEqual([...REPORT_SLUGS]);
+  });
+
+  it('drops the K-1 worksheet for personal books', () => {
+    const slugs = reportDefs('personal').map((def) => def.slug);
+    expect(slugs).not.toContain('k1');
+    expect(slugs).toEqual(REPORT_SLUGS.filter((slug) => slug !== 'k1'));
   });
 
   it('recognizes a slug and rejects anything else', () => {

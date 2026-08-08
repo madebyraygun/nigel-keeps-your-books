@@ -58,6 +58,10 @@ pub(crate) struct StatusResponse {
     encrypted: bool,
     locked: bool,
     company_name: Option<String>,
+    /// `business` or `personal` — which chart of accounts the database keeps.
+    /// The SPA hides the K-1 worksheet and relabels the name field from this.
+    /// Locked databases report `business` until unlocked, the safe superset.
+    profile: &'static str,
     version: &'static str,
     data_dir: String,
     pdf_export: bool,
@@ -79,17 +83,21 @@ pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse
     let encrypted = db::is_encrypted(&db_path)?;
     let locked = encrypted && db::get_db_password().is_none();
 
-    // Reading the company name means reading the database, which needs the key.
-    let company_name = if initialized && !locked {
+    // Reading the company name (and profile) means reading the database,
+    // which needs the key.
+    let (company_name, profile) = if initialized && !locked {
         let path = db_path.clone();
-        tokio::task::spawn_blocking(move || -> ApiResult<Option<String>> {
+        tokio::task::spawn_blocking(move || -> ApiResult<(Option<String>, db::Profile)> {
             let conn = db::get_connection(&path)?;
-            Ok(db::get_metadata(&conn, "company_name"))
+            Ok((
+                db::get_metadata(&conn, "company_name"),
+                db::get_profile(&conn),
+            ))
         })
         .await
         .map_err(ApiError::internal)??
     } else {
-        None
+        (None, db::Profile::default())
     };
 
     Ok(StatusResponse {
@@ -97,6 +105,7 @@ pub(crate) async fn current_status(state: &AppState) -> ApiResult<StatusResponse
         encrypted,
         locked,
         company_name,
+        profile: profile.as_str(),
         version: env!("CARGO_PKG_VERSION"),
         // Named from the database the server actually opened rather than from
         // settings.json, which another process is free to repoint mid-run.

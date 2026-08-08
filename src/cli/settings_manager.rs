@@ -41,6 +41,8 @@ pub struct SettingsManager {
     status_ttl: u8,
     encrypted: bool,
     update_check: bool,
+    /// "Business Name" or "Household Name", from the database's profile.
+    name_label: &'static str,
 }
 
 impl SettingsManager {
@@ -49,6 +51,10 @@ impl SettingsManager {
         let db_path = get_data_dir().join("nigel.db");
         let encrypted = db::is_encrypted(&db_path)?;
         let settings = load_settings();
+        let name_label = match db::get_profile(conn) {
+            db::Profile::Business => "Business Name",
+            db::Profile::Personal => "Household Name",
+        };
         Ok(Self {
             greeting: greeting.to_string(),
             screen: Screen::Main,
@@ -59,6 +65,7 @@ impl SettingsManager {
             status_ttl: 0,
             encrypted,
             update_check: settings.update_check,
+            name_label,
         })
     }
 
@@ -145,7 +152,10 @@ impl SettingsManager {
                 Style::default()
             };
             lines.push(Line::from(vec![
-                Span::styled(format!(" {marker} Business Name    "), label_style),
+                Span::styled(
+                    format!(" {marker} {label:<17}", label = self.name_label),
+                    label_style,
+                ),
                 Span::styled(format!("{}_", self.edit_buffer), SELECTED_STYLE),
             ]));
         } else {
@@ -154,7 +164,7 @@ impl SettingsManager {
             } else {
                 &self.company_name
             };
-            lines.push(Self::menu_row("Business Name", display_name, name_selected));
+            lines.push(Self::menu_row(self.name_label, display_name, name_selected));
         }
 
         lines.push(Line::from(""));
@@ -300,10 +310,10 @@ impl SettingsManager {
                 match db::set_metadata(conn, "company_name", &new_name) {
                     Ok(()) => {
                         self.company_name = new_name;
-                        self.set_status("Business name saved.".into(), true);
+                        self.set_status("Name saved.".into(), true);
                     }
                     Err(e) => {
-                        self.set_status(format!("Could not save business name: {e}"), false);
+                        self.set_status(format!("Could not save name: {e}"), false);
                     }
                 }
                 self.edit_buffer.clear();

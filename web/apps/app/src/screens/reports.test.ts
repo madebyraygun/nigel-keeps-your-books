@@ -136,6 +136,16 @@ describe('the reports screen', () => {
       expect(client.calls).toEqual([]);
     });
 
+    it('offers no K-1 worksheet on personal books', async () => {
+      const client = seeded();
+      client.status = { ...UNLOCKED_STATUS, profile: 'personal' };
+      const { el } = await mount('', client);
+      const grid = query(el, 'wc-link-grid');
+      const links = [...(grid?.shadowRoot?.querySelectorAll('a') ?? [])];
+      expect(links).toHaveLength(7);
+      expect(links.map((a) => a.getAttribute('href'))).not.toContain('#/reports?report=k1');
+    });
+
     it('falls back to the landing page for a slug that does not exist', async () => {
       const { el, client } = await mount('report=nonsense');
       expect(query(el, 'wc-link-grid')).not.toBeNull();

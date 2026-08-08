@@ -15,12 +15,23 @@ export interface PingResponse {
   version: string;
 }
 
+/**
+ * Which chart of accounts the database keeps books under.
+ *
+ * Distinct from CSV import profiles (`CsvProfile`) — this is the business
+ * versus personal split. It decides whether the K-1 worksheet is offered and
+ * how the name field is labelled.
+ */
+export type BooksProfile = 'business' | 'personal';
+
 /** `GET /api/status` */
 export interface StatusResponse {
   initialized: boolean;
   encrypted: boolean;
   locked: boolean;
   companyName: string | null;
+  /** Locked databases report `business` until unlocked. */
+  profile: BooksProfile;
   version: string;
   dataDir: string;
   /** Whether this build can render PDFs. False means offer text export only. */

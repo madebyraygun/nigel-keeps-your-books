@@ -1,6 +1,7 @@
 import type { ReportColumn, ReportTableRow } from '@nigel/ui';
 
 import type {
+  BooksProfile,
   CashflowReport,
   ExpenseBreakdown,
   ExportParams,
@@ -116,8 +117,18 @@ export function isReportSlug(value: string | null): value is ReportSlug {
   return value !== null && (REPORT_SLUGS as readonly string[]).includes(value);
 }
 
-export function reportDefs(): ReportDef[] {
-  return REPORT_SLUGS.map((slug) => REPORTS[slug]);
+/**
+ * The reports the landing page offers, for the given books profile.
+ *
+ * Personal books drop the K-1 worksheet — a Form 1120-S artifact with nothing
+ * to say about a chart of accounts that maps to no tax form. The route itself
+ * stays reachable, exactly as `nigel report k1-prep` does in a terminal; only
+ * the directory stops offering it.
+ */
+export function reportDefs(profile: BooksProfile = 'business'): ReportDef[] {
+  return REPORT_SLUGS.filter((slug) => profile === 'business' || slug !== 'k1').map(
+    (slug) => REPORTS[slug],
+  );
 }
 
 /**
