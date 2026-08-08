@@ -8,15 +8,17 @@ use ratatui::{
 };
 use rusqlite::Connection;
 
-use crate::cli::invoice::{build_clients, ensure_not_void, payment_amount};
+use crate::cli::invoice::{build_clients, company_name, ensure_not_void, payment_amount};
 use crate::error::Result;
 use crate::fmt::money;
 use crate::invoicing::clients::get_client;
+use crate::invoicing::gateway::{AssetPublisher, Mailer, PaymentGateway};
 use crate::invoicing::invoices::{
     ensure_voidable, get_invoice, line_items, list_invoices, paid_amount, payments, record_payment,
     validate_date, void_invoice, InvoiceListRow,
 };
-use crate::invoicing::render_html::load_template;
+use crate::invoicing::render_html::{load_template, Branding};
+use crate::invoicing::send::send_invoice;
 use crate::models::{Client, Invoice, InvoiceLineItem, InvoicePayment};
 use crate::settings::{get_data_dir, invoicing_config, InvoicingConfig};
 use crate::tui::{FOOTER_STYLE, GREEN, HEADER_STYLE};
@@ -36,6 +38,11 @@ enum Screen {
     ConfirmVoid,
     ConfirmSend,
     Sending,
+    ActionResult {
+        title: String,
+        lines: Vec<String>,
+        is_error: bool,
+    },
 }
 
 /// The four methods `invoice_payments.method` allows. A fifth option would be
@@ -191,7 +198,32 @@ impl InvoiceManager {
             Screen::Detail | Screen::ConfirmVoid | Screen::ConfirmSend => self.draw_detail(frame),
             Screen::PayForm(form) => self.draw_pay_form(frame, form),
             Screen::Sending => self.draw_sending(frame),
+            Screen::ActionResult {
+                title,
+                lines,
+                is_error,
+            } => self.draw_action_result(frame, title, lines, *is_error),
         }
+    }
+
+    fn draw_action_result(&self, frame: &mut Frame, title: &str, body: &[String], is_error: bool) {
+        let (content_area, hints_area) = self.draw_chrome(frame);
+        let title_style = if is_error {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD)
+        };
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(format!(" {title}"), title_style)),
+            Line::from(""),
+        ];
+        for line in body {
+            lines.push(Line::from(format!("   {line}")));
+        }
+        frame.render_widget(Paragraph::new(lines), content_area);
+        frame.render_widget(Paragraph::new(" Esc=back").style(FOOTER_STYLE), hints_area);
     }
 
     /// S7. The terminal really is unresponsive for the duration of the send,
@@ -548,6 +580,11 @@ impl InvoiceManager {
             Screen::PayForm(_) => self.handle_pay_key(code, conn),
             Screen::ConfirmVoid => self.handle_void_key(code, conn),
             Screen::ConfirmSend => self.handle_confirm_send_key(code),
+            // Any key dismisses the result and returns to the reloaded detail.
+            Screen::ActionResult { .. } => {
+                self.screen = Screen::Detail;
+                InvoiceAction::Continue
+            }
             // The screen is painted and then blocks; no key is read until the
             // send returns.
             Screen::Sending => InvoiceAction::Continue,
@@ -587,6 +624,119 @@ impl InvoiceManager {
         }
         self.screen = Screen::ConfirmSend;
         InvoiceAction::Continue
+    }
+
+    /// Run the send the confirmation authorised. The controller calls this
+    /// after painting S7, because the work blocks the whole loop.
+    pub fn perform_pending(&mut self, conn: &Connection) {
+        self.perform_pending_with(
+            conn,
+            &crate::cli::today(),
+            invoicing_config(),
+            &get_data_dir(),
+        );
+        drain_buffered_input();
+    }
+
+    pub(crate) fn perform_pending_with(
+        &mut self,
+        conn: &Connection,
+        today: &str,
+        cfg: InvoicingConfig,
+        data_dir: &std::path::Path,
+    ) {
+        if self.detail.is_none() {
+            return;
+        }
+        let prepared = load_template(data_dir).and_then(|template| {
+            let clients = build_clients(cfg)?;
+            Ok((template, clients))
+        });
+        match prepared {
+            Ok((template, (stripe, r2, mail))) => {
+                let company = company_name(conn);
+                let branding = Branding {
+                    template: &template,
+                    company: &company,
+                    contact_email: &mail.from,
+                };
+                self.perform_send(conn, today, &branding, &stripe, &r2, &mail);
+            }
+            Err(e) => self.finish_send(conn, Err(e)),
+        }
+    }
+
+    /// The testable half: the same orchestration against injected clients.
+    pub(crate) fn perform_send<G: PaymentGateway, P: AssetPublisher, M: Mailer>(
+        &mut self,
+        conn: &Connection,
+        today: &str,
+        branding: &Branding<'_>,
+        gateway: &G,
+        publisher: &P,
+        mailer: &M,
+    ) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let outcome = send_invoice(
+            conn,
+            detail.invoice.id,
+            today,
+            branding,
+            gateway,
+            publisher,
+            mailer,
+        );
+        self.finish_send(conn, outcome);
+    }
+
+    fn finish_send(&mut self, conn: &Connection, outcome: Result<String>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let (invoice_id, number) = (detail.invoice.id, detail.invoice.number);
+        self.reload_list(conn);
+        if let Err(e) = self.load_detail(conn, invoice_id) {
+            self.detail = None;
+            self.screen = Screen::List;
+            self.set_status(e.to_string());
+            return;
+        }
+        let reloaded = self.detail.as_ref().expect("just loaded");
+
+        let (title, lines, is_error) = match outcome {
+            Ok(url) => (
+                format!("Invoice #{number} sent"),
+                vec![
+                    url,
+                    format!(
+                        "Emailed to {}.",
+                        optional_display(reloaded.client.email.as_deref())
+                    ),
+                ],
+                false,
+            ),
+            // The second sentence is derived from the reloaded row: a failed
+            // first send leaves a draft, a failed re-send leaves an invoice
+            // that is still published.
+            Err(e) => (
+                "Send failed".to_string(),
+                vec![
+                    e.to_string(),
+                    format!(
+                        "Invoice #{number} is still {}. Nothing was published or emailed.",
+                        reloaded.invoice.status
+                    ),
+                ],
+                true,
+            ),
+        };
+        self.screen = Screen::ActionResult {
+            title,
+            lines,
+            is_error,
+        };
     }
 
     fn handle_confirm_send_key(&mut self, code: KeyCode) -> InvoiceAction {
@@ -820,6 +970,14 @@ impl InvoiceManager {
         }
         self.ensure_visible(self.last_visible_rows);
         InvoiceAction::Continue
+    }
+}
+
+/// Throw away keys pressed while the terminal was unresponsive, so a user who
+/// mashed Enter during a send does not dismiss the result before reading it.
+fn drain_buffered_input() {
+    while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+        let _ = crossterm::event::read();
     }
 }
 
@@ -1805,6 +1963,257 @@ mod tests {
         assert!(screen.contains("ops@cedar.test"), "{screen}");
         assert!(screen.contains("not reading keys"), "{screen}");
         assert!(screen.contains("Working"), "{screen}");
+    }
+
+    #[test]
+    fn a_send_that_cannot_be_prepared_reports_it_as_a_failed_send() {
+        let (dir, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+        // No config at all: nothing is built, nothing is sent.
+        mgr.perform_pending_with(&conn, "2026-08-07", no_config(), dir.path());
+
+        match &mgr.screen {
+            Screen::ActionResult {
+                title,
+                lines,
+                is_error,
+            } => {
+                assert_eq!(title, "Send failed");
+                assert!(lines[0].contains("stripe_secret_key"), "{lines:?}");
+                assert!(lines[1].contains("is still draft"), "{lines:?}");
+                assert!(is_error);
+            }
+            _ => panic!("expected a result screen"),
+        }
+        assert_eq!(get_invoice(&conn, 1).unwrap().status, "draft");
+    }
+
+    // Sending needs a real PDF to publish and attach, so the orchestration is
+    // only exercisable in a `pdf` build — the same gate invoicing::send uses.
+    #[cfg(feature = "pdf")]
+    mod send {
+        use super::*;
+        use crate::error::NigelError;
+        use crate::invoicing::gateway::{PaidSession, PaymentLink};
+        use crate::invoicing::render_html::DEFAULT_TEMPLATE;
+        use std::cell::RefCell;
+
+        struct FakeGw {
+            create_calls: RefCell<u32>,
+        }
+        impl PaymentGateway for FakeGw {
+            fn create_payment_link(&self, _i: &Invoice, _c: &Client) -> Result<PaymentLink> {
+                *self.create_calls.borrow_mut() += 1;
+                Ok(PaymentLink {
+                    id: "pl_1".into(),
+                    url: "https://pay/x".into(),
+                })
+            }
+            fn paid_sessions(&self, _id: &str) -> Result<Vec<PaidSession>> {
+                Ok(vec![])
+            }
+        }
+        struct FakePub;
+        impl AssetPublisher for FakePub {
+            fn publish(&self, token: &str, _h: &[u8], _p: &[u8]) -> Result<String> {
+                Ok(format!("https://billing.rygn.io/i/{token}/"))
+            }
+        }
+        struct FailPub;
+        impl AssetPublisher for FailPub {
+            fn publish(&self, _t: &str, _h: &[u8], _p: &[u8]) -> Result<String> {
+                Err(NigelError::Other("upload down".into()))
+            }
+        }
+        #[derive(Default)]
+        struct FakeMail {
+            sent: RefCell<u32>,
+        }
+        impl Mailer for FakeMail {
+            fn send_invoice(&self, _to: &str, _s: &str, _h: &str, _p: &[u8]) -> Result<()> {
+                *self.sent.borrow_mut() += 1;
+                Ok(())
+            }
+        }
+
+        fn gateway() -> FakeGw {
+            FakeGw {
+                create_calls: RefCell::new(0),
+            }
+        }
+
+        fn branding() -> Branding<'static> {
+            Branding {
+                template: DEFAULT_TEMPLATE,
+                company: "",
+                contact_email: "billing@example.test",
+            }
+        }
+
+        fn result_of(mgr: &InvoiceManager) -> (&str, &[String], bool) {
+            match &mgr.screen {
+                Screen::ActionResult {
+                    title,
+                    lines,
+                    is_error,
+                } => (title.as_str(), lines.as_slice(), *is_error),
+                _ => panic!("expected a result screen"),
+            }
+        }
+
+        #[test]
+        fn a_successful_send_publishes_emails_and_shows_the_url() {
+            let (_d, conn) = test_conn();
+            let id = seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            mgr.handle_key(KeyCode::Enter, &conn);
+            let mail = FakeMail::default();
+            mgr.perform_send(
+                &conn,
+                "2026-08-07",
+                &branding(),
+                &gateway(),
+                &FakePub,
+                &mail,
+            );
+
+            let (title, lines, is_error) = result_of(&mgr);
+            assert_eq!(title, "Invoice #1248 sent");
+            assert!(
+                lines[0].starts_with("https://billing.rygn.io/i/"),
+                "{lines:?}"
+            );
+            assert_eq!(lines[1], "Emailed to ops@cedar.test.");
+            assert!(!is_error);
+
+            assert_eq!(get_invoice(&conn, id).unwrap().status, "sent");
+            assert_eq!(
+                detail_of(&mgr).invoice.status,
+                "sent",
+                "the detail reloaded"
+            );
+            assert_eq!(mgr.rows[0].status, "sent", "the list reloaded");
+            assert_eq!(*mail.sent.borrow(), 1);
+        }
+
+        #[test]
+        fn a_failed_send_reports_the_error_verbatim_and_the_reloaded_status() {
+            let (_d, conn) = test_conn();
+            let id = seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            mgr.handle_key(KeyCode::Enter, &conn);
+            let mail = FakeMail::default();
+            mgr.perform_send(
+                &conn,
+                "2026-08-07",
+                &branding(),
+                &gateway(),
+                &FailPub,
+                &mail,
+            );
+
+            let (title, lines, is_error) = result_of(&mgr);
+            assert_eq!(title, "Send failed");
+            assert_eq!(lines[0], "upload down");
+            assert_eq!(
+                lines[1],
+                "Invoice #1248 is still draft. Nothing was published or emailed."
+            );
+            assert!(is_error);
+            assert_eq!(get_invoice(&conn, id).unwrap().status, "draft");
+            assert_eq!(*mail.sent.borrow(), 0);
+        }
+
+        #[test]
+        fn a_failed_resend_says_the_invoice_is_still_sent_not_still_draft() {
+            let (_d, conn) = test_conn();
+            seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            mgr.handle_key(KeyCode::Enter, &conn);
+            let mail = FakeMail::default();
+            mgr.perform_send(
+                &conn,
+                "2026-08-07",
+                &branding(),
+                &gateway(),
+                &FakePub,
+                &mail,
+            );
+            mgr.handle_key(KeyCode::Esc, &conn); // dismiss the result
+            mgr.perform_send(
+                &conn,
+                "2026-08-08",
+                &branding(),
+                &gateway(),
+                &FailPub,
+                &mail,
+            );
+
+            let (_, lines, _) = result_of(&mgr);
+            assert_eq!(
+                lines[1],
+                "Invoice #1248 is still sent. Nothing was published or emailed."
+            );
+        }
+
+        #[test]
+        fn a_resend_reuses_the_existing_payment_link() {
+            let (_d, conn) = test_conn();
+            seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            mgr.handle_key(KeyCode::Enter, &conn);
+            let mail = FakeMail::default();
+            let gw = gateway();
+            mgr.perform_send(&conn, "2026-08-07", &branding(), &gw, &FakePub, &mail);
+            mgr.handle_key(KeyCode::Esc, &conn);
+            mgr.perform_send(&conn, "2026-08-08", &branding(), &gw, &FakePub, &mail);
+
+            assert_eq!(*gw.create_calls.borrow(), 1);
+            assert_eq!(*mail.sent.borrow(), 2);
+        }
+
+        #[test]
+        fn any_key_on_the_result_returns_to_the_reloaded_detail() {
+            let (_d, conn) = test_conn();
+            seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            mgr.handle_key(KeyCode::Enter, &conn);
+            mgr.perform_send(
+                &conn,
+                "2026-08-07",
+                &branding(),
+                &gateway(),
+                &FakePub,
+                &FakeMail::default(),
+            );
+
+            mgr.handle_key(KeyCode::Enter, &conn);
+            assert!(matches!(mgr.screen, Screen::Detail));
+            assert_eq!(detail_of(&mgr).invoice.status, "sent");
+        }
+
+        #[test]
+        fn the_result_screen_renders_its_lines() {
+            let (_d, conn) = test_conn();
+            seed_invoice(&conn, "Cedar Systems", 100.0);
+            let mut mgr = manager(&conn);
+            mgr.handle_key(KeyCode::Enter, &conn);
+            mgr.perform_send(
+                &conn,
+                "2026-08-07",
+                &branding(),
+                &gateway(),
+                &FakePub,
+                &FakeMail::default(),
+            );
+
+            let screen = rendered(&mut mgr);
+            assert!(screen.contains("Invoice #1248 sent"), "{screen}");
+            assert!(screen.contains("Emailed to ops@cedar.test."), "{screen}");
+            assert!(screen.contains("Esc=back"), "{screen}");
+        }
     }
 
     /// The screen as an 80x24 terminal renders it, one string per row.
