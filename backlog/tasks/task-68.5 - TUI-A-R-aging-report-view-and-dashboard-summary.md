@@ -1,11 +1,11 @@
 ---
 id: TASK-68.5
 title: 'TUI: A/R aging report view and dashboard summary'
-status: In Progress
+status: Done
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 00:47'
+updated_date: '2026-08-08 03:03'
 labels:
   - invoicing
   - tui
@@ -22,8 +22,8 @@ The aging report joins the interactive report views (ReportView pattern in cli/r
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Aging is available as an interactive report view alongside the existing reports
-- [ ] #2 Dashboard home shows outstanding A/R when any open invoices exist
+- [x] #1 Aging is available as an interactive report view alongside the existing reports
+- [x] #2 Dashboard home shows outstanding A/R when any open invoices exist
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -43,3 +43,9 @@ Plan approved by orchestrator. Rulings on open questions:
 5. A/R line stays non-interactive; dashboard shortcut assignment is owned by 68.4 (lands second, owns the key map).
 6. --as-of deferred; if it comes, it rides with TASK-46 (point-in-time balances) which already owns as-of semantics.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PR #185 merged. A/R aging is a full ReportKind (slug `aging`, DateGranularity::None): interactive view with bucket summary + per-invoice OPEN INVOICES section (oldest first), `nigel report aging` with text/PDF export, ninth report in `report all`. `invoice aging` delegates to the shared formatter — bucket arithmetic single-sourced in ar_aging_detail with ar_aging re-expressed on top. Dashboard home shows `A/R Outstanding $N  (bucket)` only when open invoices exist, best-effort loaded, with tests pinning the shared amount column and the 40-col width at $999,999.99. Review round fixed 6 findings incl. the gapless label and a literal bulk-export index. 672+64 / 498+65 green.
+<!-- SECTION:FINAL_SUMMARY:END -->
