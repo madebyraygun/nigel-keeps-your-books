@@ -326,9 +326,9 @@ impl InvoiceManager {
         );
     }
 
-    fn draw_detail(&self, frame: &mut Frame) {
+    fn draw_detail(&mut self, frame: &mut Frame) {
         let (content_area, hints_area) = self.draw_chrome(frame);
-        let Some(detail) = &self.detail else {
+        let Some(detail) = self.detail.as_deref() else {
             return;
         };
         let invoice = &detail.invoice;
@@ -434,10 +434,13 @@ impl InvoiceManager {
             )));
         }
 
+        // Clamped here rather than on the key, because how far this scrolls
+        // depends on how tall the terminal is.
         let visible = (content_area.height as usize).max(1);
-        let start = self.detail_scroll.min(lines.len().saturating_sub(1));
+        let start = self.detail_scroll.min(lines.len().saturating_sub(visible));
         let end = (start + visible).min(lines.len());
         frame.render_widget(Paragraph::new(lines[start..end].to_vec()), content_area);
+        self.detail_scroll = start;
 
         if let Some(msg) = &self.status_message {
             frame.render_widget(
@@ -1293,6 +1296,26 @@ mod tests {
         assert_eq!(mgr.detail_scroll, 0);
         mgr.handle_key(KeyCode::Down, &conn);
         assert_eq!(mgr.detail_scroll, 1);
+    }
+
+    #[test]
+    fn detail_scroll_stops_at_the_last_screenful() {
+        let (_d, conn) = test_conn();
+        seed_invoice(&conn, "Cedar Systems", 100.0);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        for _ in 0..20 {
+            mgr.handle_key(KeyCode::PageDown, &conn);
+        }
+        let screen = rendered(&mut mgr);
+        assert!(
+            screen.contains("Invoice #1248"),
+            "a short invoice scrolled off its own screen:\n{screen}"
+        );
+        // One Up from the clamped position must move, not undo 200 rows.
+        mgr.handle_key(KeyCode::Up, &conn);
+        assert_eq!(mgr.detail_scroll, 0);
     }
 
     #[test]
