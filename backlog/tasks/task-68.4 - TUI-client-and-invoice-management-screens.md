@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:28'
-updated_date: '2026-08-08 00:52'
+updated_date: '2026-08-08 01:02'
 labels:
   - invoicing
   - tui
@@ -45,4 +45,6 @@ Rulings on the mechanical questions:
 4. Payment-amount error may drop the literal `--amount ` prefix — sanctioned adaptation, rest of wording identical.
 5. Draw-then-block send with an honest "terminal unresponsive" frame — confirmed; a thread would need a second SQLCipher handle racing mark_published (&Connection is !Sync). Buffered-input drain after send stays.
 6. Owns list_invoices (no N+1) + payments data-layer additions; steps 5/11/10-date blocked on 68.1 code, rest independent.
+
+User checkpoint resolved: Clients shortcut = k; Balance column stays (80-col layout as specced); invoice creation stays out of 68.4 — filed as 68.7. 68.4 is now FULLY approved for implementation.
 <!-- SECTION:NOTES:END -->
