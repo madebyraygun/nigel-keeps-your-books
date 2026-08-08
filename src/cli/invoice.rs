@@ -10,8 +10,8 @@ use crate::invoicing::clients::get_client;
 use crate::invoicing::import_invoiceshelf::import as import_invoiceshelf;
 use crate::invoicing::invoices::{
     create_invoice, ensure_not_void, ensure_voidable, get_invoice, get_invoice_by_number, is_void,
-    line_items, paid_amount, payment_amount, record_payment, update_invoice, void_invoice,
-    InvoiceUpdate, NewLineItem,
+    line_items, list_invoices, paid_amount, payment_amount, record_payment, update_invoice,
+    void_invoice, InvoiceListRow, InvoiceUpdate, NewLineItem,
 };
 use crate::invoicing::mailgun::MailgunClient;
 use crate::invoicing::r2::R2Publisher;
@@ -22,7 +22,7 @@ use crate::invoicing::render_html::{
 use crate::invoicing::send::send_invoice;
 use crate::invoicing::stripe::StripeClient;
 use crate::invoicing::sync::sync_all;
-use crate::models::Invoice;
+use crate::models::{Client, Invoice, InvoiceLineItem};
 use crate::settings::{get_data_dir, invoicing_config, InvoicingConfig};
 
 fn parse_item(s: &str) -> Result<NewLineItem> {
@@ -224,31 +224,68 @@ fn confirm_void(invoice: &Invoice, yes: bool) -> Result<bool> {
     Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
-pub fn list() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
-    let mut stmt = conn.prepare(
-        "SELECT i.number, i.status, c.name, i.total, COALESCE(i.due_date, '')
-         FROM invoices i JOIN clients c ON c.id = i.client_id
-         ORDER BY i.number DESC",
-    )?;
-    let rows: Vec<(i64, String, String, f64, String)> = stmt
-        .query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
+/// `nigel invoice list`, as text. Pure, so the parity fixtures can call it
+/// without a terminal — the same shape `cli/report/text.rs` uses.
+pub fn format_invoice_list(rows: &[InvoiceListRow]) -> String {
     let mut table = Table::new();
     table.set_header(vec!["#", "Status", "Client", "Total", "Due"]);
-    for (number, status, client, total, due) in rows {
+    for row in rows {
         table.add_row(vec![
-            Cell::new(number),
-            Cell::new(status),
-            Cell::new(client),
-            Cell::new(format!("{total:.2}")),
-            Cell::new(due),
+            Cell::new(row.number),
+            Cell::new(&row.status),
+            // An invoice whose client row is gone still belongs on the list.
+            Cell::new(row.client_name.as_deref().unwrap_or("\u{2014}")),
+            Cell::new(format!("{:.2}", row.total)),
+            Cell::new(row.due_date.as_deref().unwrap_or_default()),
         ]);
     }
-    println!("Invoices\n{table}");
+    format!("Invoices\n{table}")
+}
+
+/// `nigel invoice show`, as text. Ends in a newline, so callers `print!` it.
+pub fn format_invoice_show(
+    invoice: &Invoice,
+    client: &Client,
+    items: &[InvoiceLineItem],
+    paid: f64,
+) -> String {
+    let mut out = format!(
+        "Invoice #{}  [{}]  {} {:.2}\n",
+        invoice.number, invoice.status, invoice.currency, invoice.total
+    );
+    out.push_str(&format!("Client:   {}\n", client.name));
+    out.push_str(&format!("Issued:   {}\n", invoice.issue_date));
+    out.push_str(&format!(
+        "Due:      {}\n",
+        invoice.due_date.as_deref().unwrap_or("-")
+    ));
+
+    let mut table = Table::new();
+    table.set_header(vec!["Description", "Qty", "Unit", "Amount"]);
+    for item in items {
+        table.add_row(vec![
+            Cell::new(&item.description),
+            Cell::new(format!("{:.2}", item.quantity)),
+            Cell::new(format!("{:.2}", item.unit_amount)),
+            Cell::new(format!("{:.2}", item.line_total)),
+        ]);
+    }
+    out.push_str(&format!("{table}\n"));
+
+    out.push_str(&format!("Paid:     {paid:.2}\n"));
+    out.push_str(&format!("Balance:  {:.2}\n", invoice.total - paid));
+    if let Some(url) = invoice.stripe_payment_link_url.as_deref() {
+        out.push_str(&format!("Pay:      {url}\n"));
+    }
+    out
+}
+
+pub fn list() -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    println!(
+        "{}",
+        format_invoice_list(&list_invoices(&conn, None, None)?)
+    );
     Ok(())
 }
 
@@ -256,33 +293,10 @@ pub fn show(number: i64) -> Result<()> {
     let conn = get_connection(&get_data_dir().join("nigel.db"))?;
     let invoice = find_invoice(&conn, number)?;
     let client = get_client(&conn, invoice.client_id)?;
-
-    println!(
-        "Invoice #{}  [{}]  {} {:.2}",
-        invoice.number, invoice.status, invoice.currency, invoice.total
-    );
-    println!("Client:   {}", client.name);
-    println!("Issued:   {}", invoice.issue_date);
-    println!("Due:      {}", invoice.due_date.as_deref().unwrap_or("-"));
-
-    let mut table = Table::new();
-    table.set_header(vec!["Description", "Qty", "Unit", "Amount"]);
-    for item in line_items(&conn, invoice.id)? {
-        table.add_row(vec![
-            Cell::new(item.description),
-            Cell::new(format!("{:.2}", item.quantity)),
-            Cell::new(format!("{:.2}", item.unit_amount)),
-            Cell::new(format!("{:.2}", item.line_total)),
-        ]);
-    }
-    println!("{table}");
-
+    let items = line_items(&conn, invoice.id)?;
     let paid = paid_amount(&conn, invoice.id)?;
-    println!("Paid:     {paid:.2}");
-    println!("Balance:  {:.2}", invoice.total - paid);
-    if let Some(url) = invoice.stripe_payment_link_url {
-        println!("Pay:      {url}");
-    }
+
+    print!("{}", format_invoice_show(&invoice, &client, &items, paid));
     Ok(())
 }
 
@@ -510,6 +524,140 @@ mod tests {
             unit_amount: 100.0,
         }];
         create_invoice(conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap()
+    }
+
+    fn list_row(
+        number: i64,
+        status: &str,
+        client: &str,
+        total: f64,
+        due: Option<&str>,
+    ) -> InvoiceListRow {
+        InvoiceListRow {
+            id: number - 1000,
+            number,
+            status: status.into(),
+            client_id: 1,
+            client_name: Some(client.into()),
+            issue_date: "2026-03-01".into(),
+            due_date: due.map(str::to_string),
+            currency: "USD".into(),
+            total,
+            paid: 0.0,
+            balance: total,
+        }
+    }
+
+    /// Byte-for-byte what `nigel invoice list` printed before the formatter was
+    /// pulled out of it. A change here is a change to the CLI's output.
+    #[test]
+    fn format_invoice_list_prints_what_the_cli_always_printed() {
+        let out = format_invoice_list(&[
+            list_row(1250, "partial", "Acme Co", 3200.0, Some("2026-08-20")),
+            list_row(1249, "overdue", "Globex", 960.0, Some("2026-06-30")),
+            list_row(1248, "draft", "Northwind Traders", 1850.5, None),
+        ]);
+        assert_eq!(
+            out,
+            concat!(
+                "Invoices\n",
+                "+------+---------+-------------------+---------+------------+\n",
+                "| #    | Status  | Client            | Total   | Due        |\n",
+                "+===========================================================+\n",
+                "| 1250 | partial | Acme Co           | 3200.00 | 2026-08-20 |\n",
+                "|------+---------+-------------------+---------+------------|\n",
+                "| 1249 | overdue | Globex            | 960.00  | 2026-06-30 |\n",
+                "|------+---------+-------------------+---------+------------|\n",
+                "| 1248 | draft   | Northwind Traders | 1850.50 |            |\n",
+                "+------+---------+-------------------+---------+------------+",
+            )
+        );
+    }
+
+    #[test]
+    fn format_invoice_list_shows_an_orphaned_invoice_rather_than_hiding_it() {
+        let mut row = list_row(1247, "void", "gone", 500.0, None);
+        row.client_name = None;
+        let out = format_invoice_list(&[row]);
+        assert!(out.contains("1247"), "got: {out}");
+        assert!(out.contains('\u{2014}'), "want an em dash, got: {out}");
+    }
+
+    /// Byte-for-byte what `nigel invoice show` printed before the extraction.
+    #[test]
+    fn format_invoice_show_prints_what_the_cli_always_printed() {
+        let invoice = Invoice {
+            id: 7,
+            number: 1250,
+            client_id: 3,
+            issue_date: "2026-03-01".into(),
+            due_date: Some("2026-08-20".into()),
+            status: "partial".into(),
+            currency: "USD".into(),
+            subtotal: 3200.0,
+            tax: 0.0,
+            total: 3200.0,
+            notes: None,
+            terms: None,
+            token: "aBc123".into(),
+            stripe_payment_link_id: Some("pl_1".into()),
+            stripe_payment_link_url: Some("https://pay/x".into()),
+            published_at: Some("2026-03-01".into()),
+            voided_at: None,
+        };
+        let client = Client {
+            id: 3,
+            name: "Acme Co".into(),
+            email: Some("ap@acme.test".into()),
+            billing_address: None,
+            notes: None,
+        };
+        let item = |description: &str, quantity: f64, unit_amount: f64| InvoiceLineItem {
+            id: None,
+            invoice_id: Some(7),
+            description: description.into(),
+            quantity,
+            unit_amount,
+            line_total: quantity * unit_amount,
+            position: 0,
+        };
+
+        let out = format_invoice_show(
+            &invoice,
+            &client,
+            &[
+                item("Consulting — August", 10.0, 150.0),
+                item("Hosting", 1.0, 1700.0),
+            ],
+            2000.0,
+        );
+        assert_eq!(
+            out,
+            concat!(
+                "Invoice #1250  [partial]  USD 3200.00\n",
+                "Client:   Acme Co\n",
+                "Issued:   2026-03-01\n",
+                "Due:      2026-08-20\n",
+                "+---------------------+-------+---------+---------+\n",
+                "| Description         | Qty   | Unit    | Amount  |\n",
+                "+=================================================+\n",
+                "| Consulting — August | 10.00 | 150.00  | 1500.00 |\n",
+                "|---------------------+-------+---------+---------|\n",
+                "| Hosting             | 1.00  | 1700.00 | 1700.00 |\n",
+                "+---------------------+-------+---------+---------+\n",
+                "Paid:     2000.00\n",
+                "Balance:  1200.00\n",
+                "Pay:      https://pay/x\n",
+            )
+        );
+
+        // No due date reads as a dash; no payment link prints no Pay line.
+        let mut plain = invoice.clone();
+        plain.due_date = None;
+        plain.stripe_payment_link_url = None;
+        let out = format_invoice_show(&plain, &client, &[], 0.0);
+        assert!(out.contains("Due:      -\n"), "got: {out}");
+        assert!(!out.contains("Pay:"), "got: {out}");
     }
 
     #[test]

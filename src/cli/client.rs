@@ -5,6 +5,7 @@ use crate::error::Result;
 use crate::invoicing::clients::{
     add_client, client_summary, get_client, list_clients, update_client, ClientUpdate,
 };
+use crate::models::Client;
 use crate::settings::get_data_dir;
 
 pub fn add(name: &str, email: Option<&str>, address: Option<&str>) -> Result<()> {
@@ -68,17 +69,68 @@ pub fn edit(
     Ok(())
 }
 
-pub fn list() -> Result<()> {
-    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+/// `nigel client list`, as text. Pure, so the parity fixtures can call it
+/// without a terminal — the same shape `cli/report/text.rs` uses.
+pub fn format_client_list(clients: &[Client]) -> String {
     let mut table = Table::new();
     table.set_header(vec!["ID", "Name", "Email"]);
-    for c in list_clients(&conn)? {
+    for c in clients {
         table.add_row(vec![
             Cell::new(c.id),
-            Cell::new(c.name),
-            Cell::new(c.email.unwrap_or_default()),
+            Cell::new(&c.name),
+            Cell::new(c.email.as_deref().unwrap_or_default()),
         ]);
     }
-    println!("Clients\n{table}");
+    format!("Clients\n{table}")
+}
+
+pub fn list() -> Result<()> {
+    let conn = get_connection(&get_data_dir().join("nigel.db"))?;
+    println!("{}", format_client_list(&list_clients(&conn)?));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(id: i64, name: &str, email: Option<&str>) -> Client {
+        Client {
+            id,
+            name: name.into(),
+            email: email.map(str::to_string),
+            billing_address: None,
+            notes: None,
+        }
+    }
+
+    /// Byte-for-byte what `nigel client list` printed before the formatter was
+    /// pulled out of it. A change here is a change to the CLI's output.
+    #[test]
+    fn format_client_list_prints_what_the_cli_always_printed() {
+        let out = format_client_list(&[
+            client(1, "Acme Co", Some("ap@acme.test")),
+            client(2, "Globex", None),
+        ]);
+        assert_eq!(
+            out,
+            concat!(
+                "Clients\n",
+                "+----+---------+--------------+\n",
+                "| ID | Name    | Email        |\n",
+                "+=============================+\n",
+                "| 1  | Acme Co | ap@acme.test |\n",
+                "|----+---------+--------------|\n",
+                "| 2  | Globex  |              |\n",
+                "+----+---------+--------------+",
+            )
+        );
+    }
+
+    #[test]
+    fn format_client_list_with_no_clients_is_the_bare_heading_and_header() {
+        let out = format_client_list(&[]);
+        assert!(out.starts_with("Clients\n"), "got: {out}");
+        assert!(out.contains("Email"), "got: {out}");
+    }
 }
