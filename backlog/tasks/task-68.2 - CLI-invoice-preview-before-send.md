@@ -1,11 +1,11 @@
 ---
 id: TASK-68.2
 title: 'CLI: invoice preview before send'
-status: In Progress
+status: Done
 assignee:
   - '@opus-team'
 created_date: '2026-08-08 00:27'
-updated_date: '2026-08-08 00:48'
+updated_date: '2026-08-08 02:45'
 labels:
   - invoicing
   - cli
@@ -22,9 +22,9 @@ Today the first render happens inside send, after the Stripe link is created —
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 invoice preview writes the rendered HTML (and PDF when the feature is on) locally and prints the paths
-- [ ] #2 Preview makes no network calls and works with no invoicing config set
-- [ ] #3 Previewed output matches what send would publish, modulo the payment link placeholder
+- [x] #1 invoice preview writes the rendered HTML (and PDF when the feature is on) locally and prints the paths
+- [x] #2 Preview makes no network calls and works with no invoicing config set
+- [x] #3 Previewed output matches what send would publish, modulo the payment link placeholder
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -44,3 +44,9 @@ Plan approved by orchestrator. Rulings on open questions:
 5. `(from_email not configured)` placeholder wording accepted — it names the setting to fix.
 Key structural points for implementers: new src/invoicing/render.rs seam owns both cfg halves of PDF rendering; PayButton::{Link,Placeholder,Omitted} replaces Option<&str>; InvoiceCommands::Preview joins the sync_invoice_payments skip list in main.rs.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PR #184 merged. `nigel invoice preview <number> [--output-dir]` renders the same HTML (and PDF with the feature) send would publish, to <data_dir>/previews/, with zero network calls and no config required — Preview is in the launch-sync skip list with a regression test that fails if the arm is removed. New src/invoicing/render.rs seam owns both cfg halves of PDF rendering; PayButton::{Link,Placeholder,Omitted} replaces Option<&str>; void previews warn and omit the Pay button even with a stored link (voided_at-aware). Send path verified byte-identical by review. 649+62 / 476+63 tests green both feature sets.
+<!-- SECTION:FINAL_SUMMARY:END -->
