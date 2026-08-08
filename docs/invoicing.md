@@ -466,7 +466,9 @@ nigel report aging --mode export       # PDF into <data_dir>/exports/
 Buckets the outstanding balance of every open invoice by how long it has been due
 — `current`, `1-30`, `31-60`, `61-90`, `90+` days past due. Invoices with no due
 date age from their issue date. Drafts, void invoices and anything settled in
-full are left out. Aging is always as of today; there is no as-of date to pass.
+full are left out. Both commands are always as of today; there is no as-of date
+to pass. The JSON API's `GET /api/invoices/aging` does take an optional `asOf`,
+which is the one place that differs — see [`api.md`](api.md).
 
 Both commands print the same numbers — `invoice aging` prints the report's own
 table:

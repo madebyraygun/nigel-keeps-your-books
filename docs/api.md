@@ -115,7 +115,12 @@ uninitialized, so the SPA can decide which screen to show before it has data.
   "version": "1.0.1",
   "dataDir": "/home/you/Documents/nigel",
   "pdfExport": true,
-  "updateAvailable": "1.0.2"
+  "updateAvailable": "1.0.2",
+  "invoicing": {
+    "sendConfigured": false,
+    "syncConfigured": true,
+    "missing": ["r2_bucket", "public_base_url"]
+  }
 }
 ```
 
@@ -135,6 +140,17 @@ background task started with the server rather than inside the handler, so it is
 client that wants to catch it re-reads status rather than expecting it on the
 first fetch. A platform with no release asset reports `null`, matching what
 `nigel update` could actually install.
+
+`invoicing` reports which of the nine invoicing keys are set, **by name only** —
+the values never leave the process, and the names are already published in
+[`invoicing.md`](invoicing.md). `sendConfigured` is all nine present;
+`syncConfigured` is `stripe_secret_key` alone, which is all `invoice sync`
+needs. `missing` lists the unset ones in that document's order. A client uses it
+to disable Send and to say which keys are in the way.
+
+The whole object is **absent while the database is locked**. `/api/status` is
+one of the three ungated paths, and which integrations an installation has
+configured is not something to tell a caller who has not passed the gate.
 
 ### `POST /api/unlock`
 
@@ -206,6 +222,12 @@ table is what `report` holds. The list routes below it answer with a bare array.
 | `/api/imports` | — | `ImportListItem[]` |
 | `/api/imports/formats` | — | `ImporterFormat[]` |
 | `/api/csv-profiles` | — | `CsvProfile[]` |
+| `/api/clients` | — | `Client[]` |
+| `/api/clients/{id}` | — | `ClientDetail` |
+| `/api/invoices` | `status`, `clientId` | `InvoiceListRow[]` |
+| `/api/invoices/{number}` | — | `InvoiceDetail` |
+| `/api/invoices/aging` | `asOf` | `AgingReport` |
+| `/api/invoices/next-number` | — | `{ number }` |
 
 ### Date parameters
 
@@ -248,7 +270,7 @@ of `year` and `month` that route will accept.
 
 ### List responses
 
-The six list endpoints answer with a bare JSON array — no envelope, no
+The eight list endpoints answer with a bare JSON array — no envelope, no
 pagination.
 
 - `/api/accounts` — every account, by name.
@@ -269,6 +291,171 @@ pagination.
   }
 ]
 ```
+
+- `/api/clients` — every invoicing client, by name. `email`,
+  `billingAddress` and `notes` are `null` when unset.
+- `/api/invoices` — every invoice, number descending.
+
+### Invoicing
+
+`{number}` throughout is the **invoice number** — what the CLI takes, what a
+person reads off the invoice, and what `#/invoices?number=1248` carries. Row ids
+stay internal.
+
+#### `GET /api/clients/{id}`
+
+One client's own fields, flattened, plus its invoice history and open balance —
+the same round trip `nigel client show` makes:
+
+```json
+{
+  "id": 1, "name": "Acme Co", "email": "ap@acme.test",
+  "billingAddress": "1 Main St, Portland OR", "notes": null,
+  "invoices": [
+    { "number": 1251, "status": "sent", "issueDate": "2026-03-06",
+      "dueDate": "2026-04-06", "total": 1850.0, "paid": 0.0 }
+  ],
+  "outstanding": 3050.0
+}
+```
+
+`outstanding` counts open invoices only — `sent`, `partial`, `overdue` — clamped
+per invoice, so an overpayment on one cannot pay down another's balance. An
+unknown id is `404` with `details.reason` = `client_not_found`.
+
+#### `GET /api/invoices`
+
+Number descending, each row carrying its client and paid-to-date so a list
+screen needs no second request:
+
+```json
+[
+  { "id": 5, "number": 1250, "status": "partial", "clientId": 1,
+    "clientName": "Acme Co", "issueDate": "2026-02-20", "dueDate": "2026-03-20",
+    "currency": "USD", "total": 3200.0, "paid": 2000.0, "balance": 1200.0 }
+]
+```
+
+`clientName` is `string | null`: the join is a LEFT JOIN, so an invoice whose
+client row is gone appears with a dash rather than vanishing from the list.
+
+`status` accepts the six status words plus `open`, which is the
+`sent,partial,overdue` set `sync` and the aging report already work in. Anything
+else is `400` naming the legal set. `clientId` narrows to one client; an id no
+client has is `404` `client_not_found`, not an empty array — filtering by
+something that does not exist is a wrong question, the same reasoning
+`/api/reports/register` applies to an unknown `account`.
+
+#### `GET /api/invoices/{number}`
+
+The invoice's own fields flattened, plus everything a detail screen prints:
+
+```json
+{
+  "id": 5, "number": 1250, "status": "partial", "currency": "USD",
+  "subtotal": 3200.0, "tax": 0.0, "total": 3200.0,
+  "issueDate": "2026-02-20", "dueDate": "2026-03-20",
+  "notes": null, "terms": "Net 30",
+  "stripePaymentLinkId": null, "stripePaymentLinkUrl": null,
+  "publishedAt": "2026-02-20", "voidedAt": null,
+  "client": { "id": 1, "name": "Acme Co", "email": "ap@acme.test" },
+  "items": [], "payments": [],
+  "paid": 2000.0, "balance": 1200.0,
+  "publicUrl": "https://billing.example.com/i/aBc123.../",
+  "canEdit": false, "canSend": true, "canVoid": false, "canPay": true
+}
+```
+
+The invoice's `token` is **never** on the wire: it is the only access control on
+a published invoice, and a response carrying one would put it into devtools
+history and any future cache. What a client needs is the address, so the route
+computes `publicUrl` from the token and `public_base_url` instead. It is `null`
+— never an error — when the invoice was never published or `public_base_url` is
+unset.
+
+The four `can*` flags are the data layer's own guards, called rather than
+re-derived: `canEdit` is `ensure_editable`, `canVoid` is `ensure_voidable`, and
+`canSend`/`canPay` are `ensure_not_void` plus the email, total and balance
+checks. **A client must not re-derive them from `status`** — an edit is blocked
+by recorded payments as well as by status, and a second copy of that rule is a
+second copy of the guardrails. The flags disable a control; the `409` is what
+enforces it.
+
+An unknown number is `404` with `details.reason` = `invoice_not_found`.
+
+#### `GET /api/invoices/aging`
+
+The A/R aging report: five buckets in fixed order, the open invoices behind
+them sorted by days past due, and the outstanding total.
+
+```json
+{
+  "asOf": "2026-03-15",
+  "buckets": [{ "label": "current", "count": 2, "total": 3050.0 }],
+  "invoices": [
+    { "number": 1249, "client": "Globex", "dueDate": "2026-01-30",
+      "daysPastDue": 44, "bucket": "31-60",
+      "total": 960.0, "paid": 0.0, "balance": 960.0 }
+  ],
+  "outstanding": 4010.0
+}
+```
+
+`asOf` is optional and defaults to the server's local today, which is what
+`nigel invoice aging` uses. Where the CLI takes no date at all, the route does,
+because a committed parity fixture cannot survive a bucket boundary being
+crossed overnight. It is validated as strictly as every other date on this API:
+zero-padded `YYYY-MM-DD`, and `2026-3-1` is a `400`.
+
+This is the only aging route. `/api/reports` and `/api/exports` still carry
+eight reports where the CLI has nine.
+
+#### `GET /api/invoices/next-number`
+
+`{ "number": 1253 }` — the number the next draft will take. It reads the counter
+and **reserves nothing**, so a new-invoice form can show the number without
+committing anyone to creating one.
+
+#### Preview
+
+| Route | Response |
+|---|---|
+| `GET /api/invoices/{number}/preview` | `text/html; charset=utf-8` |
+| `GET /api/invoices/{number}/preview.pdf` | `application/pdf` |
+
+Along with the report exports, these are the only responses on the API that are
+not JSON — on success. Errors keep the envelope.
+
+Both render through the same `render_invoice` seam `invoice send` publishes
+through, so a preview cannot disagree with what a client receives, and neither
+takes a gateway: no network call is possible from either route. Preview needs no
+invoicing config at all; with `from_email` unset the direct-deposit contact line
+renders the same visible placeholder the CLI prints a notice about.
+
+The HTML response also carries `Content-Security-Policy: sandbox` and
+`X-Content-Type-Options: nosniff`. The SPA frames it in an `<iframe sandbox>`
+with no `allow-same-origin`, and the header is what covers the case of the route
+being opened directly in a tab.
+
+The PDF response is a download named `invoice-{number}.pdf`. Without the `pdf`
+feature it is `501 feature_disabled`, carrying the same sentence the CLI prints,
+while the HTML route keeps working — the `/api/exports` treatment exactly. A
+custom invoice template that does not validate is `400` naming the file, never a
+silent fallback to the stock page.
+
+### Not-found reasons
+
+A `404` carries `details.reason` wherever one route can be answering about more
+than one thing, so a client is not left branching on the status alone:
+
+| Reason | Raised by |
+|---|---|
+| `account_not_found` | An account name no account has |
+| `category_not_found` | A category id that is gone or deactivated |
+| `transaction_not_found` | A transaction id that is gone |
+| `upload_not_found` | An `uploadId` that expired or never existed |
+| `invoice_not_found` | An invoice number no invoice has |
+| `client_not_found` | A client id no client has, including as a filter |
 
 ## Changing data
 
@@ -642,8 +829,11 @@ such a build — otherwise the saved `.pdf` file is that JSON.
 
 - **Bulk export.** `nigel report all` writes nine files into a directory; a
   browser downloads one file at a time. There is no `/api/exports/all`.
-- **A/R aging.** `nigel report aging` and `nigel invoice aging` have no route.
-  Aging is not in `/api/reports` or `/api/exports`.
+- **A/R aging as a report.** Aging is served at
+  [`/api/invoices/aging`](#get-apiinvoicesaging), not in `/api/reports` or
+  `/api/exports`: `ReportKind` has no variant for it, and giving it one would
+  mean touching the report vocabulary eight endpoints and two front ends share.
+  There is no aging download.
 - **Writing files.** The CLI's `--output` and `--output-dir` choose a path on
   disk. The server only streams bytes back; where they land is the browser's
   business.
