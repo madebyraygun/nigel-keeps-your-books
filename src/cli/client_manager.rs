@@ -1,7 +1,7 @@
 use crossterm::event::KeyCode;
 use rusqlite::Connection;
 
-use crate::invoicing::clients::{add_client, list_clients};
+use crate::invoicing::clients::{add_client, list_clients, update_client, ClientUpdate};
 use crate::models::Client;
 
 // Field indices for ClientForm — keep in sync with field order.
@@ -51,6 +51,15 @@ impl ClientForm {
                 .collect(),
             focused: 0,
         }
+    }
+
+    fn new_edit(client: &Client) -> Self {
+        Self::with_values([
+            client.name.clone(),
+            client.email.clone().unwrap_or_default(),
+            client.billing_address.clone().unwrap_or_default(),
+            client.notes.clone().unwrap_or_default(),
+        ])
     }
 
     /// The trimmed field, or `None` when it is blank.
@@ -142,6 +151,11 @@ impl ClientManager {
                 }
             }
             KeyCode::Char('a') => self.screen = Screen::Add(ClientForm::new_add()),
+            KeyCode::Char('e') => {
+                if let Some(client) = self.clients.get(self.selection) {
+                    self.screen = Screen::Edit(ClientForm::new_edit(client));
+                }
+            }
             KeyCode::Char('q') | KeyCode::Esc => return ClientAction::Close,
             _ => {}
         }
@@ -187,24 +201,41 @@ impl ClientManager {
             Screen::List => return,
         };
         let name = form.fields[NAME_IDX].value.trim().to_string();
-        if name.is_empty() {
-            self.set_status("Name is required".into());
-            return;
-        }
         let email = form.optional(EMAIL_IDX);
         let address = form.optional(ADDRESS_IDX);
         let notes = form.optional(NOTES_IDX);
 
         let saved = match mode {
-            FormMode::Add => add_client(
-                conn,
-                &name,
-                email.as_deref(),
-                address.as_deref(),
-                notes.as_deref(),
-            )
-            .map(|_| format!("Added client: {name}")),
-            FormMode::Edit => return,
+            FormMode::Add => {
+                // add_client validates nothing, so the blank-name refusal is
+                // this screen's. update_client makes the same refusal itself.
+                if name.is_empty() {
+                    self.set_status("Name is required".into());
+                    return;
+                }
+                add_client(
+                    conn,
+                    &name,
+                    email.as_deref(),
+                    address.as_deref(),
+                    notes.as_deref(),
+                )
+                .map(|_| format!("Added client: {name}"))
+            }
+            FormMode::Edit => {
+                let Some(client) = self.clients.get(self.selection) else {
+                    return;
+                };
+                // The form holds every current value, so every field travels:
+                // a blank optional one means "clear it", never "leave it".
+                let update = ClientUpdate {
+                    name: Some(name.clone()),
+                    email: Some(email),
+                    billing_address: Some(address),
+                    notes: Some(notes),
+                };
+                update_client(conn, client.id, &update).map(|()| format!("Updated client: {name}"))
+            }
         };
         match saved {
             Ok(message) => {
@@ -221,7 +252,7 @@ impl ClientManager {
 mod tests {
     use super::*;
     use crate::db::{get_connection, init_db};
-    use crate::invoicing::clients::add_client;
+    use crate::invoicing::clients::{add_client, get_client};
     use crate::migrations::run_migrations;
 
     fn test_conn() -> (tempfile::TempDir, Connection) {
@@ -468,6 +499,141 @@ mod tests {
 
         assert!(matches!(mgr.screen, Screen::Add(_)), "still on the form");
         assert_eq!(form_values(&mgr)[0], "ae");
+    }
+
+    /// One fully-populated client, selected.
+    fn seed_cedar(conn: &Connection) -> i64 {
+        add_client(
+            conn,
+            "Cedar Systems",
+            Some("ops@cedar.test"),
+            Some("88 Cedar Way"),
+            Some("Net 30"),
+        )
+        .unwrap()
+    }
+
+    /// Replace the focused field's contents.
+    fn retype(mgr: &mut ClientManager, conn: &Connection, idx: usize, value: &str) {
+        while focused(mgr) != idx {
+            mgr.handle_key(KeyCode::Tab, conn);
+        }
+        for _ in 0..80 {
+            mgr.handle_key(KeyCode::Backspace, conn);
+        }
+        type_str(mgr, conn, value);
+    }
+
+    #[test]
+    fn e_opens_the_edit_form_prefilled_from_the_selected_row() {
+        let (_d, conn) = test_conn();
+        add_client(&conn, "Acme Co", None, None, None).unwrap();
+        seed_cedar(&conn);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Down, &conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+
+        assert!(matches!(mgr.screen, Screen::Edit(_)));
+        assert_eq!(
+            form_values(&mgr),
+            ["Cedar Systems", "ops@cedar.test", "88 Cedar Way", "Net 30"]
+        );
+
+        // An absent field renders as an empty string, never as "None".
+        mgr.handle_key(KeyCode::Esc, &conn);
+        mgr.handle_key(KeyCode::Up, &conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        assert_eq!(form_values(&mgr), ["Acme Co", "", "", ""]);
+    }
+
+    #[test]
+    fn enter_updates_the_client_and_returns_to_the_list() {
+        let (_d, conn) = test_conn();
+        let id = seed_cedar(&conn);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        retype(&mut mgr, &conn, EMAIL_IDX, "billing@cedar.test");
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        assert!(matches!(mgr.screen, Screen::List));
+        assert_eq!(
+            mgr.status_message.as_deref(),
+            Some("Updated client: Cedar Systems")
+        );
+        let saved = get_client(&conn, id).unwrap();
+        assert_eq!(saved.email.as_deref(), Some("billing@cedar.test"));
+        assert_eq!(saved.billing_address.as_deref(), Some("88 Cedar Way"));
+    }
+
+    #[test]
+    fn clearing_an_optional_field_writes_null() {
+        let (_d, conn) = test_conn();
+        let id = seed_cedar(&conn);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        retype(&mut mgr, &conn, EMAIL_IDX, "");
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        // Some(None), not None: None would have left the old address in place.
+        assert_eq!(get_client(&conn, id).unwrap().email, None);
+    }
+
+    #[test]
+    fn an_unchanged_field_still_round_trips_its_current_value() {
+        let (_d, conn) = test_conn();
+        let id = seed_cedar(&conn);
+        let before = get_client(&conn, id).unwrap();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        let after = get_client(&conn, id).unwrap();
+        assert_eq!(after.name, before.name);
+        assert_eq!(after.email, before.email);
+        assert_eq!(after.billing_address, before.billing_address);
+        assert_eq!(after.notes, before.notes);
+    }
+
+    #[test]
+    fn a_blank_name_is_refused_in_the_data_layer_s_own_words() {
+        let (_d, conn) = test_conn();
+        let id = seed_cedar(&conn);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        retype(&mut mgr, &conn, NAME_IDX, "   ");
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        assert_eq!(mgr.status_message.as_deref(), Some("Name is required"));
+        assert!(matches!(mgr.screen, Screen::Edit(_)));
+        assert_eq!(get_client(&conn, id).unwrap().name, "Cedar Systems");
+    }
+
+    #[test]
+    fn a_data_layer_error_is_shown_verbatim_and_keeps_the_form_open() {
+        let (_d, conn) = test_conn();
+        seed_cedar(&conn);
+        conn.execute_batch(
+            "CREATE TRIGGER no_edits BEFORE UPDATE ON clients
+             BEGIN SELECT RAISE(ABORT, 'clients are frozen'); END;",
+        )
+        .unwrap();
+
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        retype(&mut mgr, &conn, NOTES_IDX, "Net 60");
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        let message = mgr.status_message.clone().unwrap();
+        assert!(message.contains("clients are frozen"), "got: {message}");
+        assert!(matches!(mgr.screen, Screen::Edit(_)), "the form stays open");
+    }
+
+    #[test]
+    fn e_on_an_empty_list_does_nothing() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+        assert!(matches!(mgr.screen, Screen::List));
     }
 
     fn focused(mgr: &ClientManager) -> usize {
