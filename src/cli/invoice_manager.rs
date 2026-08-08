@@ -149,7 +149,7 @@ pub struct InvoiceManager {
 impl InvoiceManager {
     pub fn new(conn: &Connection, greeting: &str) -> Self {
         Self {
-            rows: list_invoices(conn).unwrap_or_default(),
+            rows: list_invoices(conn, None, None).unwrap_or_default(),
             selection: 0,
             scroll_offset: 0,
             last_visible_rows: 20,
@@ -163,7 +163,7 @@ impl InvoiceManager {
     }
 
     fn reload_list(&mut self, conn: &Connection) {
-        self.rows = list_invoices(conn).unwrap_or_default();
+        self.rows = list_invoices(conn, None, None).unwrap_or_default();
         if self.rows.is_empty() {
             self.selection = 0;
         } else {
@@ -1055,7 +1055,7 @@ fn optional_display(value: Option<&str>) -> String {
 
 /// What is still owed on an invoice.
 fn balance(row: &InvoiceListRow) -> f64 {
-    row.total - row.paid
+    row.balance
 }
 
 /// The column budget S4 lays out. A `TestBackend` buffer is this wide by
@@ -1086,7 +1086,10 @@ fn list_cells(marker: &str, row: &InvoiceListRow) -> (String, String, String) {
         format!("{:<STATUS_WIDTH$} ", truncate(&row.status, STATUS_WIDTH)),
         format!(
             "{:<client_width$} {total:>money_width$} {paid:>money_width$} {due}",
-            truncate(&row.client_name, client_width.saturating_sub(2)),
+            truncate(
+                &optional_display(row.client_name.as_deref()),
+                client_width.saturating_sub(2)
+            ),
         ),
     )
 }
@@ -1611,7 +1614,7 @@ mod tests {
         // the rule is the CLI's, so the screen cannot disagree about it.
         let (_d, conn) = test_conn();
         seed_invoice(&conn, "Cedar Systems", 100.0);
-        let invoice = get_invoice(&conn, list_invoices(&conn).unwrap()[0].id).unwrap();
+        let invoice = get_invoice(&conn, list_invoices(&conn, None, None).unwrap()[0].id).unwrap();
 
         for amount in [-25.0, f64::NAN, f64::INFINITY] {
             let message = field_wording(
@@ -2399,7 +2402,7 @@ mod tests {
     }
 
     fn row_of(conn: &Connection) -> InvoiceListRow {
-        list_invoices(conn).unwrap().pop().unwrap()
+        list_invoices(conn, None, None).unwrap().pop().unwrap()
     }
 
     #[test]

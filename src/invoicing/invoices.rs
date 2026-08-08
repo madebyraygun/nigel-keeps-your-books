@@ -159,6 +159,7 @@ pub fn record_payment(
     method: &str,
     stripe_session: Option<&str>,
 ) -> Result<bool> {
+    validate_payment_method(method)?;
     if let Some(sid) = stripe_session {
         let seen: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM invoice_payments WHERE stripe_checkout_session_id = ?1)",
@@ -552,32 +553,119 @@ pub struct InvoiceListRow {
     pub id: i64,
     pub number: i64,
     pub status: String,
-    pub client_name: String,
+    pub client_id: i64,
+    /// `None` when the client row is gone. The join is a LEFT JOIN, so an
+    /// orphaned invoice appears with a dash rather than vanishing from the list.
+    pub client_name: Option<String>,
+    pub issue_date: String,
+    pub due_date: Option<String>,
+    pub currency: String,
     pub total: f64,
     pub paid: f64,
-    pub due_date: Option<String>,
+    pub balance: f64,
+}
+
+/// The `status` filter vocabulary: the six status words plus `open`, the
+/// sent/partial/overdue set `sync` and the aging report already work in.
+pub const OPEN_STATUSES: [&str; 3] = ["sent", "partial", "overdue"];
+const STATUS_WORDS: [&str; 6] = ["draft", "sent", "partial", "paid", "overdue", "void"];
+
+/// The `invoice_payments.method` CHECK set, checked before the insert so an
+/// unknown method is a named refusal rather than a constraint violation.
+pub const PAYMENT_METHODS: [&str; 4] = ["stripe", "ach", "direct_deposit", "other"];
+
+pub fn validate_payment_method(method: &str) -> Result<()> {
+    if PAYMENT_METHODS.contains(&method) {
+        return Ok(());
+    }
+    Err(NigelError::Invalid(format!(
+        "Invalid payment method: {method} (expected one of {})",
+        PAYMENT_METHODS.join(", ")
+    )))
+}
+
+/// Expand a `status` filter to the statuses it selects.
+fn statuses_for(filter: &str) -> Result<Vec<&'static str>> {
+    if filter == "open" {
+        return Ok(OPEN_STATUSES.to_vec());
+    }
+    STATUS_WORDS
+        .iter()
+        .find(|word| **word == filter)
+        .map(|word| vec![*word])
+        .ok_or_else(|| {
+            NigelError::Invalid(format!(
+                "Invalid status: {filter} (expected one of {}, open)",
+                STATUS_WORDS.join(", ")
+            ))
+        })
 }
 
 /// Every invoice, newest number first, with its client and paid-to-date.
-pub fn list_invoices(conn: &Connection) -> Result<Vec<InvoiceListRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.number, i.status, c.name, i.total,
-                COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
-                          WHERE p.invoice_id = i.id), 0),
-                i.due_date
-         FROM invoices i JOIN clients c ON c.id = i.client_id
-         ORDER BY i.number DESC",
-    )?;
+///
+/// `status` takes a status word or `open`; `client_id` narrows to one client.
+/// Paid amounts come from one `GROUP BY` aggregate rather than a `SELECT SUM`
+/// per row, which is what keeps a screen that redraws off an N+1.
+pub fn list_invoices(
+    conn: &Connection,
+    status: Option<&str>,
+    client_id: Option<i64>,
+) -> Result<Vec<InvoiceListRow>> {
+    let statuses = match status {
+        Some(filter) => Some(statuses_for(filter)?),
+        None => None,
+    };
+
+    let mut wheres = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(ref statuses) = statuses {
+        let slots: Vec<String> = statuses
+            .iter()
+            .map(|status| {
+                params.push(Box::new(*status));
+                format!("?{}", params.len())
+            })
+            .collect();
+        wheres.push(format!("i.status IN ({})", slots.join(", ")));
+    }
+    if let Some(id) = client_id {
+        params.push(Box::new(id));
+        wheres.push(format!("i.client_id = ?{}", params.len()));
+    }
+    let filter = if wheres.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", wheres.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT i.id, i.number, i.status, i.client_id, c.name, i.issue_date, i.due_date,
+                i.currency, i.total, COALESCE(p.paid, 0)
+         FROM invoices i
+         LEFT JOIN clients c ON c.id = i.client_id
+         LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid FROM invoice_payments
+                    GROUP BY invoice_id) p ON p.invoice_id = i.id
+         {filter}
+         ORDER BY i.number DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(param_refs.as_slice(), |r| {
+            let total: f64 = r.get(8)?;
+            let paid: f64 = r.get(9)?;
             Ok(InvoiceListRow {
                 id: r.get(0)?,
                 number: r.get(1)?,
                 status: r.get(2)?,
-                client_name: r.get(3)?,
-                total: r.get(4)?,
-                paid: r.get(5)?,
+                client_id: r.get(3)?,
+                client_name: r.get(4)?,
+                issue_date: r.get(5)?,
                 due_date: r.get(6)?,
+                currency: r.get(7)?,
+                total,
+                paid,
+                balance: total - paid,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1919,7 +2007,7 @@ mod tests {
         let (_cid, ids) = seed_three(&conn);
         record_payment(&conn, ids[1], 50.0, "2026-08-05", "ach", None).unwrap();
 
-        let rows = list_invoices(&conn).unwrap();
+        let rows = list_invoices(&conn, None, None).unwrap();
         assert_eq!(rows.len(), 3);
 
         let numbers: Vec<i64> = rows.iter().map(|r| r.number).collect();
@@ -1928,16 +2016,103 @@ mod tests {
         assert_eq!(numbers, descending, "newest first");
 
         for row in &rows {
-            assert_eq!(row.client_name, "Cedar Systems");
+            assert_eq!(row.client_name.as_deref(), Some("Cedar Systems"));
+            assert_eq!(row.issue_date, "2026-08-04");
+            assert_eq!(row.currency, "USD");
         }
         let middle = rows.iter().find(|r| r.id == ids[1]).unwrap();
         assert_eq!(middle.paid, 50.0);
         assert_eq!(middle.total, 200.0);
+        assert_eq!(middle.balance, 150.0);
         // The stored status, whatever it is — an unpublished draft stays draft.
         assert_eq!(middle.status, get_invoice(&conn, ids[1]).unwrap().status);
         for row in rows.iter().filter(|r| r.id != ids[1]) {
             assert_eq!(row.paid, 0.0, "invoice #{} has no payments", row.number);
+            assert_eq!(row.balance, row.total);
         }
+    }
+
+    #[test]
+    fn list_invoices_computes_paid_in_one_aggregate_not_one_query_per_row() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        // Five payments spread across three invoices, in one call.
+        record_payment(&conn, ids[0], 25.0, "2026-08-05", "ach", None).unwrap();
+        record_payment(&conn, ids[0], 25.0, "2026-08-06", "ach", None).unwrap();
+        record_payment(&conn, ids[1], 40.0, "2026-08-05", "ach", None).unwrap();
+        record_payment(&conn, ids[1], 60.0, "2026-08-07", "other", None).unwrap();
+        record_payment(&conn, ids[2], 300.0, "2026-08-05", "direct_deposit", None).unwrap();
+
+        let rows = list_invoices(&conn, None, None).unwrap();
+        let paid = |id: i64| rows.iter().find(|r| r.id == id).unwrap().paid;
+        assert_eq!(paid(ids[0]), 50.0);
+        assert_eq!(paid(ids[1]), 100.0);
+        assert_eq!(paid(ids[2]), 300.0);
+        assert_eq!(rows.iter().find(|r| r.id == ids[2]).unwrap().balance, 0.0);
+    }
+
+    #[test]
+    fn list_invoices_keeps_an_invoice_whose_client_row_is_missing() {
+        let (_d, conn) = test_conn();
+        let (cid, ids) = seed_three(&conn);
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("DELETE FROM clients WHERE id = ?1", [cid])
+            .unwrap();
+
+        // A list that hides invoices is worse than one that shows a dash.
+        let rows = list_invoices(&conn, None, None).unwrap();
+        assert_eq!(rows.len(), ids.len());
+        assert!(rows.iter().all(|r| r.client_name.is_none()), "{rows:?}");
+    }
+
+    #[test]
+    fn list_invoices_filters_by_status_word_and_by_open() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+        mark_published(&conn, ids[0], "2026-08-05").unwrap();
+        mark_published(&conn, ids[1], "2026-08-05").unwrap();
+        record_payment(&conn, ids[1], 50.0, "2026-08-06", "ach", None).unwrap();
+
+        let numbers = |status: &str| -> Vec<i64> {
+            let mut ids: Vec<i64> = list_invoices(&conn, Some(status), None)
+                .unwrap()
+                .iter()
+                .map(|r| r.id)
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(numbers("draft"), vec![ids[2]]);
+        assert_eq!(numbers("sent"), vec![ids[0]]);
+        assert_eq!(numbers("partial"), vec![ids[1]]);
+        assert_eq!(numbers("open"), vec![ids[0], ids[1]]);
+        assert!(numbers("void").is_empty());
+    }
+
+    #[test]
+    fn an_unknown_status_filter_is_invalid_and_names_the_legal_set() {
+        let (_d, conn) = test_conn();
+        let err = list_invoices(&conn, Some("archived"), None).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        let text = err.to_string();
+        for word in ["draft", "overdue", "open"] {
+            assert!(text.contains(word), "missing {word} in: {text}");
+        }
+    }
+
+    #[test]
+    fn list_invoices_filters_by_client() {
+        let (_d, conn) = test_conn();
+        let (cid, ids) = seed_three(&conn);
+        let other = open_invoice(&conn, "Globex", "2026-01-05", None, 100.0);
+
+        let mine: Vec<i64> = list_invoices(&conn, None, Some(cid))
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(mine.len(), ids.len());
+        assert!(!mine.contains(&other), "another client's invoice leaked in");
     }
 
     #[test]
@@ -1946,7 +2121,7 @@ mod tests {
         open_invoice(&conn, "Acme", "2026-01-05", Some("2026-02-05"), 100.0);
         open_invoice(&conn, "Globex", "2026-01-05", None, 100.0);
 
-        let rows = list_invoices(&conn).unwrap();
+        let rows = list_invoices(&conn, None, None).unwrap();
         let dues: Vec<Option<String>> = rows.iter().map(|r| r.due_date.clone()).collect();
         assert!(dues.contains(&Some("2026-02-05".to_string())), "{dues:?}");
         assert!(dues.contains(&None), "{dues:?}");
@@ -1955,7 +2130,26 @@ mod tests {
     #[test]
     fn list_invoices_on_an_empty_book_is_empty() {
         let (_d, conn) = test_conn();
-        assert!(list_invoices(&conn).unwrap().is_empty());
+        assert!(list_invoices(&conn, None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_payment_method_is_invalid_not_a_constraint_violation() {
+        let (_d, conn) = test_conn();
+        let (_cid, ids) = seed_three(&conn);
+
+        let err = validate_payment_method("bitcoin").unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert!(err.to_string().contains("direct_deposit"), "got: {err}");
+
+        // record_payment refuses before the insert, so no CHECK ever fires.
+        let err = record_payment(&conn, ids[0], 10.0, "2026-08-05", "bitcoin", None).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert!(payments(&conn, ids[0]).unwrap().is_empty());
+
+        for method in PAYMENT_METHODS {
+            assert!(validate_payment_method(method).is_ok(), "{method}");
+        }
     }
 
     #[test]
