@@ -1,8 +1,18 @@
 use crossterm::event::KeyCode;
+use ratatui::{
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
+};
 use rusqlite::Connection;
 
 use crate::invoicing::clients::{add_client, list_clients, update_client, ClientUpdate};
 use crate::models::Client;
+use crate::tui::{FOOTER_STYLE, HEADER_STYLE};
+
+const EMAIL_HINT: &str = "Email is the address `send` mails the invoice to.";
 
 // Field indices for ClientForm — keep in sync with field order.
 const NAME_IDX: usize = 0;
@@ -111,6 +121,157 @@ impl ClientManager {
     fn set_status(&mut self, msg: String) {
         self.status_message = Some(msg);
         self.status_ttl = 3;
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame) {
+        match &self.screen {
+            Screen::List => self.draw_list(frame),
+            Screen::Add(_) => self.draw_form(frame, "Add Client"),
+            Screen::Edit(_) => self.draw_form(frame, "Edit Client"),
+        }
+    }
+
+    /// Header, separator, content, footer — the four-row frame every manager
+    /// screen draws into.
+    fn draw_chrome(&self, frame: &mut Frame) -> (Rect, Rect) {
+        let area = frame.area();
+        let [header_area, sep, content_area, hints_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget(
+            Paragraph::new(format!(" {}", self.greeting)).style(HEADER_STYLE),
+            header_area,
+        );
+        let sep_line = "\u{2501}".repeat(area.width as usize);
+        frame.render_widget(
+            Paragraph::new(sep_line.as_str()).style(Style::default().fg(Color::DarkGray)),
+            sep,
+        );
+        (content_area, hints_area)
+    }
+
+    fn draw_list(&mut self, frame: &mut Frame) {
+        let (content_area, hints_area) = self.draw_chrome(frame);
+
+        // 3 lines of title area + 1 column header = 4 lines of overhead.
+        let data_rows = (content_area.height as usize).saturating_sub(4);
+        self.last_visible_rows = data_rows;
+        // Marker, Name and Email take a fixed 61; the address gets the rest.
+        let address_width = (content_area.width as usize).saturating_sub(61).max(10);
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" Clients ({})", self.clients.len()),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.clients.is_empty() {
+            lines.push(Line::from("   No clients yet. Press 'a' to add one."));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("   {:<28} {:<28} {}", "Name", "Email", "Billing address"),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+
+            let end = (self.scroll_offset + data_rows).min(self.clients.len());
+            for i in self.scroll_offset..end {
+                let client = &self.clients[i];
+                let marker = if i == self.selection { " > " } else { "   " };
+                let style = if i == self.selection {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "{marker}{:<28} {:<28} {}",
+                        truncate(&client.name, 26),
+                        truncate(&optional_display(client.email.as_deref()), 26),
+                        truncate(
+                            &optional_display(client.billing_address.as_deref()),
+                            address_width
+                        ),
+                    ),
+                    style,
+                )));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(lines), content_area);
+
+        if let Some(msg) = &self.status_message {
+            frame.render_widget(
+                Paragraph::new(format!(" {msg}")).style(Style::default().fg(Color::Yellow)),
+                hints_area,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(" a=add  e=edit  Esc=back  q=quit").style(FOOTER_STYLE),
+                hints_area,
+            );
+        }
+    }
+
+    fn draw_form(&self, frame: &mut Frame, title: &str) {
+        let (content_area, hints_area) = self.draw_chrome(frame);
+        let form = match &self.screen {
+            Screen::Add(f) | Screen::Edit(f) => f,
+            Screen::List => return,
+        };
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" {title}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        for (i, field) in form.fields.iter().enumerate() {
+            let is_focused = i == form.focused;
+            let (label_style, value_style, cursor) = if is_focused {
+                (
+                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Cyan),
+                    "_",
+                )
+            } else {
+                (Style::default(), Style::default(), "")
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {:<14} ", field.label), label_style),
+                Span::styled(format!("{}{cursor}", field.value), value_style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        match &self.status_message {
+            Some(msg) => lines.push(Line::from(Span::styled(
+                format!("   {msg}"),
+                Style::default().fg(Color::Yellow),
+            ))),
+            None => lines.push(Line::from(Span::styled(
+                format!("   {EMAIL_HINT}"),
+                FOOTER_STYLE,
+            ))),
+        }
+
+        frame.render_widget(Paragraph::new(lines), content_area);
+        frame.render_widget(
+            Paragraph::new(" Tab=next field  Enter=save  Esc=cancel").style(FOOTER_STYLE),
+            hints_area,
+        );
     }
 
     fn ensure_visible(&mut self, visible_rows: usize) {
@@ -245,6 +406,23 @@ impl ClientManager {
             }
             Err(e) => self.set_status(e.to_string()),
         }
+    }
+}
+
+/// An absent value reads as an em dash, never as an invented blank.
+fn optional_display(value: Option<&str>) -> String {
+    match value.map(str::trim) {
+        Some(v) if !v.is_empty() => v.to_string(),
+        _ => "\u{2014}".to_string(),
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max - 1).collect();
+        format!("{truncated}\u{2026}")
     }
 }
 
@@ -634,6 +812,131 @@ mod tests {
         let mut mgr = manager(&conn);
         mgr.handle_key(KeyCode::Char('e'), &conn);
         assert!(matches!(mgr.screen, Screen::List));
+    }
+
+    #[test]
+    fn truncate_leaves_short_strings_alone_and_ellipsises_long_ones() {
+        assert_eq!(truncate("Acme Co", 26), "Acme Co");
+        assert_eq!(truncate("abcde", 5), "abcde");
+        assert_eq!(truncate("abcdef", 5), "abcd\u{2026}");
+        // Character-wise, not byte-wise: a multi-byte name must not be split.
+        assert_eq!(truncate("é".repeat(6).as_str(), 5), "éééé\u{2026}");
+    }
+
+    #[test]
+    fn optional_display_renders_none_as_an_em_dash() {
+        assert_eq!(optional_display(Some("ap@acme.test")), "ap@acme.test");
+        assert_eq!(optional_display(None), "\u{2014}");
+        assert_eq!(optional_display(Some("   ")), "\u{2014}");
+    }
+
+    /// The screen as an 80x24 terminal renders it, one string per row.
+    fn rendered(mgr: &mut ClientManager) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| mgr.draw(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_list_renders_its_columns_and_footer() {
+        let (_d, conn) = test_conn();
+        seed_cedar(&conn);
+        add_client(&conn, "Acme Co", None, None, None).unwrap();
+        let mut mgr = manager(&conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Clients (2)"), "{screen}");
+        assert!(screen.contains("Name"), "{screen}");
+        assert!(screen.contains("Billing address"), "{screen}");
+        assert!(screen.contains("> Acme Co"), "{screen}");
+        assert!(screen.contains("ops@cedar.test"), "{screen}");
+        // Acme has neither email nor address.
+        assert!(screen.contains('\u{2014}'), "{screen}");
+        assert!(
+            screen.contains("a=add  e=edit  Esc=back  q=quit"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn the_empty_list_says_how_to_add_one() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Clients (0)"), "{screen}");
+        assert!(
+            screen.contains("No clients yet. Press 'a' to add one."),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn a_long_row_stays_inside_eighty_columns() {
+        let (_d, conn) = test_conn();
+        add_client(
+            &conn,
+            &"Wintermute Consolidated Holdings".repeat(3),
+            Some(&format!("{}@example.test", "a".repeat(60))),
+            Some(&"1 Very Long Street Name, Portland OR".repeat(3)),
+            None,
+        )
+        .unwrap();
+        let mut mgr = manager(&conn);
+
+        for row in rendered(&mut mgr).lines() {
+            assert!(row.chars().count() <= 80, "row overflows: {row:?}");
+        }
+    }
+
+    #[test]
+    fn the_add_form_renders_its_fields_and_hint() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('a'), &conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Add Client"), "{screen}");
+        for label in ["Name", "Email", "Address", "Notes"] {
+            assert!(screen.contains(label), "{label} missing:\n{screen}");
+        }
+        assert!(screen.contains(EMAIL_HINT), "{screen}");
+        assert!(
+            screen.contains("Tab=next field  Enter=save  Esc=cancel"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn a_failed_save_shows_the_message_where_the_hint_was() {
+        let (_d, conn) = test_conn();
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('a'), &conn);
+        mgr.handle_key(KeyCode::Enter, &conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Name is required"), "{screen}");
+        assert!(!screen.contains(EMAIL_HINT), "{screen}");
+    }
+
+    #[test]
+    fn the_edit_form_renders_the_selected_client() {
+        let (_d, conn) = test_conn();
+        seed_cedar(&conn);
+        let mut mgr = manager(&conn);
+        mgr.handle_key(KeyCode::Char('e'), &conn);
+
+        let screen = rendered(&mut mgr);
+        assert!(screen.contains("Edit Client"), "{screen}");
+        assert!(screen.contains("Cedar Systems"), "{screen}");
+        assert!(screen.contains("88 Cedar Way"), "{screen}");
     }
 
     fn focused(mgr: &ClientManager) -> usize {
