@@ -9,6 +9,7 @@ use thiserror::Error;
 pub enum BlockReason {
     HasTransactions,
     HasActiveRules,
+    HasInvoices,
 }
 
 /// A refused delete: what was being deleted, why, and how much of it there is.
@@ -40,10 +41,19 @@ impl DeleteBlock {
         }
     }
 
+    pub fn invoices(subject: &'static str, count: i64) -> Self {
+        Self {
+            subject,
+            reason: BlockReason::HasInvoices,
+            count,
+        }
+    }
+
     pub fn reason_code(&self) -> &'static str {
         match self.reason {
             BlockReason::HasTransactions => "has_transactions",
             BlockReason::HasActiveRules => "has_active_rules",
+            BlockReason::HasInvoices => "has_invoices",
         }
     }
 }
@@ -64,6 +74,9 @@ impl fmt::Display for DeleteBlock {
                     f,
                     "Cannot delete: {subject} has {count} active rule{plural}"
                 )
+            }
+            BlockReason::HasInvoices => {
+                write!(f, "Cannot delete: {subject} has {count} invoice{plural}")
             }
         }
     }
@@ -163,6 +176,14 @@ mod tests {
                 DeleteBlock::active_rules("category", 3),
                 "Cannot delete: category has 3 active rules",
             ),
+            (
+                DeleteBlock::invoices("client", 1),
+                "Cannot delete: client has 1 invoice",
+            ),
+            (
+                DeleteBlock::invoices("client", 3),
+                "Cannot delete: client has 3 invoices",
+            ),
         ];
         for (block, expected) in cases {
             assert_eq!(block.to_string(), expected);
@@ -179,6 +200,10 @@ mod tests {
         assert_eq!(
             DeleteBlock::active_rules("category", 1).reason_code(),
             "has_active_rules"
+        );
+        assert_eq!(
+            DeleteBlock::invoices("client", 1).reason_code(),
+            "has_invoices"
         );
     }
 

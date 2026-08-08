@@ -1170,9 +1170,23 @@ mod tests {
         .unwrap();
     }
 
+    /// The client with this name, created on first use. Client names are unique
+    /// now, and these helpers are called once per invoice.
+    fn client_id(conn: &Connection, name: &str) -> i64 {
+        match add_client(conn, name, None, None, None) {
+            Ok(id) => id,
+            Err(NigelError::DuplicateName { .. }) => conn
+                .query_row("SELECT id FROM clients WHERE name = ?1", [name], |r| {
+                    r.get(0)
+                })
+                .unwrap(),
+            Err(e) => panic!("add_client({name}): {e}"),
+        }
+    }
+
     /// One 100.00 draft invoice (number 1248) and its row id.
     fn seed_draft(conn: &Connection) -> i64 {
-        let cid = add_client(conn, "Acme", None, None, None).unwrap();
+        let cid = client_id(conn, "Acme");
         let items = vec![NewLineItem {
             description: "Work".into(),
             quantity: 1.0,
@@ -1908,7 +1922,7 @@ mod tests {
         due: Option<&str>,
         amount: f64,
     ) -> i64 {
-        let cid = add_client(conn, client, None, None, None).unwrap();
+        let cid = client_id(conn, client);
         let items = vec![NewLineItem {
             description: "Work".into(),
             quantity: 1.0,

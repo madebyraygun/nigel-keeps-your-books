@@ -1,8 +1,22 @@
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::error::{NigelError, Result};
+use crate::error::{DeleteBlock, NigelError, Result};
 use crate::models::Client;
+
+/// Is this name already taken by some other client?
+///
+/// The column has no UNIQUE constraint, so the check lives here rather than in
+/// a caller — the `accounts::add_account` precedent, for the same reason: the
+/// CLI, the TUI and the API all insert through this function.
+fn name_taken(conn: &Connection, name: &str, except: Option<i64>) -> Result<bool> {
+    let taken: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM clients WHERE name = ?1 AND id IS NOT ?2)",
+        rusqlite::params![name, except],
+        |row| row.get(0),
+    )?;
+    Ok(taken)
+}
 
 pub fn add_client(
     conn: &Connection,
@@ -11,6 +25,16 @@ pub fn add_client(
     billing_address: Option<&str>,
     notes: Option<&str>,
 ) -> Result<i64> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(NigelError::Invalid("Name is required".into()));
+    }
+    if name_taken(conn, name, None)? {
+        return Err(NigelError::DuplicateName {
+            kind: "Client",
+            name: name.to_string(),
+        });
+    }
     conn.execute(
         "INSERT INTO clients (name, email, billing_address, notes) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![name, email, billing_address, notes],
@@ -82,8 +106,17 @@ pub fn update_client(conn: &Connection, id: i64, update: &ClientUpdate) -> Resul
         ));
     }
     if let Some(ref name) = update.name {
-        if name.trim().is_empty() {
+        let name = name.trim();
+        if name.is_empty() {
             return Err(NigelError::Invalid("Name is required".into()));
+        }
+        // Excluding this client, so a form that resends an unchanged name does
+        // not collide with itself.
+        if name_taken(conn, name, Some(id))? {
+            return Err(NigelError::DuplicateName {
+                kind: "Client",
+                name: name.to_string(),
+            });
         }
     }
 
@@ -115,6 +148,36 @@ pub fn update_client(conn: &Connection, id: i64, update: &ClientUpdate) -> Resul
     );
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     if conn.execute(&sql, param_refs.as_slice())? == 0 {
+        return Err(NigelError::NotFound(format!("Client not found: id {id}")));
+    }
+    Ok(())
+}
+
+/// Why this client cannot be deleted, or `None` when it can — the shape
+/// `accounts::delete_blocker` and `categories::delete_blocker` return, so the
+/// API answers all three with one mapping and the TUI prints one sentence.
+///
+/// Every status counts, including `void` and `paid`: the invoice names this
+/// client on a page that has already been sent, and an invoice whose client row
+/// is gone is a state the rest of the system only tolerates because nothing is
+/// allowed to create it.
+pub fn delete_blocker(conn: &Connection, id: i64) -> Result<Option<DeleteBlock>> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM invoices WHERE client_id = ?1",
+        [id],
+        |r| r.get(0),
+    )?;
+    if count > 0 {
+        return Ok(Some(DeleteBlock::invoices("client", count)));
+    }
+    Ok(None)
+}
+
+pub fn delete_client(conn: &Connection, id: i64) -> Result<()> {
+    if let Some(block) = delete_blocker(conn, id)? {
+        return Err(NigelError::Blocked(block));
+    }
+    if conn.execute("DELETE FROM clients WHERE id = ?1", [id])? == 0 {
         return Err(NigelError::NotFound(format!("Client not found: id {id}")));
     }
     Ok(())
@@ -407,6 +470,132 @@ mod tests {
         let err = client_summary(&conn, 99).map(|_| ()).unwrap_err();
         assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
         assert_eq!(err.to_string(), "Client not found: id 99");
+    }
+
+    #[test]
+    fn a_client_with_no_invoices_can_be_deleted() {
+        let (_d, conn) = test_conn();
+        let id = seed_client(&conn);
+
+        assert!(delete_blocker(&conn, id).unwrap().is_none());
+        delete_client(&conn, id).unwrap();
+        assert!(list_clients(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_client_with_invoices_is_blocked_with_the_count() {
+        let (_d, conn) = test_conn();
+        let id = seed_client(&conn);
+        seed_invoice(&conn, id, "2026-06-01", 100.0);
+        seed_invoice(&conn, id, "2026-07-01", 200.0);
+
+        let block = delete_blocker(&conn, id).unwrap().expect("blocked");
+        assert_eq!(block.reason_code(), "has_invoices");
+        assert_eq!(block.count, 2);
+
+        let err = delete_client(&conn, id).unwrap_err();
+        assert!(matches!(err, NigelError::Blocked(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Cannot delete: client has 2 invoices");
+        // Refused means refused: the client is still there.
+        assert_eq!(list_clients(&conn).unwrap().len(), 1);
+    }
+
+    /// Every status counts, not just the open ones. A void or settled invoice
+    /// still names its client on the page that was sent out.
+    #[test]
+    fn a_void_or_paid_invoice_still_blocks_the_delete() {
+        let (_d, conn) = test_conn();
+        let id = seed_client(&conn);
+
+        let settled = seed_invoice(&conn, id, "2026-06-01", 100.0);
+        publish(&conn, settled, "2026-06-01");
+        crate::invoicing::invoices::record_payment(
+            &conn,
+            settled,
+            100.0,
+            "2026-06-10",
+            "ach",
+            None,
+        )
+        .unwrap();
+
+        let cancelled = seed_invoice(&conn, id, "2026-07-01", 500.0);
+        crate::invoicing::invoices::void_invoice(&conn, cancelled, "2026-07-02").unwrap();
+
+        let block = delete_blocker(&conn, id).unwrap().expect("blocked");
+        assert_eq!(block.count, 2);
+        assert!(matches!(
+            delete_client(&conn, id).unwrap_err(),
+            NigelError::Blocked(_)
+        ));
+    }
+
+    #[test]
+    fn deleting_a_missing_client_is_not_found() {
+        let (_d, conn) = test_conn();
+        let err = delete_client(&conn, 99).unwrap_err();
+        assert!(matches!(err, NigelError::NotFound(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Client not found: id 99");
+    }
+
+    #[test]
+    fn a_duplicate_client_name_is_refused() {
+        let (_d, conn) = test_conn();
+        add_client(&conn, "Acme Co", None, None, None).unwrap();
+
+        let err = add_client(&conn, "Acme Co", None, None, None).unwrap_err();
+        assert!(
+            matches!(err, NigelError::DuplicateName { kind: "Client", .. }),
+            "got: {err:?}"
+        );
+        assert_eq!(err.to_string(), "Client name already exists: Acme Co");
+        assert_eq!(list_clients(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_empty_client_name_is_refused() {
+        let (_d, conn) = test_conn();
+        let err = add_client(&conn, "   ", None, None, None).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert_eq!(err.to_string(), "Name is required");
+    }
+
+    #[test]
+    fn renaming_onto_another_clients_name_is_refused_but_a_no_op_rename_is_not() {
+        let (_d, conn) = test_conn();
+        let acme = add_client(&conn, "Acme Co", None, None, None).unwrap();
+        let globex = add_client(&conn, "Globex", None, None, None).unwrap();
+
+        let err = update_client(
+            &conn,
+            globex,
+            &ClientUpdate {
+                name: Some("Acme Co".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, NigelError::DuplicateName { kind: "Client", .. }),
+            "got: {err:?}"
+        );
+
+        // The client manager sends every field on every edit, so a name that
+        // has not changed must not collide with itself.
+        update_client(
+            &conn,
+            acme,
+            &ClientUpdate {
+                name: Some("Acme Co".into()),
+                email: Some(Some("ap@acme.test".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            get_client(&conn, acme).unwrap().email.as_deref(),
+            Some("ap@acme.test")
+        );
     }
 
     #[test]
