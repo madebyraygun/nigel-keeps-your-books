@@ -83,7 +83,7 @@ fn is_void(invoice: &Invoice) -> bool {
     invoice.voided_at.is_some() || invoice.status == InvoiceStatus::Void.as_str()
 }
 
-fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
+pub(crate) fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
     if is_void(invoice) {
         return Err(NigelError::Conflict {
             code: "void",
@@ -98,7 +98,7 @@ fn ensure_not_void(invoice: &Invoice, action: &str) -> Result<()> {
 
 /// Resolve the amount to record: the explicit `--amount`, or the whole
 /// outstanding balance. Rejects amounts that would write a junk payment row.
-fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
+pub(crate) fn payment_amount(invoice: &Invoice, paid: f64, requested: Option<f64>) -> Result<f64> {
     match requested {
         // Negated positive test, not `amount <= 0.0`: NaN compares false against
         // every bound, and a NaN payment row poisons every later SUM.
@@ -131,7 +131,7 @@ fn require(value: Option<String>, what: &str) -> Result<String> {
 
 /// The business name the settings screen writes, as the invoice page and the
 /// email subject want it: a plain string, empty when nobody has set one.
-fn company_name(conn: &Connection) -> String {
+pub(crate) fn company_name(conn: &Connection) -> String {
     crate::db::get_metadata(conn, "company_name").unwrap_or_default()
 }
 
@@ -141,7 +141,9 @@ fn build_gateway(cfg: &InvoicingConfig) -> Result<StripeClient> {
     })
 }
 
-fn build_clients(cfg: InvoicingConfig) -> Result<(StripeClient, R2Publisher, MailgunClient)> {
+pub(crate) fn build_clients(
+    cfg: InvoicingConfig,
+) -> Result<(StripeClient, R2Publisher, MailgunClient)> {
     let stripe = build_gateway(&cfg)?;
     let r2 = R2Publisher {
         account_id: require(cfg.r2_account_id, "r2_account_id")?,
