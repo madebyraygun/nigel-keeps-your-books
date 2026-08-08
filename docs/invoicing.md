@@ -290,6 +290,29 @@ button linking to Stripe, and bank-transfer instructions. The direct-deposit lin
 tells the client to get in touch at `from_email`, the same address the invoice is
 sent from.
 
+### From the web UI
+
+`nigel serve` sends the same five steps through
+`POST /api/invoices/{number}/send`, with two differences worth knowing.
+
+**It asks first, and the asking is enforced.** The request body must carry
+`{"confirm": true}`; without it the server answers `400` and sends nothing. A
+confirm dialog on a screen is a convention the next screen can forget, so the
+flag makes the dialog the only way to reach the endpoint.
+
+**It says which step failed.** Where the CLI prints one error, the response
+names the step (`config`, `load`, `precheck`, `payment_link`, `render`,
+`publish`, `email`, `record`), the service behind it, the steps that did
+complete, and — the one that matters — whether the email had already gone out.
+Everything before the email is safe to retry; a failure at `record` after it is
+not, because the client already has the invoice. Nothing retries automatically.
+A completed send answers with the same trace, so a screen can say what happened
+rather than just "done".
+
+The three outbound calls are bounded (10s to connect, 30s in total, each), which
+`nigel invoice send` benefits from too: before that, a connection that was
+accepted and never answered hung the terminal.
+
 ## Customizing the invoice page
 
 The page a client opens is yours to change without rebuilding Nigel. Put a file
@@ -406,7 +429,14 @@ nigel invoice sync
 `sync` walks every open invoice (`sent`, `partial`, or `overdue`) that has a
 payment link, asks Stripe for that link's completed checkout sessions, and records
 any it has not seen. Payments are keyed by checkout session ID, so re-running it
-records nothing twice. It prints `Recorded N new payment(s)`.
+records nothing twice. It prints `Recorded N new payment(s)`, and a notice per
+invoice Stripe refused — a deleted payment link 404s forever, and one of those
+must not stop the rest of the run.
+
+`POST /api/invoices/sync` is the same run over HTTP. It answers with the count,
+how many invoices were checked, and those per-invoice failures as data rather
+than as stderr a browser cannot read. Only a run where *every* invoice failed is
+an error.
 
 Payments made outside Stripe are entered by hand:
 
