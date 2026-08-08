@@ -677,13 +677,21 @@ manager offers none for the same reason this route guards it.
 nothing, since `create_invoice` advances the counter in the same transaction it
 inserts the row.
 
-The line-item rules apply to `POST` and to `PATCH` alike: at least one item, a
-finite `quantity` and `unitAmount` on each, and a total above zero. All three
-are `400`. A non-finite figure is rejected for `payment_amount`'s reason — it
-would poison every later `SUM` over the column — and although JSON cannot spell
-`NaN`, an overflowing literal deserializes to infinity. Descriptions may contain
-anything, including a colon: the CLI's `desc:qty:unit` restriction is an artifact
-of parsing one argv string.
+The line-item rules apply to `POST` and to `PATCH` alike, and are the data
+layer's own, so `nigel invoice new` refuses exactly the same items: at least one
+item, a finite `quantity` and `unitAmount` on each, a finite line total and sum,
+and a total above zero. All of them are `400`.
+
+A non-finite figure is rejected for `payment_amount`'s reason — it would poison
+every later `SUM` over the column. JSON cannot spell `NaN`, but it does not have
+to: an overflowing literal deserializes to infinity, `1e308 × 1e308` is infinity
+from two finite factors, and two opposite-sign overflows sum to `NaN`, which
+serde would then render as `"total": null` against a field a client has typed as
+a number. The check therefore runs **after** the arithmetic, on each line total
+and on the sum, not only on the figures that went into them.
+
+Descriptions may contain anything, including a colon: the CLI's `desc:qty:unit`
+restriction is an artifact of parsing one argv string.
 
 `PATCH /api/invoices/:number` is **draft-only**, and `items` is a whole-list
 replacement rather than a per-row edit — present means "these are the line items

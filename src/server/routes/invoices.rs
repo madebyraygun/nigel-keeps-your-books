@@ -245,37 +245,6 @@ fn enrich_conflict(err: NigelError, invoice: &Invoice, paid: f64) -> ApiError {
     }
 }
 
-/// The line items a create or an edit is asking for, refused before they reach
-/// a row.
-///
-/// `create_invoice` and `update_invoice` sum these into `subtotal`/`total`, so a
-/// non-finite figure here poisons every later aggregate over the column — the
-/// same reasoning `payment_amount` rejects a NaN amount with. JSON cannot spell
-/// `NaN`, but an overflowing literal deserializes to infinity.
-fn checked_items(items: Vec<NewLineItem>) -> ApiResult<Vec<NewLineItem>> {
-    if items.is_empty() {
-        return Err(ApiError::bad_request(
-            "An invoice needs at least one line item.",
-        ));
-    }
-    for item in &items {
-        if !item.quantity.is_finite() || !item.unit_amount.is_finite() {
-            return Err(ApiError::bad_request(format!(
-                "Line item \"{}\" needs a finite quantity and unit amount.",
-                item.description
-            )));
-        }
-    }
-    // Every figure is finite by now, so a plain comparison says what it means.
-    let total: f64 = items.iter().map(|i| i.quantity * i.unit_amount).sum();
-    if total <= 0.0 {
-        return Err(ApiError::bad_request(format!(
-            "An invoice must total more than zero, got {total:.2}."
-        )));
-    }
-    Ok(items)
-}
-
 fn default_currency() -> String {
     "USD".to_string()
 }
@@ -303,14 +272,13 @@ struct NewInvoiceRequest {
     terms: Option<String>,
 }
 
-/// A new draft. The client, the dates and the currency are `create_invoice`'s
-/// own checks; the number comes from the counter it advances in the same
-/// transaction, so a refused create reserves nothing.
+/// A new draft. The client, the line items, the dates and the currency are all
+/// `create_invoice`'s own checks; the number comes from the counter it advances
+/// in the same transaction, so a refused create reserves nothing.
 async fn create(
     State(state): State<AppState>,
     ApiJson(new): ApiJson<NewInvoiceRequest>,
 ) -> ApiResult<(StatusCode, Json<InvoiceDetail>)> {
-    let items = checked_items(new.items)?;
     checked_date("issueDate", &new.issue_date)?;
     if let Some(ref due) = new.due_date {
         checked_date("dueDate", due)?;
@@ -322,7 +290,7 @@ async fn create(
             &new.issue_date,
             new.due_date.as_deref(),
             &new.currency,
-            &items,
+            &new.items,
             new.notes.as_deref(),
             new.terms.as_deref(),
         )
@@ -352,8 +320,9 @@ struct InvoicePatch {
 }
 
 impl InvoicePatch {
-    /// Field for field into the data layer's update struct, with the dates and
-    /// the line items checked on the way through.
+    /// Field for field into the data layer's update struct, with only the date
+    /// shape checked on the way through — `update_invoice` validates the line
+    /// items itself, so the CLI and the API refuse the same ones.
     fn into_update(self) -> ApiResult<InvoiceUpdate> {
         if let Some(ref issue) = self.issue_date {
             checked_date("issueDate", issue)?;
@@ -367,7 +336,7 @@ impl InvoicePatch {
             currency: self.currency,
             notes: self.notes,
             terms: self.terms,
-            items: self.items.map(checked_items).transpose()?,
+            items: self.items,
         })
     }
 }
@@ -916,47 +885,53 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{what}: {json}");
         }
 
-        // A quantity that overflows an f64 — JSON cannot spell NaN, and this is
-        // how a non-finite figure actually arrives — never reaches a row, one
-        // way or the other: either serde refuses the literal or `checked_items`
-        // does. Sent as raw text because the literal will not compile in Rust.
-        let body = r#"{"clientId":1,"issueDate":"2026-04-01",
+        // Three ways a non-finite total arrives over HTTP. JSON cannot spell
+        // NaN, but a literal can overflow, two finite factors can multiply past
+        // f64::MAX, and two finite line totals can sum past it — any of which
+        // would be stored as the total and serialized as `null` against a field
+        // a client has typed as a number. Sent as raw text because `1e400` will
+        // not compile as a Rust literal.
+        let overflowing_literal = r#"{"clientId":1,"issueDate":"2026-04-01",
             "items":[{"description":"Work","quantity":1e400,"unitAmount":10.0}]}"#;
-        let (status, json) = send(
-            &app,
-            session_request("POST", "/api/invoices", &token, Some(body)),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        let overflowing_product = r#"{"clientId":1,"issueDate":"2026-04-01",
+            "items":[{"description":"Work","quantity":1e308,"unitAmount":1e308}]}"#;
+        let overflowing_sum = r#"{"clientId":1,"issueDate":"2026-04-01","items":[
+            {"description":"Big","quantity":1e154,"unitAmount":1e154},
+            {"description":"Big","quantity":1e154,"unitAmount":1e154}]}"#;
+
+        for body in [overflowing_literal, overflowing_product, overflowing_sum] {
+            let (status, json) = send(
+                &app,
+                session_request("POST", "/api/invoices", &token, Some(body)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {json}");
+        }
 
         // Nothing above reserved a number.
         let next = ok_json(&app, "/api/invoices/next-number", &token).await;
         assert_eq!(next["number"], 1253);
     }
 
-    /// The unit half of the same rule, where a non-finite figure can actually
-    /// be constructed.
-    #[test]
-    fn checked_items_refuses_an_empty_list_a_non_finite_figure_and_a_zero_total() {
-        use super::checked_items;
+    /// The same rule on the edit half: `items` is a whole-list replacement, so
+    /// it recomputes the total from whatever it is given.
+    #[tokio::test]
+    async fn patching_items_with_an_overflowing_product_is_a_400() {
+        let _config = TempConfig::new();
+        let (_dir, db_path) = seeded_db();
+        let (app, token) = app_for(&db_path);
 
-        let line = |quantity: f64, unit_amount: f64| {
-            vec![crate::invoicing::invoices::NewLineItem {
-                description: "Work".into(),
-                quantity,
-                unit_amount,
-            }]
-        };
+        let body = r#"{"items":[{"description":"Work","quantity":1e308,"unitAmount":1e308}]}"#;
+        let (status, json) = send(
+            &app,
+            session_request("PATCH", "/api/invoices/1252", &token, Some(body)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
 
-        assert!(checked_items(vec![]).is_err());
-        assert!(checked_items(line(f64::NAN, 10.0)).is_err());
-        assert!(checked_items(line(1.0, f64::INFINITY)).is_err());
-        assert!(checked_items(line(0.0, 150.0)).is_err(), "a zero total");
-        assert!(
-            checked_items(line(-1.0, 150.0)).is_err(),
-            "a negative total"
-        );
-        assert!(checked_items(line(2.0, 150.0)).is_ok());
+        // The draft still totals what it did, and its total is still a number.
+        let draft = ok_json(&app, "/api/invoices/1252", &token).await;
+        assert_eq!(draft["total"], 2400.0);
     }
 
     #[tokio::test]

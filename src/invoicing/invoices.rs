@@ -22,6 +22,56 @@ pub struct NewLineItem {
     pub unit_amount: f64,
 }
 
+/// Refuse line items that would write a junk row or a junk total.
+///
+/// It lives here, called by [`create_invoice`] and [`update_invoice`] rather
+/// than by their callers, for `payment_amount`'s reason: a non-finite figure
+/// poisons every later `SUM` over the column, and both front ends have to
+/// refuse the same items in the same words. `--item`'s parser accepts `NaN`
+/// and `inf` because `f64::from_str` does, and JSON reaches the same place with
+/// an overflowing literal.
+///
+/// **Finite inputs do not make a finite result**, which is why the checks run
+/// after the arithmetic rather than only on the figures that went into it:
+/// `1e308 * 1e308` is a non-finite product of two finite factors, and two
+/// finite line totals of `1e308` sum past `f64::MAX` to infinity. Either would
+/// otherwise be written as the invoice's `total` and serialized as `null`
+/// against a field a client has typed as a number.
+///
+/// Refusing a non-finite line total per line is also what makes a NaN sum
+/// unreachable: NaN needs an infinity of each sign, and neither survives the
+/// per-line check.
+pub fn validate_items(items: &[NewLineItem]) -> Result<()> {
+    if items.is_empty() {
+        return Err(NigelError::Invalid(
+            "An invoice needs at least one line item.".to_string(),
+        ));
+    }
+    let mut total = 0.0;
+    for item in items {
+        let line_total = item.quantity * item.unit_amount;
+        if !item.quantity.is_finite() || !item.unit_amount.is_finite() || !line_total.is_finite() {
+            return Err(NigelError::Invalid(format!(
+                "Line item '{}' needs a finite quantity and unit amount that multiply to a finite amount.",
+                item.description
+            )));
+        }
+        total += line_total;
+    }
+    if !total.is_finite() {
+        return Err(NigelError::Invalid(
+            "The line items do not add up to a finite total.".to_string(),
+        ));
+    }
+    // Every figure is finite by now, so a plain comparison says what it means.
+    if total <= 0.0 {
+        return Err(NigelError::Invalid(format!(
+            "An invoice must total more than zero, got {total:.2}."
+        )));
+    }
+    Ok(())
+}
+
 pub fn gen_token() -> String {
     rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -49,6 +99,7 @@ pub fn create_invoice(
     terms: Option<&str>,
 ) -> Result<i64> {
     ensure_client_exists(conn, client_id)?;
+    validate_items(items)?;
     validate_date(issue_date, "issue")?;
     if let Some(due) = due_date {
         validate_date(due, "due")?;
@@ -325,6 +376,9 @@ pub fn update_invoice(conn: &Connection, invoice_id: i64, update: &InvoiceUpdate
         ));
     }
 
+    if let Some(ref items) = update.items {
+        validate_items(items)?;
+    }
     if let Some(ref issue_date) = update.issue_date {
         validate_date(issue_date, "issue")?;
     }
@@ -1590,6 +1644,114 @@ mod tests {
         let rows = line_items(&conn, id).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].description, "Work");
+        assert_eq!(get_invoice(&conn, id).unwrap().total, 100.0);
+    }
+
+    /// One line item, so a case reads as the figures it is varying.
+    fn line(quantity: f64, unit_amount: f64) -> Vec<NewLineItem> {
+        vec![NewLineItem {
+            description: "Work".into(),
+            quantity,
+            unit_amount,
+        }]
+    }
+
+    #[test]
+    fn validate_items_refuses_an_empty_list_and_a_total_of_zero() {
+        assert!(matches!(
+            validate_items(&[]).unwrap_err(),
+            NigelError::Invalid(_)
+        ));
+        assert!(validate_items(&line(0.0, 150.0)).is_err(), "a zero total");
+        assert!(
+            validate_items(&line(-1.0, 150.0)).is_err(),
+            "a negative total"
+        );
+        assert!(validate_items(&line(2.0, 150.0)).is_ok());
+    }
+
+    /// A NaN or infinite figure poisons every later SUM over the column, and
+    /// `--item`'s `f64::from_str` accepts both words.
+    #[test]
+    fn validate_items_refuses_a_non_finite_figure() {
+        for items in [
+            line(f64::NAN, 10.0),
+            line(1.0, f64::NAN),
+            line(f64::INFINITY, 10.0),
+            line(1.0, f64::NEG_INFINITY),
+        ] {
+            let err = validate_items(&items).unwrap_err();
+            assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        }
+    }
+
+    /// Two finite factors do not make a finite product: the check has to run
+    /// after the multiply, not on the figures that went into it.
+    #[test]
+    fn validate_items_refuses_an_overflowing_product() {
+        let err = validate_items(&line(1e308, 1e308)).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert!(
+            err.to_string().contains("finite"),
+            "the sentence names the problem: {err}"
+        );
+        // The figure that would otherwise have been written.
+        assert!(!(1e308_f64 * 1e308_f64).is_finite());
+    }
+
+    /// And two finite line totals do not make a finite sum, which is a separate
+    /// check: each line here multiplies out to exactly `1e308`.
+    #[test]
+    fn validate_items_refuses_a_sum_that_overflows_finite_lines() {
+        let big = || NewLineItem {
+            description: "Big".into(),
+            quantity: 1e154,
+            unit_amount: 1e154,
+        };
+        assert!(
+            (big().quantity * big().unit_amount).is_finite(),
+            "each line total is finite on its own"
+        );
+
+        let err = validate_items(&[big(), big()]).unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        assert!(
+            err.to_string().contains("finite total"),
+            "the sum is what failed, not a line: {err}"
+        );
+    }
+
+    #[test]
+    fn a_non_finite_line_item_is_refused_on_create_and_on_edit() {
+        let (_d, conn) = test_conn();
+        let cid = client_id(&conn, "Acme");
+
+        let err = create_invoice(
+            &conn,
+            cid,
+            "2026-06-01",
+            None,
+            "USD",
+            &line(f64::NAN, 100.0),
+            None,
+            None,
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+
+        let id = seed_draft(&conn);
+        let err = update_invoice(
+            &conn,
+            id,
+            &InvoiceUpdate {
+                items: Some(line(1e308, 1e308)),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, NigelError::Invalid(_)), "got: {err:?}");
+        // The refusal came before the write: the draft still totals 100.
         assert_eq!(get_invoice(&conn, id).unwrap().total, 100.0);
     }
 
