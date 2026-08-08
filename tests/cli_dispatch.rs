@@ -1048,6 +1048,31 @@ fn invoice_preview_renders_a_custom_template() {
 }
 
 #[test]
+fn a_template_renders_the_company_name_from_the_database() {
+    let env = TestEnv::new();
+    init_with_client_and_invoice(&env);
+    env.db()
+        .execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('company_name', 'Acme LLC')",
+            [],
+        )
+        .expect("failed to set company_name");
+    write_template(
+        &env,
+        "<h1>{{COMPANY}}</h1>{{NUMBER}}{{CLIENT}}{{ROWS}}{{TOTAL}}",
+    );
+
+    env.cmd()
+        .args(["invoice", "preview", "1248"])
+        .timeout(TEST_TIMEOUT)
+        .assert()
+        .success();
+
+    let html = std::fs::read_to_string(previews_dir(&env).join("invoice-1248.html")).unwrap();
+    assert!(html.starts_with("<h1>Acme LLC</h1>"), "got: {html}");
+}
+
+#[test]
 fn invoice_preview_with_a_broken_template_fails_and_writes_nothing() {
     let env = TestEnv::new();
     init_with_client_and_invoice(&env);

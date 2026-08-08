@@ -482,10 +482,16 @@ pub fn template_export(output: Option<&str>, force: bool) -> Result<()> {
             destination.display()
         )));
     }
+    let write_error = |e: std::io::Error| {
+        NigelError::Invalid(format!(
+            "Cannot write invoice template to {}: {e}",
+            destination.display()
+        ))
+    };
     if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(write_error)?;
     }
-    std::fs::write(&destination, DEFAULT_TEMPLATE)?;
+    std::fs::write(&destination, DEFAULT_TEMPLATE).map_err(write_error)?;
 
     println!("Wrote invoice template to {}", destination.display());
     println!(

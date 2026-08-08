@@ -325,7 +325,8 @@ nothing to say.
 | `{{PAY}}` | fragment | The Pay button, empty when there is no link |
 | `{{CONTACT}}` | text | Direct-deposit contact address (`from_email`) |
 
-**Text** placeholders are HTML-escaped values you can put anywhere. **Fragment**
+**Text** placeholders are HTML-escaped values you can put in element content or
+inside a quoted attribute value. **Fragment**
 placeholders are pre-built markup and are content-only — putting one in an
 attribute produces broken HTML. `{{DUE_DATE}}` and `{{PAY_URL}}` are the escaped
 text alternatives for authors who want to place those two values themselves.

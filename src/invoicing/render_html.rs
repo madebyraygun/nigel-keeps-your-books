@@ -173,18 +173,27 @@ pub fn template_path(data_dir: &Path) -> PathBuf {
 /// because the stock page would then reach a client nobody chose to send it to.
 pub fn load_template(data_dir: &Path) -> Result<Cow<'static, str>> {
     let path = template_path(data_dir);
-    if !path.exists() {
-        return Ok(Cow::Borrowed(DEFAULT_TEMPLATE));
-    }
-
-    // Sized before it is read, so a wrong file copied over the template cannot
-    // be pulled into memory whole just to be rejected.
     let read_error = |e: std::io::Error| {
         NigelError::Invalid(format!(
             "Cannot read invoice template {}: {e}",
             path.display()
         ))
     };
+
+    // Only a genuine "no such file" is an absent override. `Path::exists` would
+    // answer false for a dangling symlink or an unreadable directory too, and
+    // each of those would then render the stock page for someone who put a
+    // template there on purpose.
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Cow::Borrowed(DEFAULT_TEMPLATE))
+        }
+        Err(e) => return Err(read_error(e)),
+        Ok(_) => {}
+    }
+
+    // Sized before it is read, so a wrong file copied over the template cannot
+    // be pulled into memory whole just to be rejected.
     let size = std::fs::metadata(&path).map_err(read_error)?.len();
     if size > MAX_TEMPLATE_BYTES as u64 {
         return Err(NigelError::Invalid(format!(
@@ -521,6 +530,25 @@ mod tests {
             err.contains(&template_path(dir.path()).display().to_string()),
             "got: {err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_errors_rather_than_falling_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = template_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("elsewhere.html"), &path).unwrap();
+
+        let loaded = load_template(dir.path());
+        assert!(
+            loaded.is_err(),
+            "a template symlinked to nothing is a broken override, not an absent one"
+        );
+        assert!(loaded
+            .unwrap_err()
+            .to_string()
+            .contains(&path.display().to_string()));
     }
 
     #[test]
