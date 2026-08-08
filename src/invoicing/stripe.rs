@@ -144,6 +144,7 @@ mod tests {
             stripe_payment_link_id: None,
             stripe_payment_link_url: None,
             published_at: None,
+            voided_at: None,
         }
     }
 

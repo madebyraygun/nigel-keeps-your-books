@@ -144,6 +144,7 @@ pub struct Invoice {
     pub stripe_payment_link_id: Option<String>,
     pub stripe_payment_link_url: Option<String>,
     pub published_at: Option<String>,
+    pub voided_at: Option<String>,
 }
 
 #[allow(dead_code)]

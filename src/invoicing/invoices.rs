@@ -100,12 +100,13 @@ fn row_to_invoice(r: &rusqlite::Row) -> rusqlite::Result<Invoice> {
         stripe_payment_link_id: r.get(13)?,
         stripe_payment_link_url: r.get(14)?,
         published_at: r.get(15)?,
+        voided_at: r.get(16)?,
     })
 }
 
 const INVOICE_COLS: &str = "id, number, client_id, issue_date, due_date, status, currency,
     subtotal, tax, total, notes, terms, token, stripe_payment_link_id,
-    stripe_payment_link_url, published_at";
+    stripe_payment_link_url, published_at, voided_at";
 
 pub fn get_invoice(conn: &Connection, id: i64) -> Result<Invoice> {
     Ok(conn.query_row(
@@ -163,8 +164,13 @@ pub fn record_payment(
 
 pub fn refresh_status(conn: &Connection, invoice_id: i64, today: &str) -> Result<String> {
     let inv = get_invoice(conn, invoice_id)?;
-    if inv.status == InvoiceStatus::Void.as_str() {
-        return Ok(inv.status);
+    if inv.voided_at.is_some() {
+        let void = InvoiceStatus::Void.as_str();
+        conn.execute(
+            "UPDATE invoices SET status = ?1 WHERE id = ?2",
+            rusqlite::params![void, invoice_id],
+        )?;
+        return Ok(void.to_string());
     }
     let paid = paid_amount(conn, invoice_id)?;
     let published = inv.published_at.is_some();
@@ -533,6 +539,27 @@ mod tests {
     }
 
     #[test]
+    fn void_is_derived_from_voided_at() {
+        let (_d, conn) = test_conn();
+        let cid = add_client(&conn, "Acme", None, None, None).unwrap();
+        let items = vec![NewLineItem {
+            description: "Work".into(),
+            quantity: 1.0,
+            unit_amount: 100.0,
+        }];
+        let id = create_invoice(&conn, cid, "2026-08-04", None, "USD", &items, None, None).unwrap();
+        conn.execute(
+            "UPDATE invoices SET voided_at = '2026-08-06' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
+        record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
+        assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
+    }
+
+    #[test]
     fn void_is_never_downgraded() {
         let (_d, conn) = test_conn();
         let cid = add_client(&conn, "Acme", None, None, None).unwrap();
@@ -552,8 +579,11 @@ mod tests {
             None,
         )
         .unwrap();
-        conn.execute("UPDATE invoices SET status='void' WHERE id=?1", [id])
-            .unwrap();
+        conn.execute(
+            "UPDATE invoices SET voided_at='2026-08-06' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
 
         assert_eq!(refresh_status(&conn, id, "2026-08-25").unwrap(), "void");
         record_payment(&conn, id, 100.0, "2026-08-10", "other", None).unwrap();
