@@ -14,6 +14,7 @@ use crate::cli::account_manager::{AccountAction, AccountManager};
 use crate::cli::category_manager::{CategoryAction, CategoryManager};
 use crate::cli::client_manager::{ClientAction, ClientManager};
 use crate::cli::import_manager::{ImportAction, ImportScreen};
+use crate::cli::invoice_manager::{InvoiceAction, InvoiceManager};
 use crate::cli::load_manager::{LoadAction, LoadScreen};
 use crate::cli::reconcile_manager::{ReconcileAction, ReconcileScreen};
 use crate::cli::review::{HandleResult, TransactionReviewer};
@@ -55,6 +56,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
     ("[t] Edit chart of accounts", 't'),
     ("[u] View or edit categorization rules", 'u'),
     ("[z] Undo last import", 'z'),
+    ("[n] Invoices", 'n'),
     ("[k] Clients", 'k'),
     ("[v] View a report", 'v'),
     ("[e] Export a report", 'e'),
@@ -64,7 +66,7 @@ const MENU_ITEMS: &[(&str, char)] = &[
 ];
 
 /// Number of menu items in the left column; remainder goes in the right column.
-const MENU_LEFT_COUNT: usize = 7;
+const MENU_LEFT_COUNT: usize = 8;
 
 const REPORT_TYPES: &[&str] = &[
     "Profit & Loss",
@@ -116,6 +118,7 @@ enum DashboardScreen {
     Review(TransactionReviewer),
     Accounts(AccountManager),
     Categories(CategoryManager),
+    Invoices(InvoiceManager),
     Clients(ClientManager),
     Rules(RulesManager),
     Reconcile(ReconcileScreen),
@@ -347,6 +350,10 @@ impl Dashboard {
             return;
         }
         if let DashboardScreen::Categories(ref mut manager) = self.screen {
+            manager.draw(frame);
+            return;
+        }
+        if let DashboardScreen::Invoices(ref mut manager) = self.screen {
             manager.draw(frame);
             return;
         }
@@ -735,25 +742,26 @@ impl Dashboard {
                 Ok(screen) => self.screen = DashboardScreen::Undo(screen),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            8 => self.screen = DashboardScreen::Clients(ClientManager::new(conn, &self.greeting)),
-            9 => {
+            8 => self.screen = DashboardScreen::Invoices(InvoiceManager::new(conn, &self.greeting)),
+            9 => self.screen = DashboardScreen::Clients(ClientManager::new(conn, &self.greeting)),
+            10 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::View,
                 }
             }
-            10 => {
+            11 => {
                 self.screen = DashboardScreen::ReportPicker {
                     selection: 0,
                     mode: ReportPickerMode::Export,
                 }
             }
-            11 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
-            12 => match SettingsManager::new(conn, &self.greeting) {
+            12 => self.screen = DashboardScreen::Load(LoadScreen::new(&self.greeting)),
+            13 => match SettingsManager::new(conn, &self.greeting) {
                 Ok(mgr) => self.screen = DashboardScreen::Settings(mgr),
                 Err(e) => self.status_message = Some(format!("Error: {e}")),
             },
-            13 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
+            14 => self.screen = DashboardScreen::Snake(SnakeGame::new()),
             _ => {}
         }
     }
@@ -1144,6 +1152,7 @@ pub fn run() -> Result<()> {
                     }
 
                     let mut return_home = false;
+                    let mut pending_invoice_work = false;
                     let mut pending_reload: Option<(usize, Option<i32>, Option<String>)> = None;
                     let should_quit = match &mut dashboard.screen {
                         DashboardScreen::Home => {
@@ -1219,6 +1228,16 @@ pub fn run() -> Result<()> {
                                     return_home = true;
                                 }
                                 CategoryAction::Continue => {}
+                            }
+                            false
+                        }
+                        DashboardScreen::Invoices(ref mut manager) => {
+                            match manager.handle_key(key.code, &conn) {
+                                InvoiceAction::Close => {
+                                    return_home = true;
+                                }
+                                InvoiceAction::Continue => {}
+                                InvoiceAction::Perform => pending_invoice_work = true,
                             }
                             false
                         }
@@ -1357,6 +1376,17 @@ pub fn run() -> Result<()> {
                             false
                         }
                     };
+
+                    // The loop is draw -> blocking read -> handle_key, so work
+                    // done inside handle_key lands after the last paint. One
+                    // more draw first means the frozen frame is the one that
+                    // says it is frozen.
+                    if pending_invoice_work {
+                        let _ = terminal.draw(|frame| dashboard.draw(frame));
+                        if let DashboardScreen::Invoices(ref mut manager) = dashboard.screen {
+                            manager.perform_pending(&conn);
+                        }
+                    }
 
                     if let Some((idx, year, month)) = pending_reload {
                         dashboard.screen =
@@ -1624,6 +1654,90 @@ mod tests {
             format!("{:?}", dash.menu_item_line(2, 7)).contains("(7)"),
             "the flagged count moved off Review"
         );
+    }
+
+    fn screen_name(screen: &DashboardScreen) -> &'static str {
+        match screen {
+            DashboardScreen::Home => "Home",
+            DashboardScreen::Browse(_) => "Browse",
+            DashboardScreen::Import(_) => "Import",
+            DashboardScreen::Review(_) => "Review",
+            DashboardScreen::Accounts(_) => "Accounts",
+            DashboardScreen::Categories(_) => "Categories",
+            DashboardScreen::Invoices(_) => "Invoices",
+            DashboardScreen::Clients(_) => "Clients",
+            DashboardScreen::Rules(_) => "Rules",
+            DashboardScreen::Reconcile(_) => "Reconcile",
+            DashboardScreen::Load(_) => "Load",
+            DashboardScreen::ReportPicker { .. } => "ReportPicker",
+            DashboardScreen::ExportFormatPicker { .. } => "ExportFormatPicker",
+            DashboardScreen::ReportView(_) => "ReportView",
+            DashboardScreen::Undo(_) => "Undo",
+            DashboardScreen::Settings(_) => "Settings",
+            DashboardScreen::Snake(_) => "Snake",
+        }
+    }
+
+    #[test]
+    fn the_home_screen_renders_every_menu_item() {
+        // The clipping this catches is silent: the right column simply stops
+        // drawing the items it has no rows for.
+        let screen = rendered(&home_with(None));
+        for (label, _) in MENU_ITEMS {
+            assert!(
+                screen.contains(label),
+                "{label} is not on screen:\n{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_menu_index_has_an_activate_arm() {
+        // activate_menu_item matches on bare integers, so inserting an item
+        // renumbers every arm after it. `None` is a screen whose constructor
+        // depends on data this database does not have — those arms still run,
+        // and prove it by leaving a status message behind.
+        let expected: [Option<&str>; 15] = [
+            Some("Browse"),
+            Some("Import"),
+            None, // Review — nothing flagged in an empty book
+            Some("Reconcile"),
+            Some("Accounts"),
+            Some("Categories"),
+            Some("Rules"),
+            Some("Undo"),
+            Some("Invoices"),
+            Some("Clients"),
+            Some("ReportPicker"),
+            Some("ReportPicker"),
+            Some("Load"),
+            None, // Settings — reads the machine's own data directory
+            Some("Snake"),
+        ];
+        assert_eq!(expected.len(), MENU_ITEMS.len());
+
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::get_connection(&dir.path().join("t.db")).unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+
+        for (idx, want) in expected.iter().enumerate() {
+            let mut dash = Dashboard::new(Some("Dalton".into()), None);
+            dash.activate_menu_item(idx, &conn);
+            match want {
+                Some(name) => assert_eq!(
+                    screen_name(&dash.screen),
+                    *name,
+                    "menu item {idx} ({}) opened the wrong screen",
+                    MENU_ITEMS[idx].0
+                ),
+                None => assert!(
+                    !matches!(dash.screen, DashboardScreen::Home) || dash.status_message.is_some(),
+                    "menu item {idx} ({}) has no arm",
+                    MENU_ITEMS[idx].0
+                ),
+            }
+        }
     }
 
     #[test]
