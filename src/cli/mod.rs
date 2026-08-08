@@ -40,6 +40,12 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::reports::ReportKind;
 
+/// Today's local date as `YYYY-MM-DD` — the reference day every date-less
+/// command ages, derives and reports against.
+pub fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
 pub(crate) fn parse_month_opt(month: &Option<String>) -> (Option<i32>, Option<u32>) {
     if let Some(m) = month {
         let parts: Vec<&str> = m.split('-').collect();
